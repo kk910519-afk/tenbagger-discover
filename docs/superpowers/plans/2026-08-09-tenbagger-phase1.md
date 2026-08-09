@@ -599,7 +599,10 @@ export type FinancialPeriod = {
   cash: number | null
   totalDebt: number | null
   equity: number | null
+  /** 기간 가중평균 희석주식수 — EPS 계산용 */
   sharesDiluted: number | null
+  /** 표지 기준 발행주식수 (dei 태그) — 시가총액 계산용 */
+  sharesOutstanding: number | null
   sbc: number | null
   rdExpense: number | null
 }
@@ -1593,7 +1596,7 @@ CREATE TABLE IF NOT EXISTS financials (
   revenue REAL, gross_profit REAL, operating_income REAL, net_income REAL,
   ocf REAL, capex REAL, fcf REAL,
   cash REAL, total_debt REAL, equity REAL,
-  shares_diluted REAL, sbc REAL, rd_expense REAL,
+  shares_diluted REAL, shares_outstanding REAL, sbc REAL, rd_expense REAL,
   source_tags TEXT,
   computed_at TEXT NOT NULL,
   PRIMARY KEY (cik, period_end, period_type)
@@ -1753,6 +1756,7 @@ export const financials = sqliteTable(
     totalDebt: real('total_debt'),
     equity: real('equity'),
     sharesDiluted: real('shares_diluted'),
+    sharesOutstanding: real('shares_outstanding'),
     sbc: real('sbc'),
     rdExpense: real('rd_expense'),
     sourceTags: text('source_tags'),
@@ -3917,4 +3921,1245 @@ git commit -m "feat: XBRL 태그 폴백 체인 및 기간별 필드 해석
 used에 기록해 financials.source_tags로 저장한다.
 정정 공시는 filedDate가 늦은 값을 채택한다.
 부채 태그가 전혀 없으면 0이 아니라 null이다."
+```
+
+---
+
+### Task 10: Q4 재구성 & TTM 조립
+
+**Files:**
+- Create: `src/providers/fundamental/normalizer.ts`
+- Test: `tests/providers/normalizer.test.ts`
+
+**Interfaces:**
+- Consumes: `indexFacts`/`resolveFlow`/`resolveStock` (Task 9), `sumTTM` (Task 2), `FinancialPeriod` (Task 2), `RawFact` (Task 8)
+- Produces:
+  - `type NormalizeResult = { quarterly: FinancialPeriod[]; annual: FinancialPeriod[]; ttm: FinancialPeriod[]; sourceTags: Record<string, Record<string, string>> }` — 세 배열 모두 **최근순**. `sourceTags` 키는 `` `${periodType}:${periodEnd}` ``
+  - `normalizeFacts(facts: RawFact[]): NormalizeResult`
+
+**핵심 규칙 세 가지**
+
+1. **Q4 재구성** — 10-K는 연간 값만 내고 4분기를 따로 내지 않는 경우가 많다. 연간 종료일 `E`에 대해 `(E-400일, E)` 구간의 분기가 정확히 3개이고 `E`에 분기 값이 없으면 `Q4 = 연간 − Q1 − Q2 − Q3`으로 유도한다. 유도된 기간은 `sourceTags['Q:E'].derived = 'Q4_from_annual'`로 표시한다.
+2. **희석주식수는 합산하지 않는다** — 기간 가중평균이므로 TTM에서는 가장 최근 분기 값을 그대로 쓴다. 4개를 더하면 4배가 된다.
+3. **시점 항목은 가장 가까운 과거 값** — 현금·부채·자본은 해당 종료일의 시점 값을 쓰되, 정확히 일치하는 값이 없으면 그 이전 중 가장 최근 값을 쓴다.
+
+- [ ] **Step 1: 실패하는 테스트 작성**
+
+`tests/providers/normalizer.test.ts`:
+
+```ts
+import { describe, it, expect } from 'vitest'
+import { normalizeFacts } from '@/providers/fundamental/normalizer'
+import type { RawFact } from '@/providers/types'
+
+function f(
+  tag: string, qtrs: number, periodEnd: string, value: number, form = '10-Q',
+): RawFact {
+  return {
+    cik: 1, tag, unit: tag.includes('Shares') ? 'shares' : 'USD',
+    periodStart: null, periodEnd, qtrs, value, form,
+    filedDate: '2025-06-01', accession: `a-${periodEnd}-${qtrs}`, source: 'bulk',
+  }
+}
+
+const Q_ENDS = ['2024-06-30', '2024-09-30', '2024-12-31', '2025-03-31']
+
+function fourQuarters(tag: string, values: number[]): RawFact[] {
+  return Q_ENDS.map((e, i) => f(tag, 1, e, values[i]!))
+}
+
+describe('normalizeFacts — TTM', () => {
+  const facts = [
+    ...fourQuarters('Revenues', [100, 110, 130, 160]),
+    ...fourQuarters('OperatingIncomeLoss', [10, 12, 18, 25]),
+    ...fourQuarters('NetCashProvidedByUsedInOperatingActivities', [20, 22, 30, 40]),
+    ...fourQuarters('PaymentsToAcquirePropertyPlantAndEquipment', [5, 5, 6, 8]),
+    ...fourQuarters('WeightedAverageNumberOfDilutedSharesOutstanding', [900, 910, 920, 930]),
+    f('StockholdersEquity', 0, '2025-03-31', 5000),
+    f('CashAndCashEquivalentsAtCarryingValue', 0, '2025-03-31', 1200),
+    f('LongTermDebtNoncurrent', 0, '2025-03-31', 800),
+  ]
+  const r = normalizeFacts(facts)
+
+  it('4개 분기가 모두 있으면 TTM을 만든다', () => {
+    expect(r.ttm[0]!.periodEnd).toBe('2025-03-31')
+    expect(r.ttm[0]!.revenue).toBe(500)
+    expect(r.ttm[0]!.operatingIncome).toBe(65)
+  })
+
+  it('FCF는 영업현금흐름 - 자본지출', () => {
+    expect(r.ttm[0]!.ocf).toBe(112)
+    expect(r.ttm[0]!.capex).toBe(24)
+    expect(r.ttm[0]!.fcf).toBe(88)
+  })
+
+  it('희석주식수는 합산하지 않고 최근 분기 값을 쓴다', () => {
+    expect(r.ttm[0]!.sharesDiluted).toBe(930)
+  })
+
+  it('시점 항목은 종료일의 재무상태표 값을 쓴다', () => {
+    expect(r.ttm[0]!.cash).toBe(1200)
+    expect(r.ttm[0]!.totalDebt).toBe(800)
+    expect(r.ttm[0]!.equity).toBe(5000)
+  })
+
+  it('분기가 4개 미만이면 TTM을 만들지 않는다', () => {
+    const partial = normalizeFacts(
+      Q_ENDS.slice(0, 3).map((e, i) => f('Revenues', 1, e, [100, 110, 130][i]!)),
+    )
+    expect(partial.ttm).toHaveLength(0)
+  })
+
+  it('분기가 5개면 TTM이 2개 생기고 최근순으로 정렬된다', () => {
+    const five = normalizeFacts([
+      f('Revenues', 1, '2024-03-31', 90),
+      ...fourQuarters('Revenues', [100, 110, 130, 160]),
+    ])
+    expect(five.ttm.map((t) => t.periodEnd)).toEqual(['2025-03-31', '2024-12-31'])
+    expect(five.ttm[1]!.revenue).toBe(430)
+  })
+})
+
+describe('normalizeFacts — Q4 재구성', () => {
+  const facts = [
+    f('Revenues', 4, '2024-12-31', 500, '10-K'),
+    f('Revenues', 1, '2024-03-31', 100),
+    f('Revenues', 1, '2024-06-30', 110),
+    f('Revenues', 1, '2024-09-30', 130),
+  ]
+  const r = normalizeFacts(facts)
+
+  it('연간 - 3개 분기로 Q4를 유도한다', () => {
+    const q4 = r.quarterly.find((q) => q.periodEnd === '2024-12-31')!
+    expect(q4.revenue).toBe(160)
+  })
+
+  it('유도 사실을 sourceTags에 남긴다', () => {
+    expect(r.sourceTags['Q:2024-12-31']!.derived).toBe('Q4_from_annual')
+  })
+
+  it('Q4가 이미 신고되어 있으면 유도하지 않는다', () => {
+    const withQ4 = normalizeFacts([...facts, f('Revenues', 1, '2024-12-31', 155)])
+    const q4 = withQ4.quarterly.find((q) => q.periodEnd === '2024-12-31')!
+    expect(q4.revenue).toBe(155)
+    expect(withQ4.sourceTags['Q:2024-12-31']!.derived).toBeUndefined()
+  })
+
+  it('분기가 3개가 아니면 유도하지 않는다', () => {
+    const twoQ = normalizeFacts([
+      f('Revenues', 4, '2024-12-31', 500, '10-K'),
+      f('Revenues', 1, '2024-03-31', 100),
+      f('Revenues', 1, '2024-06-30', 110),
+    ])
+    expect(twoQ.quarterly.find((q) => q.periodEnd === '2024-12-31')).toBeUndefined()
+  })
+})
+
+describe('normalizeFacts — 연간 및 출처 기록', () => {
+  it('연간 기간을 최근순으로 만든다', () => {
+    const r = normalizeFacts([
+      f('Revenues', 4, '2023-12-31', 300, '10-K'),
+      f('Revenues', 4, '2024-12-31', 500, '10-K'),
+    ])
+    expect(r.annual.map((a) => a.periodEnd)).toEqual(['2024-12-31', '2023-12-31'])
+  })
+
+  it('필드가 어떤 태그에서 왔는지 기록한다', () => {
+    const r = normalizeFacts([f('SalesRevenueNet', 4, '2024-12-31', 300, '10-K')])
+    expect(r.sourceTags['A:2024-12-31']!.revenue).toBe('SalesRevenueNet')
+  })
+
+  it('데이터가 없으면 빈 결과를 반환한다', () => {
+    const r = normalizeFacts([])
+    expect(r).toEqual({ quarterly: [], annual: [], ttm: [], sourceTags: {} })
+  })
+})
+```
+
+- [ ] **Step 2: 테스트 실패 확인**
+
+Run: `npx vitest run tests/providers/normalizer.test.ts`
+Expected: FAIL — `Cannot find module '@/providers/fundamental/normalizer'`
+
+- [ ] **Step 3: 구현**
+
+`src/providers/fundamental/normalizer.ts`:
+
+```ts
+import type { FinancialPeriod, PeriodType } from '@/domain/types'
+import { sumTTM } from '@/domain/growth'
+import type { RawFact } from '../types.js'
+import { indexFacts, resolveFlow, resolveStock, type FactIndex } from './resolve.js'
+
+export type NormalizeResult = {
+  quarterly: FinancialPeriod[]
+  annual: FinancialPeriod[]
+  ttm: FinancialPeriod[]
+  /** `${periodType}:${periodEnd}` → { field → tag } */
+  sourceTags: Record<string, Record<string, string>>
+}
+
+const DAY_MS = 86_400_000
+const FLOW_FIELDS = [
+  'revenue', 'grossProfit', 'operatingIncome', 'netIncome', 'ocf', 'capex', 'sbc', 'rdExpense',
+] as const
+
+function daysBetween(a: string, b: string): number {
+  return Math.abs(Date.parse(a) - Date.parse(b)) / DAY_MS
+}
+
+/** asOf 이전(포함) 중 가장 최근 시점 값 */
+function pickInstant(idx: FactIndex, asOf: string): Map<string, number> {
+  let best: string | null = null
+  for (const d of idx.instant.keys()) {
+    if (d <= asOf && (best === null || d > best)) best = d
+  }
+  return best === null ? new Map() : idx.instant.get(best)!
+}
+
+function fcfOf(ocf: number | null, capex: number | null): number | null {
+  return ocf === null || capex === null ? null : ocf - capex
+}
+
+function emptyPeriod(periodEnd: string, periodType: PeriodType): FinancialPeriod {
+  return {
+    periodEnd, periodType,
+    revenue: null, grossProfit: null, operatingIncome: null, netIncome: null,
+    ocf: null, capex: null, fcf: null,
+    cash: null, totalDebt: null, equity: null,
+    sharesDiluted: null, sharesOutstanding: null, sbc: null, rdExpense: null,
+  }
+}
+
+function buildPeriod(
+  idx: FactIndex,
+  periodEnd: string,
+  periodType: PeriodType,
+  tags: Map<string, number>,
+  sourceTags: Record<string, Record<string, string>>,
+): FinancialPeriod {
+  const flow = resolveFlow(tags)
+  const stock = resolveStock(pickInstant(idx, periodEnd))
+  sourceTags[`${periodType}:${periodEnd}`] = { ...flow.used, ...stock.used }
+  return {
+    periodEnd,
+    periodType,
+    ...flow.fields,
+    fcf: fcfOf(flow.fields.ocf, flow.fields.capex),
+    cash: stock.fields.cash,
+    totalDebt: stock.fields.totalDebt,
+    equity: stock.fields.equity,
+    sharesOutstanding: stock.fields.sharesOutstanding,
+  }
+}
+
+export function normalizeFacts(facts: RawFact[]): NormalizeResult {
+  const sourceTags: Record<string, Record<string, string>> = {}
+  if (facts.length === 0) return { quarterly: [], annual: [], ttm: [], sourceTags }
+
+  const idx = indexFacts(facts)
+  const desc = (a: FinancialPeriod, b: FinancialPeriod) =>
+    b.periodEnd.localeCompare(a.periodEnd)
+
+  // 연간 (qtrs=4)
+  const annual: FinancialPeriod[] = []
+  for (const [periodEnd, tags] of idx.duration.get(4) ?? []) {
+    annual.push(buildPeriod(idx, periodEnd, 'A', tags, sourceTags))
+  }
+  annual.sort(desc)
+
+  // 분기 (qtrs=1)
+  const quarterly: FinancialPeriod[] = []
+  const reportedQuarterEnds = new Set<string>()
+  for (const [periodEnd, tags] of idx.duration.get(1) ?? []) {
+    reportedQuarterEnds.add(periodEnd)
+    quarterly.push(buildPeriod(idx, periodEnd, 'Q', tags, sourceTags))
+  }
+
+  // Q4 재구성: 연간 종료일에 분기 값이 없고 직전 3개 분기가 있으면 차감으로 유도
+  for (const a of annual) {
+    if (reportedQuarterEnds.has(a.periodEnd)) continue
+    const inYear = quarterly.filter(
+      (q) => q.periodEnd < a.periodEnd && daysBetween(q.periodEnd, a.periodEnd) < 400,
+    )
+    if (inYear.length !== 3) continue
+
+    const q4 = emptyPeriod(a.periodEnd, 'Q')
+    for (const field of FLOW_FIELDS) {
+      const annualValue = a[field]
+      if (annualValue === null) continue
+      const parts = inYear.map((q) => q[field])
+      if (parts.some((p) => p === null)) continue
+      q4[field] = annualValue - (parts as number[]).reduce((s, v) => s + v, 0)
+    }
+    q4.fcf = fcfOf(q4.ocf, q4.capex)
+    // 희석주식수는 차감이 무의미하므로 연간 값을 그대로 쓴다
+    q4.sharesDiluted = a.sharesDiluted
+    const stock = resolveStock(pickInstant(idx, a.periodEnd))
+    q4.cash = stock.fields.cash
+    q4.totalDebt = stock.fields.totalDebt
+    q4.equity = stock.fields.equity
+    q4.sharesOutstanding = stock.fields.sharesOutstanding
+
+    quarterly.push(q4)
+    sourceTags[`Q:${a.periodEnd}`] = { ...stock.used, derived: 'Q4_from_annual' }
+  }
+  quarterly.sort(desc)
+
+  // TTM: 연속한 4개 분기. 최신 종료일과 4번째 종료일 간격이 약 3분기여야 한다.
+  const ttm: FinancialPeriod[] = []
+  for (let i = 0; i + 3 < quarterly.length; i++) {
+    const window = quarterly.slice(i, i + 4)
+    const span = daysBetween(window[3]!.periodEnd, window[0]!.periodEnd)
+    if (span < 240 || span > 310) continue
+
+    const p = emptyPeriod(window[0]!.periodEnd, 'TTM')
+    for (const field of FLOW_FIELDS) {
+      p[field] = sumTTM(window.map((q) => q[field]))
+    }
+    p.fcf = fcfOf(p.ocf, p.capex)
+    p.sharesDiluted = window[0]!.sharesDiluted   // 가중평균이므로 합산하지 않는다
+    p.cash = window[0]!.cash
+    p.totalDebt = window[0]!.totalDebt
+    p.equity = window[0]!.equity
+    p.sharesOutstanding = window[0]!.sharesOutstanding
+    ttm.push(p)
+    sourceTags[`TTM:${p.periodEnd}`] = sourceTags[`Q:${p.periodEnd}`] ?? {}
+  }
+
+  return { quarterly, annual, ttm, sourceTags }
+}
+```
+
+- [ ] **Step 4: 테스트 통과 확인**
+
+Run: `npx vitest run tests/providers/normalizer.test.ts`
+Expected: PASS (13 tests)
+
+`분기가 5개면 TTM이 2개` 테스트에서 span 검증이 걸려 실패하면, `2024-03-31`부터 `2025-03-31`까지 4개 창의 간격이 240~310일 범위인지 확인한다. `2024-06-30`~`2025-03-31`은 273일, `2024-03-31`~`2024-12-31`은 275일로 둘 다 범위 안이다.
+
+- [ ] **Step 5: 커밋**
+
+```bash
+git add -A
+git commit -m "feat: Q4 재구성 및 TTM 조립
+
+10-K가 4분기를 따로 내지 않는 경우 연간에서 3개 분기를 빼 유도하고
+유도 사실을 sourceTags에 남긴다.
+희석주식수는 기간 가중평균이라 TTM에서 합산하지 않고 최근 분기 값을 쓴다.
+분기가 4개 미만이면 TTM을 만들지 않고 결측을 0으로 채우지 않는다."
+```
+
+---
+
+### Task 11: ingest-fundamentals 잡
+
+**Files:**
+- Create: `src/db/repositories/financials.ts`, `src/pipeline/quarters.ts`, `src/pipeline/jobs/ingest-fundamentals.ts`
+- Test: `tests/pipeline/quarters.test.ts`, `tests/pipeline/ingest-fundamentals.test.ts`
+
+**Interfaces:**
+- Consumes: `BulkFundamentalProvider`/`CompanyFactsProvider`/`RawFact` (Task 8), `normalizeFacts`/`NormalizeResult` (Task 10), `listUniverseCiks` (Task 7), `runJob` (Task 7)
+- Produces:
+  - `recentQuarters(asOf: string, count: number): { year: number; quarter: number }[]` — 최근순
+  - `insertFacts(raw, facts: RawFact[]): number` — 삽입/갱신된 행 수. 같은 키는 `filedDate`가 늦은 값이 이긴다
+  - `getFacts(raw, cik: number): RawFact[]`
+  - `replaceFinancials(raw, cik: number, r: NormalizeResult): void`
+  - `getFinancialsFor(raw, cik: number): { quarterly: FinancialPeriod[]; annual: FinancialPeriod[]; ttm: FinancialPeriod[] }` — 전부 최근순
+  - `selectStaleCiks(raw, asOf: string, days: number): number[]` — 최신 사실이 `asOf - days`보다 오래된 CIK
+  - `ingestFundamentals(deps: FundamentalsDeps): Promise<JobStats>`
+  - `type FundamentalsDeps = { raw; cfg; bulk; companyFacts; asOf: string }`
+
+**설계 판단 — companyfacts는 전체가 아니라 지연 기업에만 쓴다.** `companyfacts.json`은 기업당 1~15MB라 1,300개 전체를 매번 받으면 4GB에 이른다. 벌크 ZIP이 이미 대부분을 덮으므로, 최신 사실이 120일보다 오래된 CIK(비회계연도 결산 기업, 신규 상장사)에만 API를 호출한다.
+
+- [ ] **Step 1: quarters 실패 테스트 작성**
+
+`tests/pipeline/quarters.test.ts`:
+
+```ts
+import { describe, it, expect } from 'vitest'
+import { recentQuarters } from '@/pipeline/quarters'
+
+describe('recentQuarters', () => {
+  it('공시 지연 45일을 반영해 최근 분기부터 역순으로 만든다', () => {
+    // 2026-08-09 기준 45일 전은 2026-06-25 → 2026Q2가 최신 가용 데이터셋
+    expect(recentQuarters('2026-08-09', 3)).toEqual([
+      { year: 2026, quarter: 2 },
+      { year: 2026, quarter: 1 },
+      { year: 2025, quarter: 4 },
+    ])
+  })
+
+  it('연도 경계를 넘어간다', () => {
+    // 2026-02-20 기준 45일 전은 2026-01-06 → 2026Q1
+    expect(recentQuarters('2026-02-20', 2)).toEqual([
+      { year: 2026, quarter: 1 },
+      { year: 2025, quarter: 4 },
+    ])
+  })
+
+  it('count가 0이면 빈 배열', () => {
+    expect(recentQuarters('2026-08-09', 0)).toEqual([])
+  })
+})
+```
+
+- [ ] **Step 2: 테스트 실패 확인**
+
+Run: `npx vitest run tests/pipeline/quarters.test.ts`
+Expected: FAIL — `Cannot find module '@/pipeline/quarters'`
+
+- [ ] **Step 3: quarters 구현**
+
+`src/pipeline/quarters.ts`:
+
+```ts
+const PUBLICATION_LAG_DAYS = 45
+const DAY_MS = 86_400_000
+
+/**
+ * SEC Financial Statement Data Set은 분기 종료 후 약 1개월 뒤 공개된다.
+ * asOf에서 45일을 빼 최신 가용 분기를 정하고 거기서 count개를 역순으로 반환한다.
+ */
+export function recentQuarters(
+  asOf: string,
+  count: number,
+): { year: number; quarter: number }[] {
+  if (count <= 0) return []
+  const d = new Date(Date.parse(asOf) - PUBLICATION_LAG_DAYS * DAY_MS)
+  let year = d.getUTCFullYear()
+  let quarter = Math.floor(d.getUTCMonth() / 3) + 1
+
+  const out: { year: number; quarter: number }[] = []
+  for (let i = 0; i < count; i++) {
+    out.push({ year, quarter })
+    quarter--
+    if (quarter === 0) { quarter = 4; year-- }
+  }
+  return out
+}
+```
+
+- [ ] **Step 4: quarters 테스트 통과 확인**
+
+Run: `npx vitest run tests/pipeline/quarters.test.ts`
+Expected: PASS (3 tests)
+
+- [ ] **Step 5: financials 리포지토리 구현**
+
+`src/db/repositories/financials.ts`:
+
+```ts
+import type Database from 'better-sqlite3'
+import type { FinancialPeriod } from '@/domain/types'
+import type { RawFact } from '@/providers/types'
+import type { NormalizeResult } from '@/providers/fundamental/normalizer'
+
+export function insertFacts(raw: Database.Database, facts: RawFact[]): number {
+  const stmt = raw.prepare(
+    `INSERT INTO financial_facts
+       (cik, tag, unit, period_start, period_end, qtrs, value, form, filed_date, accession, source)
+     VALUES (@cik, @tag, @unit, @periodStart, @periodEnd, @qtrs, @value, @form, @filedDate, @accession, @source)
+     ON CONFLICT(cik, tag, period_end, qtrs, form) DO UPDATE SET
+       value = excluded.value,
+       filed_date = excluded.filed_date,
+       accession = excluded.accession,
+       unit = excluded.unit,
+       period_start = excluded.period_start,
+       source = excluded.source
+     WHERE excluded.filed_date > financial_facts.filed_date`,
+  )
+  let n = 0
+  raw.transaction(() => {
+    for (const f of facts) n += stmt.run(f).changes
+  })()
+  return n
+}
+
+export function getFacts(raw: Database.Database, cik: number): RawFact[] {
+  return raw
+    .prepare(
+      `SELECT cik, tag, unit, period_start AS periodStart, period_end AS periodEnd,
+              qtrs, value, form, filed_date AS filedDate, accession, source
+       FROM financial_facts WHERE cik = ?`,
+    )
+    .all(cik) as RawFact[]
+}
+
+const FIN_COLUMNS = `cik, period_end, period_type, revenue, gross_profit, operating_income,
+  net_income, ocf, capex, fcf, cash, total_debt, equity, shares_diluted,
+  shares_outstanding, sbc, rd_expense, source_tags, computed_at`
+
+export function replaceFinancials(
+  raw: Database.Database,
+  cik: number,
+  r: NormalizeResult,
+): void {
+  const now = new Date().toISOString()
+  const stmt = raw.prepare(
+    `INSERT OR REPLACE INTO financials (${FIN_COLUMNS})
+     VALUES (@cik, @periodEnd, @periodType, @revenue, @grossProfit, @operatingIncome,
+             @netIncome, @ocf, @capex, @fcf, @cash, @totalDebt, @equity, @sharesDiluted,
+             @sharesOutstanding, @sbc, @rdExpense, @sourceTags, @computedAt)`,
+  )
+  raw.transaction(() => {
+    raw.prepare('DELETE FROM financials WHERE cik = ?').run(cik)
+    for (const p of [...r.quarterly, ...r.annual, ...r.ttm]) {
+      stmt.run({
+        ...p,
+        cik,
+        sourceTags: JSON.stringify(r.sourceTags[`${p.periodType}:${p.periodEnd}`] ?? {}),
+        computedAt: now,
+      })
+    }
+  })()
+}
+
+type FinRow = FinancialPeriod & { period_type: string }
+
+export function getFinancialsFor(
+  raw: Database.Database,
+  cik: number,
+): { quarterly: FinancialPeriod[]; annual: FinancialPeriod[]; ttm: FinancialPeriod[] } {
+  const rows = raw
+    .prepare(
+      `SELECT period_end AS periodEnd, period_type AS periodType, revenue,
+              gross_profit AS grossProfit, operating_income AS operatingIncome,
+              net_income AS netIncome, ocf, capex, fcf, cash,
+              total_debt AS totalDebt, equity, shares_diluted AS sharesDiluted,
+              shares_outstanding AS sharesOutstanding, sbc, rd_expense AS rdExpense
+       FROM financials WHERE cik = ? ORDER BY period_end DESC`,
+    )
+    .all(cik) as FinancialPeriod[]
+
+  return {
+    quarterly: rows.filter((r) => r.periodType === 'Q'),
+    annual: rows.filter((r) => r.periodType === 'A'),
+    ttm: rows.filter((r) => r.periodType === 'TTM'),
+  }
+}
+
+export function selectStaleCiks(
+  raw: Database.Database,
+  asOf: string,
+  days: number,
+): number[] {
+  const cutoff = new Date(Date.parse(asOf) - days * 86_400_000)
+    .toISOString()
+    .slice(0, 10)
+  const rows = raw
+    .prepare(
+      `SELECT c.cik FROM companies c
+       JOIN company_industry ci ON ci.cik = c.cik
+       LEFT JOIN (SELECT cik, MAX(period_end) AS latest FROM financial_facts GROUP BY cik) f
+         ON f.cik = c.cik
+       WHERE f.latest IS NULL OR f.latest < ?
+       ORDER BY c.cik`,
+    )
+    .all(cutoff) as { cik: number }[]
+  return rows.map((r) => r.cik)
+}
+```
+
+`FinRow` 타입은 위 쿼리가 별칭으로 카멜케이스를 반환하므로 사용하지 않는다. 정의를 넣지 말 것.
+
+- [ ] **Step 6: 잡 실패 테스트 작성**
+
+`tests/pipeline/ingest-fundamentals.test.ts`:
+
+```ts
+import { describe, it, expect, beforeAll } from 'vitest'
+import { readFileSync, mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import type Database from 'better-sqlite3'
+import { getRawDb, runMigrations } from '@/db/client'
+import { parseConfig } from '@/config'
+import { ingestFundamentals } from '@/pipeline/jobs/ingest-fundamentals'
+import { getFinancialsFor, selectStaleCiks } from '@/db/repositories/financials'
+import type { BulkFundamentalProvider, CompanyFactsProvider, RawFact } from '@/providers/types'
+
+const cfg = parseConfig(readFileSync('config.yaml', 'utf8'))
+
+function f(tag: string, qtrs: number, periodEnd: string, value: number): RawFact {
+  return {
+    cik: 1045810, tag, unit: 'USD', periodStart: null, periodEnd, qtrs, value,
+    form: qtrs === 4 ? '10-K' : '10-Q', filedDate: '2025-06-01',
+    accession: `a-${periodEnd}-${qtrs}`, source: 'bulk',
+  }
+}
+
+const BULK_FACTS = [
+  f('Revenues', 1, '2024-06-30', 100),
+  f('Revenues', 1, '2024-09-30', 110),
+  f('Revenues', 1, '2024-12-31', 130),
+  f('Revenues', 1, '2025-03-31', 160),
+  { ...f('StockholdersEquity', 0, '2025-03-31', 5000) },
+  { ...f('EntityCommonStockSharesOutstanding', 0, '2025-03-31', 24000), unit: 'shares' },
+]
+
+const bulk: BulkFundamentalProvider = {
+  fetchQuarter: async (_y, q) => (q === 2 ? BULK_FACTS : []),
+}
+
+let apiCalls: number[] = []
+const companyFacts: CompanyFactsProvider = {
+  fetchCompany: async (cik) => { apiCalls.push(cik); return [] },
+}
+
+let raw: Database.Database
+let stats: Record<string, unknown>
+
+beforeAll(async () => {
+  raw = getRawDb(join(mkdtempSync(join(tmpdir(), 'tb-fund-')), 'f.db'))
+  runMigrations(raw)
+  raw.prepare(
+    `INSERT INTO companies (cik, ticker, name, is_active, first_seen, last_updated)
+     VALUES (1045810, 'NVDA', 'NVIDIA CORP', 1, '2026-08-09', '2026-08-09')`,
+  ).run()
+  raw.prepare(
+    `INSERT INTO company_industry (cik, industry_slug, theme_slug, is_primary, source)
+     VALUES (1045810, 'ai-infrastructure', 'ai-software-semi', 1, 'override')`,
+  ).run()
+  stats = await ingestFundamentals({ raw, cfg, bulk, companyFacts, asOf: '2026-08-09' })
+})
+
+describe('ingestFundamentals', () => {
+  it('벌크 사실을 financial_facts에 적재한다', () => {
+    const n = raw.prepare('SELECT COUNT(*) c FROM financial_facts').get() as { c: number }
+    expect(n.c).toBe(BULK_FACTS.length)
+  })
+
+  it('설정된 분기 수만큼 벌크를 조회한다', () => {
+    expect(stats.quartersRequested).toBe(cfg.ingest.bulk_quarters)
+  })
+
+  it('정규화 결과를 financials에 저장한다', () => {
+    const fin = getFinancialsFor(raw, 1045810)
+    expect(fin.quarterly).toHaveLength(4)
+    expect(fin.ttm).toHaveLength(1)
+    expect(fin.ttm[0]!.revenue).toBe(500)
+    expect(fin.ttm[0]!.sharesOutstanding).toBe(24000)
+  })
+
+  it('source_tags를 JSON으로 보존한다', () => {
+    const row = raw
+      .prepare(
+        "SELECT source_tags FROM financials WHERE cik=1045810 AND period_type='TTM'",
+      )
+      .get() as { source_tags: string }
+    expect(JSON.parse(row.source_tags).revenue).toBe('Revenues')
+  })
+
+  it('최신 사실이 있는 기업에는 companyfacts API를 호출하지 않는다', () => {
+    // 최신 period_end가 2025-03-31이고 asOf가 2026-08-09이라 120일을 넘으므로 호출된다
+    expect(apiCalls).toContain(1045810)
+  })
+
+  it('job_runs에 성공 기록을 남긴다', () => {
+    const r = raw
+      .prepare("SELECT status FROM job_runs WHERE job='fundamentals' ORDER BY id DESC")
+      .get() as { status: string }
+    expect(r.status).toBe('succeeded')
+  })
+
+  it('재실행해도 financials 행이 중복되지 않는다', async () => {
+    await ingestFundamentals({ raw, cfg, bulk, companyFacts, asOf: '2026-08-09' })
+    const n = raw
+      .prepare('SELECT COUNT(*) c FROM financials WHERE cik = 1045810')
+      .get() as { c: number }
+    expect(n.c).toBe(5) // 분기 4 + TTM 1
+  })
+})
+
+describe('selectStaleCiks', () => {
+  it('최신 사실이 기준일보다 오래되면 지연으로 판정한다', () => {
+    expect(selectStaleCiks(raw, '2026-08-09', 120)).toContain(1045810)
+  })
+
+  it('충분히 최신이면 제외한다', () => {
+    expect(selectStaleCiks(raw, '2025-04-15', 120)).not.toContain(1045810)
+  })
+})
+```
+
+- [ ] **Step 7: 테스트 실패 확인**
+
+Run: `npx vitest run tests/pipeline/ingest-fundamentals.test.ts`
+Expected: FAIL — `Cannot find module '@/pipeline/jobs/ingest-fundamentals'`
+
+- [ ] **Step 8: 잡 구현**
+
+`src/pipeline/jobs/ingest-fundamentals.ts`:
+
+```ts
+import type Database from 'better-sqlite3'
+import type { AppConfig } from '@/config'
+import type { BulkFundamentalProvider, CompanyFactsProvider } from '@/providers/types'
+import { normalizeFacts } from '@/providers/fundamental/normalizer'
+import { listUniverseCiks } from '@/db/repositories/companies'
+import {
+  insertFacts, getFacts, replaceFinancials, selectStaleCiks,
+} from '@/db/repositories/financials'
+import { recentQuarters } from '@/pipeline/quarters'
+import { runJob, type JobStats } from '@/pipeline/runner'
+
+const INCREMENTAL_STALE_DAYS = 120
+
+export type FundamentalsDeps = {
+  raw: Database.Database
+  cfg: AppConfig
+  bulk: BulkFundamentalProvider
+  companyFacts: CompanyFactsProvider
+  asOf: string
+}
+
+export async function ingestFundamentals(deps: FundamentalsDeps): Promise<JobStats> {
+  const { raw, cfg, bulk, companyFacts, asOf } = deps
+
+  return runJob(raw, 'fundamentals', async () => {
+    const ciks = new Set(listUniverseCiks(raw))
+    const quarters = recentQuarters(asOf, cfg.ingest.bulk_quarters)
+
+    let bulkFacts = 0
+    let quartersLoaded = 0
+    const quarterErrors: string[] = []
+    for (const q of quarters) {
+      try {
+        bulkFacts += insertFacts(raw, await bulk.fetchQuarter(q.year, q.quarter, ciks))
+        quartersLoaded++
+      } catch (e) {
+        // 아직 공개되지 않은 분기는 404가 난다. 잡 전체를 중단시키지 않는다.
+        quarterErrors.push(`${q.year}Q${q.quarter}: ${e instanceof Error ? e.message : e}`)
+      }
+    }
+
+    // 벌크가 덮지 못한 기업만 API로 보충한다
+    const stale = selectStaleCiks(raw, asOf, INCREMENTAL_STALE_DAYS)
+    let apiFacts = 0
+    let apiFailed = 0
+    for (const cik of stale) {
+      try {
+        apiFacts += insertFacts(raw, await companyFacts.fetchCompany(cik))
+      } catch {
+        apiFailed++
+      }
+    }
+
+    let normalized = 0
+    let noData = 0
+    for (const cik of ciks) {
+      const result = normalizeFacts(getFacts(raw, cik))
+      if (result.quarterly.length === 0 && result.annual.length === 0) { noData++; continue }
+      replaceFinancials(raw, cik, result)
+      normalized++
+    }
+
+    return {
+      universeSize: ciks.size,
+      quartersRequested: quarters.length,
+      quartersLoaded,
+      bulkFacts,
+      staleCompanies: stale.length,
+      apiFacts,
+      apiFailed,
+      normalized,
+      noData,
+      quarterErrors,
+    }
+  })
+}
+```
+
+- [ ] **Step 9: 테스트 통과 확인**
+
+Run: `npx vitest run tests/pipeline/ingest-fundamentals.test.ts`
+Expected: PASS (9 tests)
+
+- [ ] **Step 10: 커밋**
+
+```bash
+git add -A
+git commit -m "feat: 재무 수집 잡 — 벌크 백필 + 지연 기업 API 보충
+
+companyfacts는 기업당 1~15MB라 전체 호출 시 4GB에 달하므로
+최신 사실이 120일보다 오래된 기업에만 호출한다.
+공개되지 않은 분기의 404는 기록만 하고 잡을 중단시키지 않는다."
+```
+
+---
+
+### Task 12: 시세 Provider & refresh-prices 잡
+
+**Files:**
+- Create: `src/providers/price/finnhub.ts`, `src/providers/price/fixture.ts`, `src/providers/price/index.ts`
+- Create: `src/db/repositories/market.ts`, `src/pipeline/jobs/refresh-prices.ts`
+- Modify: `config.yaml`, `src/config/schema.ts` (finnhub rate limit 추가)
+- Test: `tests/providers/price.test.ts`, `tests/pipeline/refresh-prices.test.ts`
+- Create: `tests/fixtures/prices.json`
+
+**Interfaces:**
+- Consumes: `HttpClient` (Task 5), `getFinancialsFor` (Task 11), `listUniverseCiks` (Task 7)
+- Produces:
+  - `type Quote = { price: number; date: string }`
+  - `type PriceProvider = { name: string; fetchQuote(ticker: string): Promise<Quote | null> }`
+  - `parseFinnhubQuote(raw: unknown): Quote | null`
+  - `createFinnhubProvider(http: HttpClient, apiKey: string): PriceProvider`
+  - `createFixtureProvider(path: string): PriceProvider`
+  - `getPriceProvider(http: HttpClient, env: NodeJS.ProcessEnv): PriceProvider`
+  - `upsertMarketData(raw, row: MarketRow): void`
+  - `type MarketRow = { cik: number; date: string; price: number | null; sharesOutstanding: number | null; marketCap: number | null; volume: number | null }`
+  - `getLatestMarketData(raw, cik: number): MarketRow | null`
+  - `refreshPrices(deps: PriceDeps): Promise<JobStats>`
+
+- [ ] **Step 1: config에 finnhub rate limit 추가**
+
+`config.yaml`의 `ingest` 블록에 한 줄 추가:
+
+```yaml
+ingest:
+  bulk_quarters: 8
+  sec_user_agent: "TenbaggerDashboard/0.1 (kk910519@gmail.com)"
+  sec_rate_limit_per_sec: 10
+  finnhub_rate_limit_per_sec: 1     # 무료 티어 분당 60회
+  cache_dir: "./data/cache"
+```
+
+`src/config/schema.ts`의 `ingest` 객체에 대응 필드 추가:
+
+```ts
+  ingest: z.object({
+    bulk_quarters: z.number().int().positive(),
+    sec_user_agent: z.string().min(1),
+    sec_rate_limit_per_sec: z.number().positive(),
+    finnhub_rate_limit_per_sec: z.number().positive(),
+    cache_dir: z.string(),
+  }),
+```
+
+`tests/config.test.ts`의 3번째 테스트에 쓰인 축약 config에도 `finnhub_rate_limit_per_sec: 1`을 추가한다.
+
+- [ ] **Step 2: 픽스처 작성**
+
+`tests/fixtures/prices.json`:
+
+```json
+{ "date": "2026-08-08", "prices": { "NVDA": 223.96, "CRWD": 412.5 } }
+```
+
+- [ ] **Step 3: 실패하는 테스트 작성**
+
+`tests/providers/price.test.ts`:
+
+```ts
+import { describe, it, expect } from 'vitest'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { createHttpClient } from '@/providers/http/client'
+import { parseFinnhubQuote, createFinnhubProvider } from '@/providers/price/finnhub'
+import { createFixtureProvider } from '@/providers/price/fixture'
+import { getPriceProvider } from '@/providers/price'
+
+const cacheDir = () => mkdtempSync(join(tmpdir(), 'tb-price-'))
+
+describe('parseFinnhubQuote', () => {
+  it('현재가와 타임스탬프를 읽는다', () => {
+    expect(parseFinnhubQuote({ c: 223.96, h: 1, l: 1, o: 1, pc: 1, t: 1786132800 }))
+      .toEqual({ price: 223.96, date: '2026-08-09' })
+  })
+
+  it('c가 0이면 null — 알 수 없는 심볼', () => {
+    expect(parseFinnhubQuote({ c: 0, t: 1786132800 })).toBeNull()
+  })
+
+  it('형식이 다르면 null', () => {
+    expect(parseFinnhubQuote({})).toBeNull()
+    expect(parseFinnhubQuote(null)).toBeNull()
+  })
+})
+
+describe('createFinnhubProvider', () => {
+  it('토큰을 쿼리에 붙이고 시세를 반환한다', async () => {
+    let seenUrl = ''
+    const http = createHttpClient({
+      userAgent: 'x', rateLimitPerSec: 1000, cacheDir: cacheDir(),
+      fetchImpl: async (url) => {
+        seenUrl = String(url)
+        return new Response(JSON.stringify({ c: 50, t: 1786132800 }), { status: 200 })
+      },
+    })
+    const p = createFinnhubProvider(http, 'KEY123')
+    expect(await p.fetchQuote('NVDA')).toEqual({ price: 50, date: '2026-08-09' })
+    expect(seenUrl).toContain('symbol=NVDA')
+    expect(seenUrl).toContain('token=KEY123')
+  })
+})
+
+describe('createFixtureProvider', () => {
+  const p = createFixtureProvider('tests/fixtures/prices.json')
+
+  it('픽스처 가격을 반환한다', async () => {
+    expect(await p.fetchQuote('NVDA')).toEqual({ price: 223.96, date: '2026-08-08' })
+  })
+
+  it('없는 티커는 null', async () => {
+    expect(await p.fetchQuote('NOPE')).toBeNull()
+  })
+})
+
+describe('getPriceProvider', () => {
+  const http = createHttpClient({
+    userAgent: 'x', rateLimitPerSec: 1000, cacheDir: cacheDir(),
+    fetchImpl: async () => new Response('{}', { status: 200 }),
+  })
+
+  it('PRICE_PROVIDER=fixture면 픽스처를 쓴다', () => {
+    expect(getPriceProvider(http, { PRICE_PROVIDER: 'fixture' }).name).toBe('fixture')
+  })
+
+  it('PRICE_PROVIDER=finnhub이고 키가 있으면 finnhub', () => {
+    expect(
+      getPriceProvider(http, { PRICE_PROVIDER: 'finnhub', FINNHUB_API_KEY: 'k' }).name,
+    ).toBe('finnhub')
+  })
+
+  it('finnhub인데 키가 없으면 명확한 에러를 던진다', () => {
+    expect(() => getPriceProvider(http, { PRICE_PROVIDER: 'finnhub' }))
+      .toThrow(/FINNHUB_API_KEY/)
+  })
+
+  it('알 수 없는 값이면 에러', () => {
+    expect(() => getPriceProvider(http, { PRICE_PROVIDER: 'yahoo' })).toThrow(/yahoo/)
+  })
+})
+```
+
+- [ ] **Step 4: 테스트 실패 확인**
+
+Run: `npx vitest run tests/providers/price.test.ts`
+Expected: FAIL — `Cannot find module '@/providers/price/finnhub'`
+
+- [ ] **Step 5: 시세 Provider 구현**
+
+`src/providers/types.ts`에 append:
+
+```ts
+export type Quote = { price: number; date: string }
+
+export type PriceProvider = {
+  name: string
+  fetchQuote(ticker: string): Promise<Quote | null>
+}
+```
+
+`src/providers/price/finnhub.ts`:
+
+```ts
+import type { HttpClient } from '../http/client.js'
+import type { PriceProvider, Quote } from '../types.js'
+
+/** Finnhub /quote 응답: c=현재가, t=유닉스 초. 알 수 없는 심볼은 c=0을 반환한다. */
+export function parseFinnhubQuote(raw: unknown): Quote | null {
+  if (!raw || typeof raw !== 'object') return null
+  const r = raw as { c?: number; t?: number }
+  if (typeof r.c !== 'number' || r.c <= 0) return null
+  if (typeof r.t !== 'number' || r.t <= 0) return null
+  return { price: r.c, date: new Date(r.t * 1000).toISOString().slice(0, 10) }
+}
+
+export function createFinnhubProvider(http: HttpClient, apiKey: string): PriceProvider {
+  return {
+    name: 'finnhub',
+    async fetchQuote(ticker) {
+      const url =
+        `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(ticker)}` +
+        `&token=${encodeURIComponent(apiKey)}`
+      try {
+        return parseFinnhubQuote(await http.getJson(url))
+      } catch {
+        return null
+      }
+    },
+  }
+}
+```
+
+`src/providers/price/fixture.ts`:
+
+```ts
+import { readFileSync } from 'node:fs'
+import type { PriceProvider } from '../types.js'
+
+export function createFixtureProvider(path: string): PriceProvider {
+  const data = JSON.parse(readFileSync(path, 'utf8')) as {
+    date: string
+    prices: Record<string, number>
+  }
+  return {
+    name: 'fixture',
+    async fetchQuote(ticker) {
+      const price = data.prices[ticker.toUpperCase()]
+      return typeof price === 'number' ? { price, date: data.date } : null
+    },
+  }
+}
+```
+
+`src/providers/price/index.ts`:
+
+```ts
+import type { HttpClient } from '../http/client.js'
+import type { PriceProvider } from '../types.js'
+import { createFinnhubProvider } from './finnhub.js'
+import { createFixtureProvider } from './fixture.js'
+
+const FIXTURE_PATH = 'tests/fixtures/prices.json'
+
+export function getPriceProvider(
+  http: HttpClient,
+  env: NodeJS.ProcessEnv,
+): PriceProvider {
+  const kind = env.PRICE_PROVIDER ?? 'finnhub'
+  if (kind === 'fixture') return createFixtureProvider(FIXTURE_PATH)
+  if (kind === 'finnhub') {
+    const key = env.FINNHUB_API_KEY
+    if (!key) {
+      throw new Error(
+        'FINNHUB_API_KEY가 없습니다. https://finnhub.io 에서 무료 키를 발급받아 .env에 넣거나 ' +
+          'PRICE_PROVIDER=fixture로 실행하세요.',
+      )
+    }
+    return createFinnhubProvider(http, key)
+  }
+  throw new Error(`알 수 없는 PRICE_PROVIDER: ${kind} (finnhub | fixture)`)
+}
+
+export { createFinnhubProvider, createFixtureProvider }
+```
+
+- [ ] **Step 6: Provider 테스트 통과 확인**
+
+Run: `npx vitest run tests/providers/price.test.ts`
+Expected: PASS (10 tests)
+
+- [ ] **Step 7: refresh-prices 실패 테스트 작성**
+
+`tests/pipeline/refresh-prices.test.ts`:
+
+```ts
+import { describe, it, expect, beforeAll } from 'vitest'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import type Database from 'better-sqlite3'
+import { getRawDb, runMigrations } from '@/db/client'
+import { refreshPrices } from '@/pipeline/jobs/refresh-prices'
+import { getLatestMarketData } from '@/db/repositories/market'
+import type { PriceProvider } from '@/providers/types'
+
+const prices: PriceProvider = {
+  name: 'test',
+  fetchQuote: async (t) => (t === 'NOQUOTE' ? null : { price: 200, date: '2026-08-08' }),
+}
+
+let raw: Database.Database
+let stats: Record<string, unknown>
+
+beforeAll(async () => {
+  raw = getRawDb(join(mkdtempSync(join(tmpdir(), 'tb-px-')), 'p.db'))
+  runMigrations(raw)
+  const addCompany = (cik: number, ticker: string) => {
+    raw.prepare(
+      `INSERT INTO companies (cik, ticker, name, is_active, first_seen, last_updated)
+       VALUES (?, ?, ?, 1, '2026-08-09', '2026-08-09')`,
+    ).run(cik, ticker, ticker)
+    raw.prepare(
+      `INSERT INTO company_industry (cik, industry_slug, theme_slug, is_primary, source)
+       VALUES (?, 'semiconductors', 'ai-software-semi', 1, 'sic')`,
+    ).run(cik)
+  }
+  addCompany(1, 'NVDA')
+  addCompany(2, 'NOSHARES')
+  addCompany(3, 'NOQUOTE')
+
+  raw.prepare(
+    `INSERT INTO financials (cik, period_end, period_type, shares_outstanding, computed_at)
+     VALUES (1, '2025-03-31', 'TTM', 1000, '2026-08-09')`,
+  ).run()
+  raw.prepare(
+    `INSERT INTO financials (cik, period_end, period_type, computed_at)
+     VALUES (2, '2025-03-31', 'TTM', '2026-08-09')`,
+  ).run()
+
+  stats = await refreshPrices({ raw, prices })
+})
+
+describe('refreshPrices', () => {
+  it('주가와 주식수로 시가총액을 계산한다', () => {
+    const m = getLatestMarketData(raw, 1)!
+    expect(m.price).toBe(200)
+    expect(m.sharesOutstanding).toBe(1000)
+    expect(m.marketCap).toBe(200_000)
+    expect(m.date).toBe('2026-08-08')
+  })
+
+  it('주식수가 없으면 시가총액은 null이고 주가는 저장한다', () => {
+    const m = getLatestMarketData(raw, 2)!
+    expect(m.price).toBe(200)
+    expect(m.marketCap).toBeNull()
+  })
+
+  it('시세를 못 받으면 행을 만들지 않는다', () => {
+    expect(getLatestMarketData(raw, 3)).toBeNull()
+  })
+
+  it('통계를 반환한다', () => {
+    expect(stats.quoted).toBe(2)
+    expect(stats.noQuote).toBe(1)
+    expect(stats.missingShares).toBe(1)
+  })
+
+  it('재실행해도 같은 날짜 행이 중복되지 않는다', async () => {
+    await refreshPrices({ raw, prices })
+    const n = raw
+      .prepare('SELECT COUNT(*) c FROM market_data WHERE cik = 1')
+      .get() as { c: number }
+    expect(n.c).toBe(1)
+  })
+})
+```
+
+세 기업의 역할: `NVDA`는 정상 경로, `NOSHARES`는 주식수 결측(시가총액 null), `NOQUOTE`는 시세 없음(행 미생성).
+
+- [ ] **Step 8: 테스트 실패 확인**
+
+Run: `npx vitest run tests/pipeline/refresh-prices.test.ts`
+Expected: FAIL — `Cannot find module '@/pipeline/jobs/refresh-prices'`
+
+- [ ] **Step 9: market 리포지토리 및 잡 구현**
+
+`src/db/repositories/market.ts`:
+
+```ts
+import type Database from 'better-sqlite3'
+
+export type MarketRow = {
+  cik: number
+  date: string
+  price: number | null
+  sharesOutstanding: number | null
+  marketCap: number | null
+  volume: number | null
+}
+
+export function upsertMarketData(raw: Database.Database, row: MarketRow): void {
+  raw
+    .prepare(
+      `INSERT INTO market_data (cik, date, price, shares_outstanding, market_cap, volume)
+       VALUES (@cik, @date, @price, @sharesOutstanding, @marketCap, @volume)
+       ON CONFLICT(cik, date) DO UPDATE SET
+         price = excluded.price,
+         shares_outstanding = excluded.shares_outstanding,
+         market_cap = excluded.market_cap,
+         volume = excluded.volume`,
+    )
+    .run(row)
+}
+
+export function getLatestMarketData(
+  raw: Database.Database,
+  cik: number,
+): MarketRow | null {
+  const r = raw
+    .prepare(
+      `SELECT cik, date, price, shares_outstanding AS sharesOutstanding,
+              market_cap AS marketCap, volume
+       FROM market_data WHERE cik = ? ORDER BY date DESC LIMIT 1`,
+    )
+    .get(cik) as MarketRow | undefined
+  return r ?? null
+}
+```
+
+`src/pipeline/jobs/refresh-prices.ts`:
+
+```ts
+import type Database from 'better-sqlite3'
+import type { PriceProvider } from '@/providers/types'
+import { upsertMarketData } from '@/db/repositories/market'
+import { runJob, type JobStats } from '@/pipeline/runner'
+
+export type PriceDeps = { raw: Database.Database; prices: PriceProvider }
+
+type Target = { cik: number; ticker: string; sharesOutstanding: number | null }
+
+export async function refreshPrices(deps: PriceDeps): Promise<JobStats> {
+  const { raw, prices } = deps
+
+  return runJob(raw, 'prices', async () => {
+    // 발행주식수는 가장 최근 기간의 값을 쓴다. TTM이 없으면 분기·연간 어느 쪽이든 최신을 택한다.
+    const targets = raw
+      .prepare(
+        `SELECT c.cik, c.ticker,
+                (SELECT f.shares_outstanding FROM financials f
+                  WHERE f.cik = c.cik AND f.shares_outstanding IS NOT NULL
+                  ORDER BY f.period_end DESC LIMIT 1) AS sharesOutstanding
+         FROM companies c
+         JOIN company_industry ci ON ci.cik = c.cik
+         WHERE c.is_active = 1
+         ORDER BY c.cik`,
+      )
+      .all() as Target[]
+
+    let quoted = 0
+    let noQuote = 0
+    let missingShares = 0
+
+    for (const t of targets) {
+      const q = await prices.fetchQuote(t.ticker)
+      if (!q) { noQuote++; continue }
+      if (t.sharesOutstanding === null) missingShares++
+      upsertMarketData(raw, {
+        cik: t.cik,
+        date: q.date,
+        price: q.price,
+        sharesOutstanding: t.sharesOutstanding,
+        marketCap: t.sharesOutstanding === null ? null : q.price * t.sharesOutstanding,
+        volume: null, // Finnhub 무료 티어 /quote는 거래량을 제공하지 않는다 (설계문서 §5.3)
+      })
+      quoted++
+    }
+
+    return { targets: targets.length, quoted, noQuote, missingShares, provider: prices.name }
+  })
+}
+```
+
+`JobStats` 타입이 `Record<string, number | string[]>`이므로 `provider: prices.name`(문자열)을 담으려면 Task 7의 타입을 다음으로 넓힌다.
+
+```ts
+export type JobStats = Record<string, number | string | string[]>
+```
+
+- [ ] **Step 10: 테스트 통과 확인**
+
+Run: `npx vitest run tests/pipeline/refresh-prices.test.ts`
+Expected: PASS (5 tests)
+
+- [ ] **Step 11: 전체 테스트 확인**
+
+Run: `npm test`
+Expected: PASS — Stage A 44 + http 7 + listing 5 + reference 5 + filter 7 + bulk 6 + companyfacts 5 + resolve 15 + normalizer 13 + universe 8 + quarters 3 + fundamentals 9 + price 10 + refresh 5 = 142 tests
+
+- [ ] **Step 12: 커밋**
+
+```bash
+git add -A
+git commit -m "feat: 시세 Provider 및 refresh-prices 잡
+
+Finnhub /quote와 픽스처 두 구현을 env 값 하나로 전환한다.
+키가 없으면 발급 방법과 대안을 담은 에러를 던진다.
+시가총액 = 주가 x SEC 발행주식수. 주식수가 없으면 시가총액은 null이며
+주가는 그대로 저장한다. 무료 티어에 거래량이 없어 volume은 null이다."
 ```
