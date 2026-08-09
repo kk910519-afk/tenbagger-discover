@@ -43,7 +43,7 @@ export default async function IndustryPage({
     <div className="space-y-8">
       <div>
         <p className="text-xs text-[var(--color-text-dim)]">{view.themeName}</p>
-        <h1 className="text-lg font-medium tracking-tight">{view.name}</h1>
+        <h1 className="font-serif text-2xl">{view.name}</h1>
       </div>
 
       <ColumnLegend />

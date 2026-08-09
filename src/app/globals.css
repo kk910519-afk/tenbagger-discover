@@ -4,7 +4,12 @@
   --color-bg: #0b0d10;
   --color-surface: #14171c;
   --color-surface-2: #1b1f26;
-  --color-border: #262b34;
+  /* 기존 고정 hex(#262b34)는 배경 대비 구분선이 너무 또렷했다. 반투명 흰색으로
+     바꾸면 어떤 표면(페이지 배경이든 --color-surface든) 위에 놓여도 그 표면
+     명도에 비례해 은은하게 녹아든다 — "약해 보이는" 정도가 아니라 실제로
+     더 낮은 대비를 낸다(측정: 페이지 배경 위에서 RGB 델타가 채널당 약
+     27~36 → 약 19~20으로 감소). */
+  --color-border: rgba(255, 255, 255, 0.08);
   --color-text: #e6e9ee;
   --color-text-dim: #99a1ae;
   --color-text-faint: #6b7280;
@@ -16,14 +21,27 @@
   --color-info: #58a6ff;
   --color-emerging: #a371f7;
 
-  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
+  /*
+   * 인터페이스·표·숫자는 전부 Geist Sans(layout.tsx에서 next/font/google로
+   * 로드해 --font-geist-sans에 노출). 회사명·주요 타이틀·투자 논지 텍스트만
+   * Instrument Serif(--font-instrument-serif)를 쓴다 — 그 외 자리(숫자,
+   * 컬럼 헤더, 배지, 툴팁)는 절대 세리프를 쓰지 않는다. 두 변수 다
+   * layout.tsx에서 <html> 클래스로 주입되므로 폰트 로더가 없는 테스트
+   * 환경(jsdom)에서도 CSS 자체는 깨지지 않고, 변수가 비어 있으면 뒤에
+   * 나열한 폴백 스택(끝은 항상 generic sans-serif/serif)으로 떨어진다 —
+   * 한글처럼 두 서체 다 커버하지 않는 글립도 이 폴백으로 깨지지 않는다.
+   */
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-serif: var(--font-instrument-serif), Georgia, "Times New Roman", serif;
 }
 
 /* 숫자는 항상 자릿수가 정렬되어야 비교가 가능하다 — 다른 유틸리티에 덮이면
-   안 되므로 의도적으로 레이어 밖에 둔다. */
+   안 되므로 의도적으로 레이어 밖에 둔다. 숫자는 세리프를 쓰지 않으므로
+   본문과 같은 Geist Sans를 쓰되 tabular-nums만 강제한다(제3의 모노스페이스
+   서체를 새로 들이지 않는다). */
 .num {
   font-variant-numeric: tabular-nums;
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
 }
 
 /*
@@ -37,11 +55,32 @@
   html, body {
     background: var(--color-bg);
     color: var(--color-text);
+    font-family: var(--font-sans);
   }
 
   table { border-collapse: collapse; }
-  th { font-weight: 500; color: var(--color-text-dim); text-align: left; }
-  th, td { padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--color-border); }
+
+  /*
+   * 헤더는 값보다 작고, 살짝 더 넓게 트래킹하고, 더 흐린 색이어야 눈이
+   * "이건 라벨이지 값이 아니다"를 즉시 구분한다 — 그 대비 자체가 컬럼에
+   * 시선을 고정시키는 장치다. 자간은 영문 헤더(Market Cap 등)에서는
+   * 또렷해지지만 한글 헤더("후보", "매출성장 중앙값" 등)에서도 읽기를
+   * 해치지 않을 만큼 작은 값(0.02em)으로 눌러뒀다 — 두 스크립트가 같은
+   * 헤더 행에 섞여 나오므로 한쪽만 고려할 수 없다.
+   */
+  th {
+    font-weight: 500;
+    font-size: 0.6875rem;
+    line-height: 1.4;
+    letter-spacing: 0.02em;
+    color: var(--color-text-faint);
+    text-align: left;
+  }
+
+  /* 행 높이는 "느슨하게"가 아니라 "정교하게" 줄인다 — 세로 패딩만
+     0.5rem → 0.375rem으로 다듬고 가로 패딩은 그대로 둔다(칼럼 사이 여백은
+     구분선 역할을 해 밀도와 무관하다). */
+  th, td { padding: 0.375rem 0.75rem; border-bottom: 1px solid var(--color-border); }
   tbody tr:hover { background: var(--color-surface-2); }
   a { color: inherit; text-decoration: none; }
   a:hover { text-decoration: underline; }

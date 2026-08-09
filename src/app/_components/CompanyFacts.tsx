@@ -19,31 +19,31 @@ export function CompanyFacts({ d }: { d: CompanyFactsData }) {
   return (
     <dl className="grid grid-cols-2 gap-x-8 gap-y-3 sm:grid-cols-3 lg:grid-cols-5">
       <div>
-        <dt className="text-xs text-[var(--color-text-dim)]">공식 업종</dt>
+        <dt className="text-xs text-[var(--color-text-faint)]">공식 업종</dt>
         <dd className="mt-0.5 text-sm">
           <Value>{formatSicLabel(d.sic, d.sicDescription)}</Value>
         </dd>
       </div>
       <div>
-        <dt className="text-xs text-[var(--color-text-dim)]">거래소</dt>
+        <dt className="text-xs text-[var(--color-text-faint)]">거래소</dt>
         <dd className="mt-0.5 text-sm">
           <Value>{d.exchange ?? '—'}</Value>
         </dd>
       </div>
       <div>
-        <dt className="text-xs text-[var(--color-text-dim)]">회계연도 말</dt>
+        <dt className="text-xs text-[var(--color-text-faint)]">회계연도 말</dt>
         <dd className="mt-0.5 text-sm">
           <Value>{formatFiscalYearEnd(d.fiscalYearEnd)}</Value>
         </dd>
       </div>
       <div>
-        <dt className="text-xs text-[var(--color-text-dim)]">설립 주(州)</dt>
+        <dt className="text-xs text-[var(--color-text-faint)]">설립 주(州)</dt>
         <dd className="mt-0.5 text-sm">
           <Value>{d.stateOfIncorporationDescription ?? '—'}</Value>
         </dd>
       </div>
       <div>
-        <dt className="text-xs text-[var(--color-text-dim)]">SEC EDGAR 공시</dt>
+        <dt className="text-xs text-[var(--color-text-faint)]">SEC EDGAR 공시</dt>
         <dd className="mt-0.5 text-sm">
           <a
             href={edgarFilingsUrl(d.cik)}

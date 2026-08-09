@@ -58,7 +58,7 @@ export function CandidateTable({
 
   return (
     <>
-      <div className="overflow-x-auto">
+      <div className="overflow-x-auto bg-[var(--color-surface)]">
         <table className="w-full max-w-5xl text-sm">
           <thead>
             <tr className="text-xs">
@@ -81,7 +81,7 @@ export function CandidateTable({
                     {r.ticker}
                   </a>
                 </td>
-                <td className="text-[var(--color-text-dim)]">{r.name}</td>
+                <td className="font-serif text-[var(--color-text)]">{r.name}</td>
                 <td className={`text-right ${GROUP_START}`}><Value dim>{formatUsd(r.marketCap)}</Value></td>
                 <td className={`text-right ${GROUP_START}`}>
                   <SignedValue value={r.revenueGrowth} text={formatPct(r.revenueGrowth)} />

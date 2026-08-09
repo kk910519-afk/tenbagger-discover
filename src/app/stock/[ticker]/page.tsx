@@ -43,7 +43,7 @@ export default async function StockPage({
         </p>
         <h1 className="mt-1 flex items-center gap-3 text-lg">
           {d.ticker}
-          <span className="text-sm text-[var(--color-text-dim)]">{d.name}</span>
+          <span className="font-serif text-xl text-[var(--color-text)]">{d.name}</span>
           <CategoryBadge category={d.category} />
         </h1>
       </header>
@@ -51,6 +51,7 @@ export default async function StockPage({
       <section>
         <h2 className="mb-2 text-sm text-[var(--color-text-dim)]">Overview</h2>
         <MetricGrid
+          emphasize
           items={[
             { label: 'Tenbagger Score', value: <Value>{formatScore(d.tenbagger)}</Value> },
             { label: 'Market Cap', value: <Value>{formatUsd(d.marketCap)}</Value> },

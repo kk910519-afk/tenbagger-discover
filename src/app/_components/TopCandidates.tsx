@@ -11,7 +11,7 @@ import { Badge } from './Badge'
  */
 export function TopCandidates({ candidates }: { candidates: TopCandidate[] }) {
   return (
-    <div className="overflow-x-auto">
+    <div className="overflow-x-auto bg-[var(--color-surface)]">
       <table className="w-full max-w-4xl text-sm">
         <thead>
           <tr className="text-xs">
@@ -29,7 +29,7 @@ export function TopCandidates({ candidates }: { candidates: TopCandidate[] }) {
               <td>
                 <a href={`/stock/${c.ticker}`} className="inline-flex items-baseline gap-1.5">
                   <span className="font-medium">{c.ticker}</span>
-                  <span className="text-xs text-[var(--color-text-dim)]">{c.name}</span>
+                  <span className="font-serif text-sm text-[var(--color-text)]">{c.name}</span>
                 </a>
               </td>
               <td className="text-xs">
@@ -40,7 +40,10 @@ export function TopCandidates({ candidates }: { candidates: TopCandidate[] }) {
               <td>
                 <ScoreBar value={c.tenbagger} />
               </td>
-              <td className="max-w-xs truncate text-xs text-[var(--color-text-dim)]" title={c.rationale}>
+              <td
+                className="max-w-xs truncate font-serif text-sm text-[var(--color-text-dim)]"
+                title={c.rationale}
+              >
                 {c.rationale}
                 {c.hasCriticalFlag && (
                   <span className="ml-2 inline-block align-middle">

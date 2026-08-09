@@ -46,7 +46,7 @@ export default function Home() {
   return (
     <div className="space-y-10">
       <section>
-        <h2 className="text-xl font-medium tracking-tight">Top 5 · Universe-Wide</h2>
+        <h2 className="font-serif text-2xl">Top 5 · Universe-Wide</h2>
         <p className="mt-1 text-xs text-[var(--color-text-dim)]">
           Theme·Industry 경계와 무관하게 점수가 가장 높은 후보 5곳
         </p>
@@ -62,7 +62,7 @@ export default function Home() {
       </section>
 
       <div>
-        <h1 className="text-xl font-medium tracking-tight">Growth Opportunity Map</h1>
+        <h1 className="font-serif text-2xl">Growth Opportunity Map</h1>
         <p className="mt-1 text-xs text-[var(--color-text-dim)]">
           후보 <Value>{total.toLocaleString()}</Value>개 · Theme <Value>{themes.length}</Value>개
         </p>
@@ -87,7 +87,7 @@ function ThemeSection({
   return (
     <section id={slug}>
       <div className="mb-3 flex items-baseline gap-2 border-b border-[var(--color-border)] pb-2">
-        <h2 className="text-sm tracking-wide text-[var(--color-text)]">{name}</h2>
+        <h2 className="font-serif text-lg text-[var(--color-text)]">{name}</h2>
         <span className="text-xs text-[var(--color-text-faint)]">
           {industries.length > 0 ? `${industries.length}개 산업 · 후보 ${candidateCount}개` : '후보 없음'}
         </span>
@@ -98,7 +98,7 @@ function ThemeSection({
           이 Theme에는 아직 후보가 없습니다.
         </div>
       ) : (
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto bg-[var(--color-surface)]">
           <table className="w-full text-sm">
             <thead>
               <tr className="text-xs">
