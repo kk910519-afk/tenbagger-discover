@@ -103,4 +103,8 @@ describe('scoreTenbagger — 픽스처 기업별 기대 동작', () => {
   it('메가캡이 초기 텐배거보다 낮다 — 규모 자체가 성장 잠재력을 제한한다', () => {
     expect(run(megaCap()).result.score!).toBeLessThan(run(earlyTenbagger()).result.score!)
   })
+
+  it('메가캡이 밸류 트랩보다 반드시 높다 — 우수한 펀더멘털을 가진 대형주는 매출이 꺾이고 Red Flag가 있는 회사보다 항상 앞선다', () => {
+    expect(run(megaCap()).result.score!).toBeGreaterThan(run(valueTrap()).result.score!)
+  })
 })

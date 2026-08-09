@@ -7,7 +7,7 @@ const FIXTURE_PATH = 'tests/fixtures/prices.json'
 
 export function getPriceProvider(
   http: HttpClient,
-  env: NodeJS.ProcessEnv,
+  env: Partial<NodeJS.ProcessEnv>,
 ): PriceProvider {
   const kind = env.PRICE_PROVIDER ?? 'finnhub'
   if (kind === 'fixture') return createFixtureProvider(FIXTURE_PATH)

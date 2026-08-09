@@ -15,7 +15,6 @@ describe('PIPELINE_COMMANDS', () => {
 
 describe('buildDeps', () => {
   const env = {
-    NODE_ENV: 'test' as const,
     PRICE_PROVIDER: 'fixture',
     DATABASE_PATH: join(mkdtempSync(join(tmpdir(), 'tb-cli-')), 'c.db'),
   }
@@ -45,7 +44,7 @@ describe('runPipeline', () => {
     // DATABASE_PATH를 일부러 주지 않는다 — buildDeps가 호출된다면
     // getRawDb가 기본 경로(./data/tenbagger.db)를 만들려 시도할 것이므로,
     // 여기서 예외가 나면 검증이 buildDeps보다 먼저 실행되지 않았다는 뜻이다.
-    const env = { NODE_ENV: 'test' as const, PRICE_PROVIDER: 'fixture' }
+    const env = { PRICE_PROVIDER: 'fixture' }
     await expect(runPipeline('bogus', env, '2026-08-09')).rejects.toThrow(
       /알 수 없는 명령/,
     )
@@ -53,7 +52,7 @@ describe('runPipeline', () => {
 
   it('요청한 명령만 실행하고 성공 시에도 raw 연결을 닫는다', async () => {
     const dbPath = join(mkdtempSync(join(tmpdir(), 'tb-cli-')), 'c.db')
-    const env = { NODE_ENV: 'test' as const, PRICE_PROVIDER: 'fixture', DATABASE_PATH: dbPath }
+    const env = { PRICE_PROVIDER: 'fixture', DATABASE_PATH: dbPath }
 
     // prices는 로컬 DB와 fixture Provider만 사용하므로 네트워크 없이 끝까지 실행된다.
     // universe/fundamentals가 실행됐다면 실제 SEC/NASDAQ 네트워크 호출이 발생해

@@ -18,7 +18,7 @@ export const PIPELINE_COMMANDS = [
 
 export type PipelineCommand = (typeof PIPELINE_COMMANDS)[number]
 
-export function buildDeps(env: NodeJS.ProcessEnv, asOf: string) {
+export function buildDeps(env: Partial<NodeJS.ProcessEnv>, asOf: string) {
   const cfg = loadConfig()
   const taxonomy = loadTaxonomy()
   const raw = getRawDb(env.DATABASE_PATH)
@@ -56,7 +56,7 @@ function report(name: string, stats: Record<string, unknown>): void {
 
 export async function runPipeline(
   command: string,
-  env: NodeJS.ProcessEnv,
+  env: Partial<NodeJS.ProcessEnv>,
   asOf: string,
 ): Promise<void> {
   if (!(PIPELINE_COMMANDS as readonly string[]).includes(command)) {
