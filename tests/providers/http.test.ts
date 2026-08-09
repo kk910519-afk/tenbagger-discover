@@ -1,12 +1,17 @@
-import { describe, it, expect, vi } from 'vitest'
-import { mkdtempSync, readdirSync } from 'node:fs'
+import { describe, it, expect } from 'vitest'
+import { mkdtempSync, mkdirSync, readdirSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import * as fs from 'node:fs'
 import { createHttpClient } from '@/providers/http/client'
 
 function tmpCache() {
   return mkdtempSync(join(tmpdir(), 'tb-http-'))
+}
+
+/** client.ts의 cachePath()와 동일한 파생 규칙: sha256(url) 앞 32자 + '.bin' */
+function cacheFileName(url: string) {
+  return `${createHash('sha256').update(url).digest('hex').slice(0, 32)}.bin`
 }
 
 function okResponse(body: string) {
@@ -176,10 +181,9 @@ describe('createHttpClient', () => {
     await client.getText(url, { cache: true })
 
     // 캐시 디렉토리에는 .bin 파일만 있고 .tmp 파일은 없어야 한다
-    const fs = require('node:fs')
-    const files = fs.readdirSync(cacheDir)
-    const tmpFiles = files.filter((f: string) => f.endsWith('.tmp'))
-    const binFiles = files.filter((f: string) => f.endsWith('.bin'))
+    const files = readdirSync(cacheDir)
+    const tmpFiles = files.filter((f) => f.endsWith('.tmp'))
+    const binFiles = files.filter((f) => f.endsWith('.bin'))
     expect(tmpFiles).toHaveLength(0)
     expect(binFiles.length).toBeGreaterThan(0)
   })
@@ -204,5 +208,32 @@ describe('createHttpClient', () => {
     const binFiles = files.filter((f) => f.endsWith('.bin'))
     expect(tmpFiles).toHaveLength(0)
     expect(binFiles).toHaveLength(3)
+  })
+
+  it('cache 쓰기가 실패하면 에러를 던지고 .tmp 파일을 남기지 않는다', async () => {
+    const cacheDir = tmpCache()
+    const url = 'https://example.com/rename-fail'
+    const destPath = join(cacheDir, cacheFileName(url))
+
+    // fetchBuffer는 시작 시 existsSync(dest)로 캐시 히트를 검사한다.
+    // 따라서 디렉토리를 "미리" 만들면 캐시 히트 경로로 빠져 쓰기 자체를 하지 않는다.
+    // fetch가 진행되는 동안(= existsSync 검사 이후에) 대상 경로에 디렉토리를 만들면
+    // writeFileSync(tmp)는 성공하고 renameSync(tmp, dest)만 실패한다 → catch 블록 진입.
+    const client = createHttpClient({
+      userAgent: 'x',
+      rateLimitPerSec: 1000,
+      cacheDir,
+      fetchImpl: async () => {
+        mkdirSync(destPath)
+        return okResponse('will-fail-to-cache')
+      },
+    })
+
+    // (a) 캐시 쓰기 실패가 호출자에게 rethrow 되어야 한다
+    await expect(client.getText(url, { cache: true })).rejects.toThrow()
+
+    // (b) catch 블록의 정리 로직이 orphan .tmp를 지웠어야 한다
+    const tmpFiles = readdirSync(cacheDir).filter((f) => f.endsWith('.tmp'))
+    expect(tmpFiles).toHaveLength(0)
   })
 })
