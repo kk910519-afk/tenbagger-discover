@@ -1,0 +1,38 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg: #0b0d10;
+  --color-surface: #14171c;
+  --color-surface-2: #1b1f26;
+  --color-border: #262b34;
+  --color-text: #e6e9ee;
+  --color-text-dim: #99a1ae;
+  --color-text-faint: #6b7280;
+
+  /* 의미가 있을 때만 쓴다 — 설계문서 §11.4 */
+  --color-positive: #3fb950;
+  --color-risk: #f85149;
+  --color-watch: #d29922;
+  --color-info: #58a6ff;
+  --color-emerging: #a371f7;
+
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
+}
+
+html, body {
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+/* 숫자는 항상 자릿수가 정렬되어야 비교가 가능하다 */
+.num {
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
+}
+
+table { border-collapse: collapse; }
+th { font-weight: 500; color: var(--color-text-dim); text-align: left; }
+th, td { padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--color-border); }
+tbody tr:hover { background: var(--color-surface-2); }
+a { color: inherit; text-decoration: none; }
+a:hover { text-decoration: underline; }
