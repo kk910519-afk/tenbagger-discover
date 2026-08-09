@@ -1,0 +1,63 @@
+# TAM 필드는 전부 null로 시작한다. 출처 없는 수치를 만들어 넣지 않는다.
+# tam_cagr가 null인 산업은 Task 15에서 산업 구성기업의 매출 성장률 중앙값으로 대체된다.
+
+# Theme 1 — AI / Software / Semiconductor
+- { slug: semiconductors,             theme: ai-software-semi, name: Semiconductors,             tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }
+- { slug: semiconductor-equipment,    theme: ai-software-semi, name: Semiconductor Equipment,    tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }
+- { slug: software-infrastructure,    theme: ai-software-semi, name: Software Infrastructure,    tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }
+- { slug: software-application,       theme: ai-software-semi, name: Software Application,       tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }
+- { slug: cloud-computing,            theme: ai-software-semi, name: Cloud Computing,            tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }
+- { slug: cybersecurity,              theme: ai-software-semi, name: Cybersecurity,              tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }
+- { slug: data-infrastructure,        theme: ai-software-semi, name: Data Infrastructure,        tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }
+- { slug: ai-infrastructure,          theme: ai-software-semi, name: AI Infrastructure,          tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }
+- { slug: networking,                 theme: ai-software-semi, name: Networking,                 tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }
+- { slug: data-center-infrastructure, theme: ai-software-semi, name: Data Center Infrastructure, tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }
+
+# Theme 2 — Healthcare / Biotechnology
+- { slug: biotechnology,          theme: healthcare-biotech, name: Biotechnology,          tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }
+- { slug: pharmaceuticals,        theme: healthcare-biotech, name: Pharmaceuticals,        tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }
+- { slug: medical-devices,        theme: healthcare-biotech, name: Medical Devices,        tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }
+- { slug: diagnostics,            theme: healthcare-biotech, name: Diagnostics,            tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }
+- { slug: genomics,               theme: healthcare-biotech, name: Genomics,               tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }
+- { slug: precision-medicine,     theme: healthcare-biotech, name: Precision Medicine,     tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }
+- { slug: drug-discovery,         theme: healthcare-biotech, name: Drug Discovery,         tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }
+- { slug: healthcare-technology,  theme: healthcare-biotech, name: Healthcare Technology,  tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }
+
+# Theme 3 — Industrial / Automation / Defense
+- { slug: robotics,                theme: industrial-automation-defense, name: Robotics,                tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }
+- { slug: industrial-automation,   theme: industrial-automation-defense, name: Industrial Automation,   tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }
+- { slug: aerospace,               theme: industrial-automation-defense, name: Aerospace,               tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }
+- { slug: defense-technology,      theme: industrial-automation-defense, name: Defense Technology,      tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }
+- { slug: drones,                  theme: industrial-automation-defense, name: Drones,                  tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }
+- { slug: advanced-manufacturing,  theme: industrial-automation-defense, name: Advanced Manufacturing,  tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }
+- { slug: logistics-automation,    theme: industrial-automation-defense, name: Logistics Automation,    tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }
+
+# Theme 4 — Digital Consumer / Fintech
+- { slug: e-commerce,           theme: digital-consumer-fintech, name: E-commerce,           tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }
+- { slug: fintech,              theme: digital-consumer-fintech, name: Fintech,              tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }
+- { slug: digital-payments,     theme: digital-consumer-fintech, name: Digital Payments,     tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }
+- { slug: digital-advertising,  theme: digital-consumer-fintech, name: Digital Advertising,  tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }
+- { slug: gaming,               theme: digital-consumer-fintech, name: Gaming,               tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }
+- { slug: online-marketplace,   theme: digital-consumer-fintech, name: Online Marketplace,   tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }
+- { slug: travel-technology,    theme: digital-consumer-fintech, name: Travel Technology,    tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }
+- { slug: digital-media,        theme: digital-consumer-fintech, name: Digital Media,        tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }
+
+# Theme 5 — Energy / Next Energy
+- { slug: nuclear,                  theme: energy-next, name: Nuclear,                  tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }
+- { slug: uranium,                  theme: energy-next, name: Uranium,                  tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }
+- { slug: energy-storage,           theme: energy-next, name: Energy Storage,           tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }
+- { slug: solar,                    theme: energy-next, name: Solar,                    tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }
+- { slug: grid-infrastructure,      theme: energy-next, name: Grid Infrastructure,      tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }
+- { slug: power-semiconductor,      theme: energy-next, name: Power Semiconductor,      tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }
+- { slug: renewable-energy,         theme: energy-next, name: Renewable Energy,         tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }
+- { slug: next-generation-energy,   theme: energy-next, name: Next-generation Energy,   tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }
+
+# Theme 6 — Emerging Technology
+- { slug: quantum-computing,    theme: emerging-tech, name: Quantum Computing,    tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }
+- { slug: space,                theme: emerging-tech, name: Space,                tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }
+- { slug: satellite,            theme: emerging-tech, name: Satellite,            tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }
+- { slug: autonomous-driving,   theme: emerging-tech, name: Autonomous Driving,   tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }
+- { slug: advanced-computing,   theme: emerging-tech, name: Advanced Computing,   tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }
+- { slug: ai-robotics,          theme: emerging-tech, name: AI Robotics,          tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }
+- { slug: advanced-materials,   theme: emerging-tech, name: Advanced Materials,   tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }
+- { slug: synthetic-biology,    theme: emerging-tech, name: Synthetic Biology,    tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }

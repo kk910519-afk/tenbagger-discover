@@ -1,0 +1,95 @@
+# SIC → { theme, default_industry }
+# 여기 없는 SIC는 유니버스에서 제외된다.
+# 겹치는 SIC는 가장 지배적인 하나로 배정하고 예외는 company-overrides.yaml이 처리한다.
+map:
+  # AI / Software / Semiconductor
+  "3674": { theme: ai-software-semi, industry: semiconductors }
+  "3672": { theme: ai-software-semi, industry: semiconductors }
+  "3679": { theme: ai-software-semi, industry: semiconductors }
+  "3559": { theme: ai-software-semi, industry: semiconductor-equipment }
+  "3827": { theme: ai-software-semi, industry: semiconductor-equipment }
+  "7372": { theme: ai-software-semi, industry: software-application }
+  "7370": { theme: ai-software-semi, industry: software-infrastructure }
+  "7371": { theme: ai-software-semi, industry: software-infrastructure }
+  "7373": { theme: ai-software-semi, industry: software-infrastructure }
+  "7374": { theme: ai-software-semi, industry: cloud-computing }
+  "3570": { theme: ai-software-semi, industry: data-center-infrastructure }
+  "3571": { theme: ai-software-semi, industry: data-center-infrastructure }
+  "3577": { theme: ai-software-semi, industry: data-center-infrastructure }
+  "3572": { theme: ai-software-semi, industry: data-infrastructure }
+  "3576": { theme: ai-software-semi, industry: networking }
+  "3661": { theme: ai-software-semi, industry: networking }
+  "3663": { theme: ai-software-semi, industry: networking }
+  "3669": { theme: ai-software-semi, industry: networking }
+  # Healthcare / Biotechnology
+  "2836": { theme: healthcare-biotech, industry: biotechnology }
+  "8731": { theme: healthcare-biotech, industry: drug-discovery }
+  "2833": { theme: healthcare-biotech, industry: pharmaceuticals }
+  "2834": { theme: healthcare-biotech, industry: pharmaceuticals }
+  "2835": { theme: healthcare-biotech, industry: diagnostics }
+  "3826": { theme: healthcare-biotech, industry: diagnostics }
+  "8071": { theme: healthcare-biotech, industry: diagnostics }
+  "3841": { theme: healthcare-biotech, industry: medical-devices }
+  "3842": { theme: healthcare-biotech, industry: medical-devices }
+  "3843": { theme: healthcare-biotech, industry: medical-devices }
+  "3844": { theme: healthcare-biotech, industry: medical-devices }
+  "3845": { theme: healthcare-biotech, industry: medical-devices }
+  "8090": { theme: healthcare-biotech, industry: healthcare-technology }
+  # Industrial / Automation / Defense
+  "3812": { theme: industrial-automation-defense, industry: defense-technology }
+  "3760": { theme: industrial-automation-defense, industry: defense-technology }
+  "3480": { theme: industrial-automation-defense, industry: defense-technology }
+  "3721": { theme: industrial-automation-defense, industry: aerospace }
+  "3724": { theme: industrial-automation-defense, industry: aerospace }
+  "3728": { theme: industrial-automation-defense, industry: aerospace }
+  "3550": { theme: industrial-automation-defense, industry: industrial-automation }
+  "3561": { theme: industrial-automation-defense, industry: industrial-automation }
+  "3823": { theme: industrial-automation-defense, industry: industrial-automation }
+  "3829": { theme: industrial-automation-defense, industry: industrial-automation }
+  "3555": { theme: industrial-automation-defense, industry: advanced-manufacturing }
+  "3585": { theme: industrial-automation-defense, industry: advanced-manufacturing }
+  "3537": { theme: industrial-automation-defense, industry: logistics-automation }
+  # Digital Consumer / Fintech
+  "5961": { theme: digital-consumer-fintech, industry: e-commerce }
+  "7379": { theme: digital-consumer-fintech, industry: online-marketplace }
+  "6199": { theme: digital-consumer-fintech, industry: fintech }
+  "6141": { theme: digital-consumer-fintech, industry: fintech }
+  "6099": { theme: digital-consumer-fintech, industry: digital-payments }
+  "7311": { theme: digital-consumer-fintech, industry: digital-advertising }
+  "7812": { theme: digital-consumer-fintech, industry: digital-media }
+  "7841": { theme: digital-consumer-fintech, industry: digital-media }
+  "4813": { theme: digital-consumer-fintech, industry: digital-media }
+  "7990": { theme: digital-consumer-fintech, industry: gaming }
+  "7999": { theme: digital-consumer-fintech, industry: gaming }
+  "4724": { theme: digital-consumer-fintech, industry: travel-technology }
+  # Energy / Next Energy
+  "4911": { theme: energy-next, industry: grid-infrastructure }
+  "4931": { theme: energy-next, industry: grid-infrastructure }
+  "3612": { theme: energy-next, industry: grid-infrastructure }
+  "3621": { theme: energy-next, industry: grid-infrastructure }
+  "4991": { theme: energy-next, industry: renewable-energy }
+  "1090": { theme: energy-next, industry: uranium }
+  "1094": { theme: energy-next, industry: uranium }
+  "3433": { theme: energy-next, industry: solar }
+  "3690": { theme: energy-next, industry: energy-storage }
+  "3691": { theme: energy-next, industry: energy-storage }
+  "3692": { theme: energy-next, industry: energy-storage }
+  # Emerging Technology
+  "2820": { theme: emerging-tech, industry: advanced-materials }
+  "2821": { theme: emerging-tech, industry: advanced-materials }
+  "3711": { theme: emerging-tech, industry: autonomous-driving }
+  "3714": { theme: emerging-tech, industry: autonomous-driving }
+
+# 유니버스에 나타나지만 의도적으로 제외하는 SIC.
+# 커버리지 테스트(Task 24)가 map에도 unmapped에도 없는 SIC를 발견하면 실패한다.
+unmapped:
+  - "6770"   # Blank Checks (SPAC)
+  - "6798"   # REIT
+  - "6021"   # National Commercial Banks
+  - "6022"   # State Commercial Banks
+  - "6311"   # Life Insurance
+  - "1311"   # Crude Petroleum & Natural Gas
+  - "2911"   # Petroleum Refining
+  - "2000"   # Food & Kindred Products
+  - "5812"   # Eating Places
+  - "6500"   # Real Estate

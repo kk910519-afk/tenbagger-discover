@@ -1,0 +1,6 @@
+- { slug: ai-software-semi,             name: "AI / Software / Semiconductor",      display_order: 1 }
+- { slug: healthcare-biotech,           name: "Healthcare / Biotechnology",         display_order: 2 }
+- { slug: industrial-automation-defense, name: "Industrial / Automation / Defense", display_order: 3 }
+- { slug: digital-consumer-fintech,     name: "Digital Consumer / Fintech",         display_order: 4 }
+- { slug: energy-next,                  name: "Energy / Next Energy",               display_order: 5 }
+- { slug: emerging-tech,                name: "Emerging Technology",                display_order: 6 }
