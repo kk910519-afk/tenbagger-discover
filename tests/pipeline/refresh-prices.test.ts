@@ -32,6 +32,7 @@ beforeAll(async () => {
   addCompany(1, 'NVDA')
   addCompany(2, 'NOSHARES')
   addCompany(3, 'NOQUOTE')
+  addCompany(4, 'TIEBREAK')
 
   raw.prepare(
     `INSERT INTO financials (cik, period_end, period_type, shares_outstanding, computed_at)
@@ -40,6 +41,21 @@ beforeAll(async () => {
   raw.prepare(
     `INSERT INTO financials (cik, period_end, period_type, computed_at)
      VALUES (2, '2025-03-31', 'TTM', '2026-08-09')`,
+  ).run()
+  // 역년 회계연도 회사는 Annual/Q4/TTM이 같은 period_end를 공유해 동률이 난다. 세 값을
+  // 일부러 다르게 넣어 정렬 우선순위(Q > TTM > A)가 실제로 선택을 결정함을 증명한다 —
+  // 값이 같으면 어느 행이 이겼는지 테스트로 알 수 없다.
+  raw.prepare(
+    `INSERT INTO financials (cik, period_end, period_type, shares_outstanding, computed_at)
+     VALUES (4, '2025-12-31', 'A', 9000, '2026-08-09')`,
+  ).run()
+  raw.prepare(
+    `INSERT INTO financials (cik, period_end, period_type, shares_outstanding, computed_at)
+     VALUES (4, '2025-12-31', 'TTM', 8000, '2026-08-09')`,
+  ).run()
+  raw.prepare(
+    `INSERT INTO financials (cik, period_end, period_type, shares_outstanding, computed_at)
+     VALUES (4, '2025-12-31', 'Q', 7000, '2026-08-09')`,
   ).run()
 
   stats = await refreshPrices({ raw, prices })
@@ -64,8 +80,14 @@ describe('refreshPrices', () => {
     expect(getLatestMarketData(raw, 3)).toBeNull()
   })
 
+  it('period_end가 동률이면 period_type 우선순위(Q > TTM > A)로 결정론적으로 고른다', () => {
+    const m = getLatestMarketData(raw, 4)!
+    expect(m.sharesOutstanding).toBe(7000)
+    expect(m.marketCap).toBe(1_400_000)
+  })
+
   it('통계를 반환한다', () => {
-    expect(stats.quoted).toBe(2)
+    expect(stats.quoted).toBe(3)
     expect(stats.noQuote).toBe(1)
     expect(stats.missingShares).toBe(1)
   })
