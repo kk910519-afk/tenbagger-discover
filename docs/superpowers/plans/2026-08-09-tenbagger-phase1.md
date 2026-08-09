@@ -2572,7 +2572,7 @@ SEC submissions에서 SIC와 entityType을 가져온다.
 **Interfaces:**
 - Consumes: `ListingProvider`, `ReferenceProvider` (Task 6), `passesListingFilter` (Task 6), `loadTaxonomy` (Task 3), `AppConfig` (Task 1), `getRawDb`/`runMigrations` (Task 4)
 - Produces:
-  - `type JobStats = Record<string, number | string[]>`
+  - `type JobStats = Record<string, number | string | string[]>`
   - `runJob(raw: Database.Database, name: string, fn: () => Promise<JobStats>): Promise<JobStats>` — `job_runs`에 시작·종료·통계를 기록하고 예외 시 `status='failed'`로 남긴 뒤 다시 던진다
   - `ingestUniverse(deps: UniverseDeps): Promise<JobStats>`
   - `type UniverseDeps = { raw: Database.Database; cfg: AppConfig; taxonomy: Taxonomy; listings: ListingProvider; reference: ReferenceProvider }`
@@ -2713,7 +2713,7 @@ Expected: FAIL — `Cannot find module '@/pipeline/jobs/ingest-universe'`
 ```ts
 import type Database from 'better-sqlite3'
 
-export type JobStats = Record<string, number | string[]>
+export type JobStats = Record<string, number | string | string[]>
 
 export function startJob(raw: Database.Database, job: string): number {
   const info = raw
@@ -4418,8 +4418,6 @@ export function replaceFinancials(
   })()
 }
 
-type FinRow = FinancialPeriod & { period_type: string }
-
 export function getFinancialsFor(
   raw: Database.Database,
   cik: number,
@@ -4464,7 +4462,7 @@ export function selectStaleCiks(
 }
 ```
 
-`FinRow` 타입은 위 쿼리가 별칭으로 카멜케이스를 반환하므로 사용하지 않는다. 정의를 넣지 말 것.
+쿼리가 `AS` 별칭으로 카멜케이스를 반환하므로 별도 행 타입 없이 `FinancialPeriod`로 바로 단언한다.
 
 - [ ] **Step 6: 잡 실패 테스트 작성**
 
@@ -5137,12 +5135,6 @@ export async function refreshPrices(deps: PriceDeps): Promise<JobStats> {
     return { targets: targets.length, quoted, noQuote, missingShares, provider: prices.name }
   })
 }
-```
-
-`JobStats` 타입이 `Record<string, number | string[]>`이므로 `provider: prices.name`(문자열)을 담으려면 Task 7의 타입을 다음으로 넓힌다.
-
-```ts
-export type JobStats = Record<string, number | string | string[]>
 ```
 
 - [ ] **Step 10: 테스트 통과 확인**
@@ -9455,3 +9447,911 @@ Leader/Challenger/Emerging 3개 그룹, 그룹 내 Tenbagger Score 내림차순.
 기본 10개 + View All은 쿼리 파라미터로 처리해 클라이언트 JS가 필요 없다.
 Phase 2~3 컬럼(Discovery/Quality/Moat/Fair Value)은 만들지 않는다."
 ```
+
+---
+
+### Task 26: Stock Detail 화면
+
+**Files:**
+- Create: `src/app/_queries/stock.ts`, `src/app/stock/[ticker]/page.tsx`
+- Create: `src/app/_components/FactorBreakdown.tsx`, `src/app/_components/MetricGrid.tsx`
+- Test: `tests/ui/stock-query.test.ts`
+
+**Interfaces:**
+- Consumes: `getRawDb` (Task 4), `loadConfig` (Task 1), 지표 함수 (Task 13), `stalenessOf` (Task 23)
+- Produces:
+  - `type FactorView = { key; weight; points; raw; status; percentile; detail }`
+  - `type FreshnessItem = { label: string; date: string | null; thresholdDays: number }`
+  - `type StockDetail = { cik; ticker; name; industrySlug; industryName; themeName; classificationSource; category; marketCap; price; priceDate; tenbagger; completeness; asOf; growth; quality; factors: FactorView[]; flags; freshness: FreshnessItem[] } | null`
+  - `getStockDetail(raw: Database.Database, ticker: string, asOf: string): StockDetail`
+
+**Phase 1에서 렌더링하는 섹션** (설계 문서 §11.3): Overview · Growth · Quality 지표 · **Tenbagger Analysis** · Risks · Data Freshness.
+**Moat / Valuation / Catalysts 섹션은 만들지 않는다.** 빈 골격을 미리 깔면 완성된 것처럼 보이지만 실제로는 아무것도 없다.
+
+- [ ] **Step 1: 실패하는 테스트 작성**
+
+`tests/ui/stock-query.test.ts`:
+
+```ts
+import { describe, it, expect, beforeAll } from 'vitest'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import type Database from 'better-sqlite3'
+import { getRawDb, runMigrations } from '@/db/client'
+import { getStockDetail } from '@/app/_queries/stock'
+
+let raw: Database.Database
+
+beforeAll(() => {
+  raw = getRawDb(join(mkdtempSync(join(tmpdir(), 'tb-stock-')), 'st.db'))
+  runMigrations(raw)
+  raw.prepare(
+    `INSERT INTO themes (slug, name, display_order)
+     VALUES ('ai-software-semi', 'AI / Software / Semiconductor', 1)`,
+  ).run()
+  raw.prepare(
+    `INSERT INTO industries (slug, theme_slug, name)
+     VALUES ('cybersecurity', 'ai-software-semi', 'Cybersecurity')`,
+  ).run()
+  raw.prepare(
+    `INSERT INTO companies (cik, ticker, name, sic, sic_description, exchange,
+                            is_active, first_seen, last_updated)
+     VALUES (99, 'CRWD', 'CrowdStrike Holdings', '7372', 'Prepackaged Software', 'Q',
+             1, '2026-08-09', '2026-08-09')`,
+  ).run()
+  raw.prepare(
+    `INSERT INTO company_industry (cik, industry_slug, theme_slug, is_primary, source)
+     VALUES (99, 'cybersecurity', 'ai-software-semi', 1, 'override')`,
+  ).run()
+  raw.prepare(
+    `INSERT INTO scores (cik, as_of, tenbagger, completeness, category, engine_version)
+     VALUES (99, '2026-08-09', 84.2, 0.95, 'CHALLENGER', 'tenbagger-1.0.0+abcd1234')`,
+  ).run()
+  const insF = raw.prepare(
+    `INSERT INTO score_factors
+       (cik, as_of, engine, factor_key, raw, points, weight, status, percentile, detail)
+     VALUES (99, '2026-08-09', 'tenbagger', ?, ?, ?, ?, ?, ?, ?)`,
+  )
+  insF.run('revenue_growth', 0.32, 16, 20, 'SCORED', 0.85, 'TTM 매출 +32.0%')
+  insF.run('gross_margin', 0.78, 9, 10, 'SCORED', 0.9, '매출총이익률 +78.0%')
+  insF.run('institutional_insider', null, null, 5, 'NOT_IMPLEMENTED', null, 'Phase 4')
+  insF.run('balance_sheet', null, null, 5, 'NO_DATA', null, '현금·부채 데이터 없음')
+
+  raw.prepare(
+    `INSERT INTO red_flags (cik, as_of, code, severity, message, evidence)
+     VALUES (99, '2026-08-09', 'DILUTION', 'WARNING', '희석주식수 1년 18% 증가',
+             '{"ratio":0.18}')`,
+  ).run()
+  raw.prepare(
+    `INSERT INTO market_data (cik, date, price, shares_outstanding, market_cap)
+     VALUES (99, '2026-08-08', 412.5, 250000000, 103125000000)`,
+  ).run()
+  raw.prepare(
+    `INSERT INTO financials (cik, period_end, period_type, revenue, gross_profit,
+                             operating_income, fcf, cash, total_debt, computed_at)
+     VALUES (99, '2025-03-31', 'TTM', 4000, 3120, 200, 1200, 4000, 700,
+             '2026-08-09T00:00:00.000Z')`,
+  ).run()
+})
+
+const detail = () => getStockDetail(raw, 'CRWD', '2026-08-09')!
+
+describe('getStockDetail', () => {
+  it('없는 티커는 null', () => {
+    expect(getStockDetail(raw, 'NOPE', '2026-08-09')).toBeNull()
+  })
+
+  it('티커 대소문자를 구분하지 않는다', () => {
+    expect(getStockDetail(raw, 'crwd', '2026-08-09')!.ticker).toBe('CRWD')
+  })
+
+  it('Overview 정보를 모은다', () => {
+    const d = detail()
+    expect(d.name).toBe('CrowdStrike Holdings')
+    expect(d.industryName).toBe('Cybersecurity')
+    expect(d.themeName).toBe('AI / Software / Semiconductor')
+    expect(d.classificationSource).toBe('override')
+    expect(d.category).toBe('CHALLENGER')
+    expect(d.marketCap).toBe(103_125_000_000)
+    expect(d.price).toBe(412.5)
+  })
+
+  it('Quality 지표를 계산한다', () => {
+    const d = detail()
+    expect(d.quality.grossMargin).toBeCloseTo(0.78)
+    expect(d.quality.operatingMargin).toBeCloseTo(0.05)
+    expect(d.quality.fcfMargin).toBeCloseTo(0.30)
+    expect(d.quality.cash).toBe(4000)
+    expect(d.quality.totalDebt).toBe(700)
+  })
+
+  it('팩터를 배점 내림차순으로 준다', () => {
+    const keys = detail().factors.map((f) => f.key)
+    expect(keys[0]).toBe('revenue_growth')   // weight 20
+  })
+
+  it('팩터의 status와 백분위를 보존한다', () => {
+    const f = detail().factors.find((x) => x.key === 'institutional_insider')!
+    expect(f.status).toBe('NOT_IMPLEMENTED')
+    expect(f.points).toBeNull()
+    const g = detail().factors.find((x) => x.key === 'revenue_growth')!
+    expect(g.percentile).toBeCloseTo(0.85)
+  })
+
+  it('Red Flag를 evidence와 함께 준다', () => {
+    const flags = detail().flags
+    expect(flags).toHaveLength(1)
+    expect(flags[0]!.code).toBe('DILUTION')
+    expect(flags[0]!.evidence).toEqual({ ratio: 0.18 })
+  })
+
+  it('데이터 신선도 항목을 만든다', () => {
+    const labels = detail().freshness.map((f) => f.label)
+    expect(labels).toContain('Price')
+    expect(labels).toContain('Financials')
+    expect(labels).toContain('Tenbagger Score')
+  })
+})
+```
+
+- [ ] **Step 2: 테스트 실패 확인**
+
+Run: `npx vitest run tests/ui/stock-query.test.ts`
+Expected: FAIL — `Cannot find module '@/app/_queries/stock'`
+
+- [ ] **Step 3: 쿼리 구현**
+
+`src/app/_queries/stock.ts`:
+
+```ts
+import type Database from 'better-sqlite3'
+import type { Category, FactorStatus, FinancialPeriod } from '@/domain/types'
+import { grossMargin, operatingMargin, fcfMargin } from '@/domain/metrics'
+import { loadConfig } from '@/config'
+
+export type FactorView = {
+  key: string
+  weight: number
+  points: number | null
+  raw: number | null
+  status: FactorStatus
+  percentile: number | null
+  detail: string
+}
+
+export type FlagView = {
+  code: string
+  severity: 'CRITICAL' | 'WARNING'
+  message: string
+  evidence: Record<string, unknown>
+}
+
+export type FreshnessItem = { label: string; date: string | null; thresholdDays: number }
+
+export type StockDetail = {
+  cik: number
+  ticker: string
+  name: string
+  sic: string | null
+  sicDescription: string | null
+  exchange: string | null
+  industrySlug: string
+  industryName: string
+  themeName: string
+  classificationSource: string
+  category: Category | null
+  marketCap: number | null
+  price: number | null
+  priceDate: string | null
+  tenbagger: number | null
+  completeness: number
+  asOf: string
+  engineVersion: string
+  growth: { revenueGrowth: number | null; revenueAcceleration: number | null }
+  quality: {
+    grossMargin: number | null
+    operatingMargin: number | null
+    fcfMargin: number | null
+    cash: number | null
+    totalDebt: number | null
+    revenue: number | null
+  }
+  factors: FactorView[]
+  flags: FlagView[]
+  freshness: FreshnessItem[]
+}
+
+export function getStockDetail(
+  raw: Database.Database,
+  ticker: string,
+  asOf: string,
+): StockDetail | null {
+  const cfg = loadConfig()
+  const head = raw
+    .prepare(
+      `SELECT c.cik, c.ticker, c.name, c.sic, c.sic_description AS sicDescription,
+              c.exchange, ci.industry_slug AS industrySlug, ci.source AS classificationSource,
+              i.name AS industryName, t.name AS themeName,
+              s.tenbagger, s.completeness, s.category, s.as_of AS asOf,
+              s.engine_version AS engineVersion
+       FROM companies c
+       JOIN company_industry ci ON ci.cik = c.cik
+       JOIN industries i ON i.slug = ci.industry_slug
+       JOIN themes t ON t.slug = i.theme_slug
+       LEFT JOIN latest_scores s ON s.cik = c.cik
+       WHERE UPPER(c.ticker) = UPPER(?)`,
+    )
+    .get(ticker) as
+    | (Omit<StockDetail, 'marketCap' | 'price' | 'priceDate' | 'growth' | 'quality'
+        | 'factors' | 'flags' | 'freshness'> & { asOf: string | null })
+    | undefined
+  if (!head) return null
+
+  const market = raw
+    .prepare(
+      `SELECT date, price, market_cap AS marketCap FROM market_data
+       WHERE cik = ? ORDER BY date DESC LIMIT 1`,
+    )
+    .get(head.cik) as { date: string; price: number | null; marketCap: number | null } | undefined
+
+  const fin = raw
+    .prepare(
+      `SELECT period_end AS periodEnd, period_type AS periodType, revenue,
+              gross_profit AS grossProfit, operating_income AS operatingIncome,
+              net_income AS netIncome, ocf, capex, fcf, cash, total_debt AS totalDebt,
+              equity, shares_diluted AS sharesDiluted,
+              shares_outstanding AS sharesOutstanding, sbc, rd_expense AS rdExpense,
+              computed_at AS computedAt
+       FROM financials WHERE cik = ? AND period_type = 'TTM'
+       ORDER BY period_end DESC LIMIT 1`,
+    )
+    .get(head.cik) as (FinancialPeriod & { computedAt: string }) | undefined
+
+  const scoreAsOf = head.asOf
+  const factors = scoreAsOf
+    ? (raw
+        .prepare(
+          `SELECT factor_key AS key, weight, points, raw, status, percentile, detail
+           FROM score_factors WHERE cik = ? AND as_of = ?
+           ORDER BY weight DESC, factor_key`,
+        )
+        .all(head.cik, scoreAsOf) as FactorView[])
+    : []
+
+  const flagRows = scoreAsOf
+    ? (raw
+        .prepare(
+          `SELECT code, severity, message, evidence FROM red_flags
+           WHERE cik = ? AND as_of = ? ORDER BY severity, code`,
+        )
+        .all(head.cik, scoreAsOf) as
+        { code: string; severity: 'CRITICAL' | 'WARNING'; message: string; evidence: string | null }[])
+    : []
+
+  const factorRaw = (key: string) => factors.find((f) => f.key === key)?.raw ?? null
+
+  return {
+    ...head,
+    asOf: scoreAsOf ?? asOf,
+    marketCap: market?.marketCap ?? null,
+    price: market?.price ?? null,
+    priceDate: market?.date ?? null,
+    growth: {
+      revenueGrowth: factorRaw('revenue_growth'),
+      revenueAcceleration: factorRaw('revenue_acceleration'),
+    },
+    quality: {
+      grossMargin: grossMargin(fin),
+      operatingMargin: operatingMargin(fin),
+      fcfMargin: fcfMargin(fin),
+      cash: fin?.cash ?? null,
+      totalDebt: fin?.totalDebt ?? null,
+      revenue: fin?.revenue ?? null,
+    },
+    factors,
+    flags: flagRows.map((f) => ({
+      code: f.code, severity: f.severity, message: f.message,
+      evidence: f.evidence ? (JSON.parse(f.evidence) as Record<string, unknown>) : {},
+    })),
+    freshness: [
+      { label: 'Price', date: market?.date ?? null, thresholdDays: cfg.staleness.price_days },
+      { label: 'Financials', date: fin?.computedAt ?? null, thresholdDays: cfg.staleness.financials_days },
+      { label: 'Tenbagger Score', date: scoreAsOf, thresholdDays: cfg.staleness.scores_days },
+    ],
+  }
+}
+```
+
+- [ ] **Step 4: 테스트 통과 확인**
+
+Run: `npx vitest run tests/ui/stock-query.test.ts`
+Expected: PASS (9 tests)
+
+- [ ] **Step 5: 컴포넌트 작성**
+
+`src/app/_components/MetricGrid.tsx`:
+
+```tsx
+export function MetricGrid({
+  items,
+}: {
+  items: { label: string; value: React.ReactNode }[]
+}) {
+  return (
+    <dl className="grid grid-cols-2 gap-x-8 gap-y-2 sm:grid-cols-3 lg:grid-cols-4">
+      {items.map((i) => (
+        <div key={i.label}>
+          <dt className="text-xs text-[var(--color-text-dim)]">{i.label}</dt>
+          <dd className="text-sm">{i.value}</dd>
+        </div>
+      ))}
+    </dl>
+  )
+}
+```
+
+`src/app/_components/FactorBreakdown.tsx`:
+
+```tsx
+import type { FactorView } from '../_queries/stock'
+import { formatPct } from '../_lib/format'
+import { ScoreBar } from './ScoreBar'
+import { Badge } from './Badge'
+
+const LABELS: Record<string, string> = {
+  revenue_growth: '매출 성장',
+  revenue_acceleration: '매출 가속도',
+  tam_industry_growth: 'TAM / 산업 성장',
+  gross_margin: '매출총이익률',
+  operating_leverage: '영업 레버리지',
+  market_cap_opportunity: '시가총액 기회',
+  competitive_advantage: '경쟁우위 (재무 프록시)',
+  balance_sheet: '재무 안정성',
+  institutional_insider: '기관 / 내부자',
+}
+
+/**
+ * "왜 이 점수인가"에 답하지 못하는 점수는 투자 판단에 쓸 수 없다.
+ * 각 팩터의 배점·원시 지표·설명·산업 백분위를 함께 보여준다.
+ */
+export function FactorBreakdown({ factors }: { factors: FactorView[] }) {
+  return (
+    <div className="space-y-2">
+      {factors.map((f) => (
+        <div key={f.key} className="border-b border-[var(--color-border)] pb-2 last:border-0">
+          <div className="flex items-baseline gap-2">
+            <ScoreBar value={f.points} max={f.weight} label={LABELS[f.key] ?? f.key} />
+            <span className="num shrink-0 text-xs text-[var(--color-text-faint)]">
+              /{f.weight}
+            </span>
+          </div>
+          <div className="mt-1 flex flex-wrap items-center gap-2 pl-44 text-xs text-[var(--color-text-dim)]">
+            <span>{f.detail}</span>
+            {f.status === 'NO_DATA' && <Badge tone="watch">NO DATA</Badge>}
+            {f.status === 'NOT_IMPLEMENTED' && <Badge>PHASE 4</Badge>}
+            {f.percentile !== null && (
+              <span className="text-[var(--color-text-faint)]">
+                산업 상위 {formatPct(1 - f.percentile, 0).replace('+', '')}
+              </span>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+export function StrengthWeakness({ factors }: { factors: FactorView[] }) {
+  const scored = factors
+    .filter((f) => f.status === 'SCORED' && f.points !== null && f.weight > 0)
+    .map((f) => ({ ...f, fill: f.points! / f.weight }))
+    .sort((a, b) => b.fill - a.fill)
+
+  if (scored.length === 0) return null
+  const top = scored.slice(0, 3)
+  const bottom = scored.slice(-3).reverse()
+
+  return (
+    <div className="grid gap-6 sm:grid-cols-2">
+      <div>
+        <h3 className="mb-1 text-xs text-[var(--color-text-dim)]">Strength</h3>
+        <ul className="space-y-0.5 text-sm">
+          {top.map((f) => <li key={f.key}>{LABELS[f.key] ?? f.key}</li>)}
+        </ul>
+      </div>
+      <div>
+        <h3 className="mb-1 text-xs text-[var(--color-text-dim)]">Weakness</h3>
+        <ul className="space-y-0.5 text-sm">
+          {bottom.map((f) => <li key={f.key}>{LABELS[f.key] ?? f.key}</li>)}
+        </ul>
+      </div>
+    </div>
+  )
+}
+```
+
+- [ ] **Step 6: 페이지 작성**
+
+`src/app/stock/[ticker]/page.tsx`:
+
+```tsx
+import { notFound } from 'next/navigation'
+import { getRawDb } from '@/db/client'
+import { getStockDetail } from '@/app/_queries/stock'
+import { formatUsd, formatPct, formatScore, formatDate, stalenessOf } from '@/app/_lib/format'
+import { Value, SignedValue } from '@/app/_components/Value'
+import { Badge, CategoryBadge } from '@/app/_components/Badge'
+import { MetricGrid } from '@/app/_components/MetricGrid'
+import { FactorBreakdown, StrengthWeakness } from '@/app/_components/FactorBreakdown'
+
+export const dynamic = 'force-dynamic'
+
+export default async function StockPage({
+  params,
+}: {
+  params: Promise<{ ticker: string }>
+}) {
+  const { ticker } = await params
+  const asOf = new Date().toISOString().slice(0, 10)
+  const raw = getRawDb()
+  const d = getStockDetail(raw, ticker, asOf)
+  raw.close()
+  if (!d) notFound()
+
+  return (
+    <div className="space-y-8">
+      <header>
+        <p className="text-xs text-[var(--color-text-dim)]">
+          {d.themeName} ·{' '}
+          <a href={`/industry/${d.industrySlug}`}>{d.industryName}</a>
+          {d.classificationSource === 'sic' && (
+            <span className="ml-2 text-[var(--color-text-faint)]">
+              (SIC 기본 분류 — 수동 교정 없음)
+            </span>
+          )}
+        </p>
+        <h1 className="mt-1 flex items-center gap-3 text-lg">
+          {d.ticker}
+          <span className="text-sm text-[var(--color-text-dim)]">{d.name}</span>
+          <CategoryBadge category={d.category} />
+        </h1>
+      </header>
+
+      <section>
+        <MetricGrid
+          items={[
+            { label: 'Tenbagger Score', value: <Value>{formatScore(d.tenbagger)}</Value> },
+            { label: 'Market Cap', value: <Value>{formatUsd(d.marketCap)}</Value> },
+            { label: 'Price', value: <Value>{d.price === null ? '—' : `$${d.price.toFixed(2)}`}</Value> },
+            { label: 'Exchange / SIC', value: <span className="text-sm">{d.exchange ?? '—'} · {d.sic ?? '—'}</span> },
+          ]}
+        />
+      </section>
+
+      <section>
+        <h2 className="mb-2 text-sm text-[var(--color-text-dim)]">Growth</h2>
+        <MetricGrid
+          items={[
+            { label: 'Revenue Growth (TTM YoY)',
+              value: <SignedValue value={d.growth.revenueGrowth} text={formatPct(d.growth.revenueGrowth)} /> },
+            { label: 'Revenue Acceleration',
+              value: <SignedValue value={d.growth.revenueAcceleration} text={formatPct(d.growth.revenueAcceleration)} /> },
+            { label: 'Revenue (TTM)', value: <Value>{formatUsd(d.quality.revenue)}</Value> },
+          ]}
+        />
+      </section>
+
+      <section>
+        <h2 className="mb-2 text-sm text-[var(--color-text-dim)]">Quality</h2>
+        <MetricGrid
+          items={[
+            { label: 'Gross Margin', value: <Value>{formatPct(d.quality.grossMargin)}</Value> },
+            { label: 'Operating Margin',
+              value: <SignedValue value={d.quality.operatingMargin} text={formatPct(d.quality.operatingMargin)} /> },
+            { label: 'FCF Margin',
+              value: <SignedValue value={d.quality.fcfMargin} text={formatPct(d.quality.fcfMargin)} /> },
+            { label: 'Cash', value: <Value>{formatUsd(d.quality.cash)}</Value> },
+            { label: 'Total Debt', value: <Value>{formatUsd(d.quality.totalDebt)}</Value> },
+          ]}
+        />
+      </section>
+
+      <section>
+        <h2 className="mb-1 text-sm">Tenbagger Analysis</h2>
+        <p className="mb-3 text-xs text-[var(--color-text-faint)]">
+          데이터 완전성 {formatPct(d.completeness, 0)} · {d.engineVersion} · {formatDate(d.asOf)}
+        </p>
+        <FactorBreakdown factors={d.factors} />
+        <div className="mt-4">
+          <StrengthWeakness factors={d.factors} />
+        </div>
+      </section>
+
+      <section>
+        <h2 className="mb-2 text-sm">Risks</h2>
+        {d.flags.length === 0 ? (
+          <p className="text-xs text-[var(--color-text-faint)]">감지된 Red Flag 없음</p>
+        ) : (
+          <ul className="space-y-1.5">
+            {d.flags.map((f) => (
+              <li key={f.code} className="flex items-start gap-2 text-sm">
+                <Badge tone={f.severity === 'CRITICAL' ? 'risk' : 'watch'}>{f.severity}</Badge>
+                <span>
+                  {f.message}
+                  <span className="ml-2 text-xs text-[var(--color-text-faint)]">{f.code}</span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <section>
+        <h2 className="mb-2 text-sm text-[var(--color-text-dim)]">Data Freshness</h2>
+        <ul className="space-y-1 text-xs">
+          {d.freshness.map((f) => {
+            const state = stalenessOf(f.date, asOf, f.thresholdDays)
+            return (
+              <li key={f.label} className="flex items-center gap-2">
+                <span className="w-32 text-[var(--color-text-dim)]">{f.label}</span>
+                <Value dim>{formatDate(f.date)}</Value>
+                {state === 'STALE' && <Badge tone="watch">STALE</Badge>}
+                {state === 'UNKNOWN' && <Badge>NO DATA</Badge>}
+              </li>
+            )
+          })}
+        </ul>
+      </section>
+    </div>
+  )
+}
+```
+
+- [ ] **Step 7: 빌드 확인**
+
+Run: `npx next build`
+Expected: 성공. `/`, `/industry/[slug]`, `/stock/[ticker]` 3개 라우트가 생성된다.
+
+- [ ] **Step 8: 커밋**
+
+```bash
+git add -A
+git commit -m "feat: Stock Detail 화면
+
+Tenbagger Analysis가 핵심 — 팩터별 배점·원시 지표·설명·산업 백분위를
+모두 보여준다. 왜 이 점수인지 답하지 못하는 점수는 쓸 수 없다.
+Moat/Valuation/Catalysts 섹션은 Phase 3까지 만들지 않는다.
+SIC 기본 분류인 기업은 그 사실을 화면에 표시한다."
+```
+
+---
+
+## Stage E — 검증 (Task 27)
+
+### Task 27: 커버리지 테스트 · 스모크 테스트 · 실제 실행 검증
+
+**Files:**
+- Create: `tests/coverage.test.ts`, `tests/pipeline/smoke.test.ts`
+- Create: `README.md`
+- Modify: `docs/superpowers/specs/2026-08-09-tenbagger-discovery-dashboard-design.md` (§5.2 실측치 갱신)
+
+**Interfaces:**
+- Consumes: 전체
+- Produces: 없음 (검증 태스크)
+
+- [ ] **Step 1: SIC 커버리지 테스트 작성**
+
+`tests/coverage.test.ts`:
+
+```ts
+import { describe, it, expect } from 'vitest'
+import { existsSync } from 'node:fs'
+import { loadTaxonomy } from '@/taxonomy'
+import { getRawDb } from '@/db/client'
+
+const DB_PATH = process.env.DATABASE_PATH ?? './data/tenbagger.db'
+const hasDb = existsSync(DB_PATH)
+
+describe.skipIf(!hasDb)('SIC 매핑 커버리지 (실제 DB 필요)', () => {
+  const tx = loadTaxonomy()
+
+  it('유니버스의 모든 SIC가 매핑되거나 명시적 제외 목록에 있다', () => {
+    const raw = getRawDb(DB_PATH)
+    const rows = raw
+      .prepare(
+        `SELECT DISTINCT c.sic FROM companies c
+         JOIN company_industry ci ON ci.cik = c.cik
+         WHERE c.sic IS NOT NULL`,
+      )
+      .all() as { sic: string }[]
+    raw.close()
+
+    const unknown = rows
+      .map((r) => r.sic)
+      .filter((sic) => !tx.mappedSics.has(sic) && !tx.unmappedSics.has(sic))
+
+    // 새 SIC가 조용히 누락되는 것을 막는다. 발견되면 sic-map.yaml에 추가하거나
+    // unmapped 목록에 명시적으로 넣는다.
+    expect(unknown).toEqual([])
+  })
+
+  it('분류 출처 비율을 리포트한다', () => {
+    const raw = getRawDb(DB_PATH)
+    const rows = raw
+      .prepare('SELECT source, COUNT(*) n FROM company_industry GROUP BY source')
+      .all() as { source: string; n: number }[]
+    raw.close()
+
+    const total = rows.reduce((s, r) => s + r.n, 0)
+    const sicBucket = rows.find((r) => r.source === 'sic')?.n ?? 0
+    console.log(
+      `분류 커버리지: 전체 ${total}개, SIC 기본 버킷 ${sicBucket}개 ` +
+        `(${((sicBucket / total) * 100).toFixed(1)}%), ` +
+        `오버라이드 ${total - sicBucket}개`,
+    )
+    expect(total).toBeGreaterThan(0)
+  })
+})
+```
+
+`describe.skipIf`로 감싸는 이유: 이 테스트는 실제 파이프라인을 돌린 뒤에만 의미가 있다. DB가 없는 CI에서는 건너뛴다.
+
+- [ ] **Step 2: 파이프라인 스모크 테스트 작성**
+
+`tests/pipeline/smoke.test.ts`:
+
+```ts
+import { describe, it, expect } from 'vitest'
+import { readFileSync, mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { getRawDb, runMigrations } from '@/db/client'
+import { parseConfig } from '@/config'
+import { loadTaxonomy } from '@/taxonomy'
+import { ingestUniverse, seedTaxonomy } from '@/pipeline/jobs/ingest-universe'
+import { ingestFundamentals } from '@/pipeline/jobs/ingest-fundamentals'
+import { refreshPrices } from '@/pipeline/jobs/refresh-prices'
+import { computeScores } from '@/pipeline/jobs/compute-scores'
+import { parseNasdaqTraded } from '@/providers/listing/nasdaq-trader'
+import { createFixtureProvider } from '@/providers/price/fixture'
+import { getOpportunityMap } from '@/app/_queries/map'
+import { getIndustryView } from '@/app/_queries/industry'
+import { getStockDetail } from '@/app/_queries/stock'
+import type {
+  BulkFundamentalProvider, CompanyFactsProvider, ListingProvider,
+  ReferenceProvider, RawFact,
+} from '@/providers/types'
+
+const cfg = parseConfig(readFileSync('config.yaml', 'utf8'))
+const taxonomy = loadTaxonomy()
+
+const listings: ListingProvider = {
+  fetchListings: async () =>
+    parseNasdaqTraded(readFileSync('tests/fixtures/nasdaqtraded.txt', 'utf8')),
+}
+
+const reference: ReferenceProvider = {
+  fetchTickerMap: async () => [
+    { cik: 1045810, ticker: 'NVDA', title: 'NVIDIA CORP' },
+    { cik: 1535527, ticker: 'CRWD', title: 'CrowdStrike Holdings, Inc.' },
+  ],
+  fetchCompany: async (cik) => ({
+    cik, name: cik === 1045810 ? 'NVIDIA CORP' : 'CrowdStrike Holdings',
+    sic: cik === 1045810 ? '3674' : '7372',
+    sicDescription: 'x', exchanges: ['Nasdaq'], entityType: 'operating',
+    fiscalYearEnd: '0131', filerCategory: 'Large accelerated filer',
+  }),
+}
+
+function facts(cik: number, scale: number): RawFact[] {
+  const ends = ['2024-06-30', '2024-09-30', '2024-12-31', '2025-03-31']
+  const out: RawFact[] = []
+  ends.forEach((periodEnd, i) => {
+    const rev = scale * (1 + i * 0.12)
+    const add = (tag: string, value: number, qtrs = 1, unit = 'USD') =>
+      out.push({
+        cik, tag, unit, periodStart: null, periodEnd, qtrs, value,
+        form: '10-Q', filedDate: '2025-06-01',
+        accession: `a-${cik}-${periodEnd}-${tag}`, source: 'bulk',
+      })
+    add('Revenues', rev)
+    add('GrossProfit', rev * 0.72)
+    add('OperatingIncomeLoss', rev * 0.18)
+    add('NetCashProvidedByUsedInOperatingActivities', rev * 0.22)
+    add('PaymentsToAcquirePropertyPlantAndEquipment', rev * 0.04)
+    add('ResearchAndDevelopmentExpense', rev * 0.20)
+  })
+  const inst = (tag: string, value: number, unit = 'USD') =>
+    out.push({
+      cik, tag, unit, periodStart: null, periodEnd: '2025-03-31', qtrs: 0, value,
+      form: '10-Q', filedDate: '2025-06-01', accession: `i-${cik}-${tag}`, source: 'bulk',
+    })
+  inst('CashAndCashEquivalentsAtCarryingValue', scale * 8)
+  inst('StockholdersEquity', scale * 12)
+  inst('LongTermDebtNoncurrent', scale * 1)
+  inst('EntityCommonStockSharesOutstanding', 100_000_000, 'shares')
+  return out
+}
+
+const bulk: BulkFundamentalProvider = {
+  fetchQuarter: async (_y, q) =>
+    q === 2 ? [...facts(1045810, 1_000_000_000), ...facts(1535527, 200_000_000)] : [],
+}
+const companyFacts: CompanyFactsProvider = { fetchCompany: async () => [] }
+
+describe('파이프라인 스모크 — ingest → score → 화면 쿼리', () => {
+  it('전 구간이 실제 데이터로 이어진다', async () => {
+    const raw = getRawDb(join(mkdtempSync(join(tmpdir(), 'tb-smoke-')), 'smoke.db'))
+    runMigrations(raw)
+    seedTaxonomy(raw, taxonomy)
+
+    const uni = await ingestUniverse({ raw, cfg, taxonomy, listings, reference })
+    expect(uni.classified).toBe(2)
+
+    const fund = await ingestFundamentals({
+      raw, cfg, bulk, companyFacts, asOf: '2026-08-09',
+    })
+    expect(fund.normalized).toBe(2)
+
+    const px = await refreshPrices({
+      raw, prices: createFixtureProvider('tests/fixtures/prices.json'),
+    })
+    expect(px.quoted).toBe(2)
+
+    const sc = await computeScores({ raw, cfg, taxonomy, asOf: '2026-08-09' })
+    expect(sc.scored).toBe(2)
+
+    // 세 화면 쿼리가 모두 값을 낸다
+    const map = getOpportunityMap(raw)
+    const withCandidates = map.flatMap((t) => t.industries)
+    expect(withCandidates.length).toBeGreaterThan(0)
+    expect(withCandidates[0]!.avgTenbagger).not.toBeNull()
+
+    const industry = getIndustryView(raw, 'ai-infrastructure')
+    expect(industry).not.toBeNull()
+
+    const stock = getStockDetail(raw, 'CRWD', '2026-08-09')!
+    expect(stock.tenbagger).not.toBeNull()
+    expect(stock.factors).toHaveLength(9)
+    expect(stock.industryName).toBe('Cybersecurity')
+
+    raw.close()
+  })
+})
+```
+
+- [ ] **Step 3: 테스트 실행**
+
+Run: `npm test`
+Expected: 전체 통과. 커버리지 테스트는 DB가 없으면 skip된다.
+
+스모크 테스트가 실패하면 **어느 잡에서 끊겼는지 stats로 좁힌다.** `uni.classified`가 0이면 상장 필터나 SIC 매핑, `fund.normalized`가 0이면 정규화, `sc.scored`가 0이면 스냅샷 조립이다.
+
+- [ ] **Step 4: 실제 파이프라인 실행**
+
+```bash
+cp .env.example .env
+```
+
+`.env`에 Finnhub 키를 넣는다. 키가 없으면 `PRICE_PROVIDER=fixture`로 두되, 이 경우 픽스처에 없는 티커는 시가총액이 없어 `market_cap_opportunity`가 `NO_DATA`가 된다.
+
+```bash
+npm run db:migrate
+npm run pipeline:universe
+```
+
+Expected: 약 10분. `classified`가 1,000~3,000 사이여야 한다. 크게 벗어나면 `sic-map.yaml`이나 상장 필터를 확인한다. `unmappedSicsSeen`에 나온 SIC 중 성장 테마에 해당하는 것이 있으면 `sic-map.yaml`에 추가한다.
+
+```bash
+npm run pipeline:fundamentals
+```
+
+Expected: 약 1GB 다운로드. `bulkFacts`가 수십만 건, `normalized`가 `universeSize`의 70% 이상이어야 한다.
+
+```bash
+npm run pipeline:prices
+npm run pipeline:scores
+```
+
+- [ ] **Step 5: 커버리지 테스트 재실행**
+
+Run: `npx vitest run tests/coverage.test.ts`
+Expected: PASS. 콘솔에 분류 커버리지 비율이 출력된다.
+
+SIC 기본 버킷 비율이 80%를 넘으면 `company-overrides.yaml` 시딩을 확장한다. 우선순위는 시가총액 상위 종목이다.
+
+- [ ] **Step 6: 육안 검증**
+
+Run: `npm run dev`
+
+브라우저에서 확인할 것:
+
+1. 홈에서 Theme 6개와 Industry 목록이 뜨는가
+2. 후보 수가 0인 Industry가 지나치게 많지 않은가
+3. Industry를 클릭하면 Leader / Challenger / Emerging 3개 그룹이 나오는가
+4. **Tenbagger Score 상위 20개를 눈으로 검토했을 때 명백한 부실주가 없는가** — 있다면 어떤 팩터 때문인지 Stock Detail의 팩터 분해로 확인하고 `config.yaml`의 곡선이나 Quality Gate 임계값을 조정한다
+5. 아는 기업(NVDA, PANW 등) 몇 개의 매출·마진을 실제 10-K와 대조한다
+6. Stock Detail의 팩터 분해가 점수를 납득시키는가
+
+- [ ] **Step 7: README 작성**
+
+`README.md`:
+
+```markdown
+# Tenbagger Discovery Dashboard
+
+미국 상장 성장주 중 향후 3~7년 내 Multibagger 후보를 조기에 발견하기 위한 리서치 대시보드.
+
+시가총액 순 나열이 아니라 `Growth Theme → Industry → Leader/Challenger/Emerging →
+Tenbagger Score` 경로로 탐색한다.
+
+## 실행
+
+```bash
+npm install
+cp .env.example .env     # Finnhub 무료 키를 넣는다 (https://finnhub.io)
+npm run db:migrate
+npm run pipeline:all     # 최초 실행은 1시간 내외, 1GB 내려받는다
+npm run dev
+```
+
+키가 없으면 `.env`에 `PRICE_PROVIDER=fixture`로 두고 실행할 수 있다.
+이 경우 시가총액이 없어 일부 팩터가 채점되지 않는다.
+
+## 데이터 소스
+
+| 데이터 | 출처 | 비용 |
+|---|---|---|
+| 재무제표 | SEC EDGAR XBRL (분기 벌크 + companyfacts) | 무료 |
+| 상장 메타데이터 | nasdaqtrader 심볼 디렉터리 | 무료 |
+| 업종·거래소 | SEC submissions API | 무료 |
+| 주가 | Finnhub `/quote` | 무료 티어 |
+
+## 구조
+
+- `config.yaml` — 유니버스 필터, 스코어 가중치·곡선, Red Flag 임계값. **코드에 매직넘버 없음**
+- `taxonomy/` — Theme·Industry·SIC 매핑·기업 오버라이드
+- `src/engines/` — 순수 함수 스코어링. DB와 Provider를 import하지 않는다 (테스트로 강제)
+- `src/providers/` — 외부 데이터. 인터페이스 뒤에 격리
+- `src/pipeline/` — 수집·정규화·스코어 잡
+
+설계 문서: [docs/superpowers/specs/](docs/superpowers/specs/)
+
+## 알려진 제약 (Phase 1)
+
+- 유동성 필터 미작동 — Finnhub 무료 티어에 거래량이 없음
+- 기관/내부자 팩터(5점) 미구현 — 13F·Form 4 파싱 필요, Phase 4
+- Going Concern·고객 집중도 Red Flag 미구현 — 10-K 본문 파싱 필요, Phase 4
+- TAM은 수동 큐레이션. 미입력 산업은 구성기업 매출성장률 중앙값으로 대체
+- Industry 분류는 오버라이드가 없으면 SIC 기본 버킷 (화면에 표시됨)
+```
+
+- [ ] **Step 8: 설계 문서 §5.2 실측치 갱신**
+
+`docs/superpowers/specs/2026-08-09-tenbagger-discovery-dashboard-design.md`의 §5.2 예상 규모를 Step 4에서 나온 실제 숫자로 바꾸고, "구현 시 실측하여 이 문서를 갱신한다" 문장을 실측일자로 교체한다.
+
+- [ ] **Step 9: 최종 커밋**
+
+```bash
+git add -A
+git commit -m "test: 커버리지·스모크 테스트 및 README
+
+SIC 매핑 커버리지 테스트가 신규 SIC의 조용한 누락을 막는다.
+스모크 테스트는 ingest부터 화면 쿼리까지 전 구간을 픽스처로 관통한다.
+설계 문서의 유니버스 규모를 실측치로 갱신했다."
+```
+
+---
+
+## Phase 1 완료 기준
+
+```bash
+npm test                  # 전체 통과
+npm run db:migrate
+npm run pipeline:all
+npm run dev
+```
+
+실제 SEC 데이터가 들어간 대시보드가 뜨고 3개 화면(Map / Industry / Stock Detail)을
+실제 티커로 탐색할 수 있으면 완료다. Mock 데이터는 `tests/fixtures/`에만 존재한다.

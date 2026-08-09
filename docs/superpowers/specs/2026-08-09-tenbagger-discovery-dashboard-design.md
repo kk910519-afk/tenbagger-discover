@@ -400,7 +400,16 @@ scoring:
 |---|---|---|---|---|
 | 1 | Revenue Growth | 20 | ✅ | `ttm_yoy = TTM_rev / TTM_rev(4Q전) − 1`<br>`cagr_3y = (TTM_rev / rev(12Q전))^(1/3) − 1`<br>블렌드 0.6 / 0.4. `cagr_3y`가 없으면 `ttm_yoy` 단독, 상태는 `SCORED` |
 | 2 | Revenue Acceleration | 10 | ✅ | `최근 2개 분기 YoY 평균 − 직전 2개 분기 YoY 평균` |
-| 3 | TAM / Industry Growth | 15 | ✅ | `0.6 × curve(industry.tam_cagr) + 0.4 × curve_penetration(침투율)`<br>`침투율 = TTM_rev / industry.tam_usd`<br>**침투율 곡선은 감소 함수**: 이미 TAM을 상당 부분 점유했으면 남은 성장 여지가 작다<br>`[[0, 1.0], [0.05, 1.0], [0.15, 0.8], [0.30, 0.5], [0.50, 0.2], [1.0, 0.0]]` |
+| 3 | TAM / Industry Growth | 15 | ✅ | `0.6 × curve(산업 성장률) + 0.4 × curve_penetration(침투율)`<br>`침투율 = TTM_rev / industry.tam_usd`<br>**침투율 곡선은 감소 함수**: 이미 TAM을 상당 부분 점유했으면 남은 성장 여지가 작다<br>`[[0, 1.0], [0.05, 1.0], [0.15, 0.8], [0.30, 0.5], [0.50, 0.2], [1.0, 0.0]]` |
+
+**개정 (2026-08-09, 구현 계획 수립 중) — TAM 대체값.** §4.4에 따라 `industries.yaml`의 TAM은 출처 없이 채우지 않으므로 초기값이 전부 `null`이다. 이 상태에서 팩터가 `NO_DATA`로 빠지면 15점이 통째로 사라져 상대 순위가 왜곡된다.
+
+따라서 산업 성장률을 다음 우선순위로 정한다.
+
+1. `industry.tam_cagr` (큐레이션된 값)
+2. 없으면 **해당 산업 후보들의 매출 성장률 중앙값** (`industryStats.medianRevenueGrowth`)
+
+대체값은 우리 데이터로 계산되므로 첫 실행부터 동작하고, TAM을 큐레이션하면 자동으로 그 값이 우선한다. 어느 쪽을 썼는지 `FactorResult.detail`에 명시해 화면에서 구분할 수 있게 한다. `tam_usd`가 없으면 침투율 항을 빼고 성장률 항만으로 채점한다.
 | 4 | Gross Margin | 10 | ✅ | `0.6 × curve(TTM GM) + 0.4 × curve(8분기 GM 기울기)`<br>기울기는 OLS, 연율 bps |
 | 5 | Operating Leverage | 10 | ✅ | `0.5 × curve(Δ영업이익률, pp) + 0.5 × curve(매출증가율 − opex증가율)`<br>`opex = 매출총이익 − 영업이익` |
 | 6 | Market Cap Opportunity | 15 | ✅ | §8.4 |
