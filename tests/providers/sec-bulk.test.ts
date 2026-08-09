@@ -43,6 +43,13 @@ describe('parseNumLine', () => {
     const line = '0001045810-25-000123\tRevenues\tus-gaap/2024\t\t20250430\t1\tUSD\t\t'
     expect(parseNumLine(line, NUM_HEADER)).toBeNull()
   })
+
+  it('value가 "0"이면 실제 값 0으로 파싱한다 (빈 값과 구분)', () => {
+    const line = '0001045810-25-000123\tRevenues\tus-gaap/2024\t\t20250430\t1\tUSD\t0\t'
+    const result = parseNumLine(line, NUM_HEADER)
+    expect(result).not.toBeNull()
+    expect(result?.value).toBe(0)
+  })
 })
 
 describe('extractFactsFromZip', () => {
