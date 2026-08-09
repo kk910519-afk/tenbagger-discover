@@ -10,6 +10,10 @@ describe('formatUsd', () => {
   })
   it('null은 대시', () => expect(formatUsd(null)).toBe('—'))
   it('음수도 처리한다', () => expect(formatUsd(-1_200_000_000)).toBe('-$1.20B'))
+  it('$100M 경계에서 소수 자릿수가 바뀐다', () => {
+    expect(formatUsd(100_000_000)).toBe('$100M')
+    expect(formatUsd(99_999_999)).toBe('$100.00M')
+  })
 })
 
 describe('formatPct', () => {
@@ -44,5 +48,8 @@ describe('stalenessOf', () => {
   })
   it('날짜가 없으면 UNKNOWN', () => {
     expect(stalenessOf(null, '2026-08-09', 5)).toBe('UNKNOWN')
+  })
+  it('정확히 임계값이면 FRESH', () => {
+    expect(stalenessOf('2026-08-04', '2026-08-09', 5)).toBe('FRESH')
   })
 })

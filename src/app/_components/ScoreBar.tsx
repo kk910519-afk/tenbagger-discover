@@ -3,6 +3,10 @@ import { formatScore } from '../_lib/format'
 /**
  * 점수는 위치와 굵기로 먼저 구분하고 색은 보조로만 쓴다.
  * 막대 길이가 주된 신호다.
+ *
+ * null(미평가)과 0(실제 0점)은 다른 사실이므로 트랙 자체를 다르게 그린다:
+ * null은 채움 막대 없이 점선 트랙만, 0은 실선 트랙에 길이 0인 채움(=시각적으로 안 보임)이다.
+ * 색이 아니라 트랙의 선 스타일(점선 vs 실선)로 구분하므로 색각 이상에서도 구분된다.
  */
 export function ScoreBar({
   value, max = 100, label,
@@ -11,15 +15,23 @@ export function ScoreBar({
   max?: number
   label?: string
 }) {
-  const pctWidth = value === null ? 0 : Math.max(0, Math.min(100, (value / max) * 100))
+  const isUnknown = value === null
+  const pctWidth = isUnknown ? 0 : Math.max(0, Math.min(100, (value / max) * 100))
   return (
     <div className="flex items-center gap-2">
       {label && <span className="w-44 shrink-0 text-xs text-[var(--color-text-dim)]">{label}</span>}
-      <div className="h-1.5 w-full min-w-24 bg-[var(--color-surface-2)]">
-        <div className="h-full bg-[var(--color-text)]" style={{ width: `${pctWidth}%` }} />
+      <div
+        data-score-state={isUnknown ? 'unknown' : 'value'}
+        className={
+          isUnknown
+            ? 'h-1.5 w-full min-w-24 border border-dashed border-[var(--color-text-faint)]'
+            : 'h-1.5 w-full min-w-24 bg-[var(--color-surface-2)]'
+        }
+      >
+        {!isUnknown && <div className="h-full bg-[var(--color-text)]" style={{ width: `${pctWidth}%` }} />}
       </div>
       <span className="num w-10 shrink-0 text-right text-xs">
-        {value === null ? '—' : formatScore(value)}
+        {isUnknown ? '—' : formatScore(value)}
       </span>
     </div>
   )

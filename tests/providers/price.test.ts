@@ -65,21 +65,27 @@ describe('getPriceProvider', () => {
   })
 
   it('PRICE_PROVIDER=fixture면 픽스처를 쓴다', () => {
-    expect(getPriceProvider(http, { PRICE_PROVIDER: 'fixture' }).name).toBe('fixture')
+    expect(
+      getPriceProvider(http, { NODE_ENV: 'test', PRICE_PROVIDER: 'fixture' }).name,
+    ).toBe('fixture')
   })
 
   it('PRICE_PROVIDER=finnhub이고 키가 있으면 finnhub', () => {
     expect(
-      getPriceProvider(http, { PRICE_PROVIDER: 'finnhub', FINNHUB_API_KEY: 'k' }).name,
+      getPriceProvider(http, {
+        NODE_ENV: 'test',
+        PRICE_PROVIDER: 'finnhub',
+        FINNHUB_API_KEY: 'k',
+      }).name,
     ).toBe('finnhub')
   })
 
   it('finnhub인데 키가 없으면 명확한 에러를 던진다', () => {
-    expect(() => getPriceProvider(http, { PRICE_PROVIDER: 'finnhub' }))
+    expect(() => getPriceProvider(http, { NODE_ENV: 'test', PRICE_PROVIDER: 'finnhub' }))
       .toThrow(/FINNHUB_API_KEY/)
   })
 
   it('알 수 없는 값이면 에러', () => {
-    expect(() => getPriceProvider(http, { PRICE_PROVIDER: 'yahoo' })).toThrow(/yahoo/)
+    expect(() => getPriceProvider(http, { NODE_ENV: 'test', PRICE_PROVIDER: 'yahoo' })).toThrow(/yahoo/)
   })
 })
