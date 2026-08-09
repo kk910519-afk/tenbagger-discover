@@ -16,6 +16,17 @@
   --color-info: #58a6ff;
   --color-emerging: #a371f7;
 
+  /* 절제된 골드 — 브랜드 마크와 단 하나의 강조(현재 활성 내비게이션)에만 쓴다.
+     데이터 표면에는 절대 쓰지 않는다: 표·점수·배지는 위 의미색 체계를 그대로 쓴다. */
+  --color-accent: #c9a35f;
+
+  /* 카드 표면 · 보더 · 라운딩을 토큰화한다 — 이후 패널이 값을 재발명하지 않도록.
+     지금은 기존 surface/border와 같은 값을 가리키지만, 카드 전용으로 분리해 두면
+     나중에 카드만 따로 조정해도 표·툴팁 등 다른 표면에 영향이 없다. */
+  --color-card-bg: var(--color-surface);
+  --color-card-border: var(--color-border);
+  --radius-card: 0.625rem;
+
   --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
 }
 

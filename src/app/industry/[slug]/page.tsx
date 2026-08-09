@@ -4,6 +4,7 @@ import { loadConfig } from '@/config'
 import { getIndustryView, type IndustryView } from '@/app/_queries/industry'
 import { CandidateTable } from '@/app/_components/CandidateTable'
 import { ColumnLegend } from '@/app/_components/ColumnLegend'
+import { Card } from '@/app/_components/Card'
 
 export const dynamic = 'force-dynamic'
 
@@ -48,27 +49,25 @@ export default async function IndustryPage({
 
       <ColumnLegend />
 
-      {view.groups.map((g) => {
-        const key = g.category ?? 'UNSCORED'
-        return (
-          <section key={key}>
-            <h2 className="mb-1 flex items-baseline gap-2 text-sm tracking-wide">
-              <span>{GROUP_LABEL[key] ?? '미분류'}</span>
-              <span className="text-xs text-[var(--color-text-faint)]">
-                {g.category === null
-                  ? '스코어링 미실행 — 아직 후보/벤치마크로 분류되지 않음'
-                  : GROUP_NOTE[key]}
-              </span>
-            </h2>
-            <CandidateTable
-              rows={g.rows}
-              showAll={all === '1'}
-              industrySlug={slug}
-              insufficientBelow={cfg.scoring.min_completeness}
-            />
-          </section>
-        )
-      })}
+      <div className="grid grid-cols-1 gap-5">
+        {view.groups.map((g) => {
+          const key = g.category ?? 'UNSCORED'
+          const subtitle =
+            g.category === null
+              ? '스코어링 미실행 — 아직 후보/벤치마크로 분류되지 않음'
+              : GROUP_NOTE[key]
+          return (
+            <Card key={key} title={GROUP_LABEL[key] ?? '미분류'} subtitle={subtitle}>
+              <CandidateTable
+                rows={g.rows}
+                showAll={all === '1'}
+                industrySlug={slug}
+                insufficientBelow={cfg.scoring.min_completeness}
+              />
+            </Card>
+          )
+        })}
+      </div>
     </div>
   )
 }

@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import './globals.css'
+import { AppShell } from './_components/AppShell'
 
 export const metadata = {
   title: 'Tenbagger Discovery',
@@ -10,12 +11,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="ko">
       <body className="min-h-screen">
-        <header className="border-b border-[var(--color-border)] px-6 py-3">
-          <a href="/" className="text-sm tracking-wide">
-            TENBAGGER <span className="text-[var(--color-text-dim)]">DISCOVERY</span>
-          </a>
-        </header>
-        <main className="px-6 py-5">{children}</main>
+        <AppShell>{children}</AppShell>
       </body>
     </html>
   )

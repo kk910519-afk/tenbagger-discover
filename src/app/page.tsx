@@ -7,6 +7,7 @@ import { Value, SignedValue } from './_components/Value'
 import { Badge } from './_components/Badge'
 import { ScoreBar } from './_components/ScoreBar'
 import { TopCandidates } from './_components/TopCandidates'
+import { Card } from './_components/Card'
 
 export const dynamic = 'force-dynamic'
 
@@ -31,7 +32,7 @@ export default function Home() {
   // 데이터가 없다 — 빈 표 껍데기 대신 기존 설치 안내를 그대로 유지한다.
   if (total === 0) {
     return (
-      <div className="max-w-lg">
+      <Card title="Setup Required" subtitle="파이프라인을 실행하면 대시보드가 채워집니다">
         <p className="text-sm text-[var(--color-text)]">아직 수집된 데이터가 없습니다.</p>
         <p className="mt-1 text-xs text-[var(--color-text-dim)]">
           아래 명령을 순서대로 실행하면 유니버스 수집부터 스코어링까지 완료됩니다.
@@ -39,38 +40,37 @@ export default function Home() {
         <pre className="num mt-3 rounded border border-[var(--color-border)] bg-[var(--color-surface)] p-3 text-xs text-[var(--color-text-dim)]">
           <code>{'npm run db:migrate\nnpm run pipeline:all'}</code>
         </pre>
-      </div>
+      </Card>
     )
   }
 
   return (
-    <div className="space-y-10">
-      <section>
-        <h2 className="text-xl font-medium tracking-tight">Top 5 · Universe-Wide</h2>
-        <p className="mt-1 text-xs text-[var(--color-text-dim)]">
-          Theme·Industry 경계와 무관하게 점수가 가장 높은 후보 5곳
-        </p>
+    <div className="space-y-5">
+      <Card
+        title="Top 5 · Universe-Wide"
+        subtitle="Theme·Industry 경계와 무관하게 점수가 가장 높은 후보 5곳"
+      >
         {topCandidates.length === 0 ? (
-          <p className="mt-3 text-xs text-[var(--color-text-faint)]">
+          <p className="text-xs text-[var(--color-text-faint)]">
             데이터 완전성 기준({formatPct(cfg.scoring.min_completeness, 0)})을 통과한 후보가 아직 없습니다.
           </p>
         ) : (
-          <div className="mt-3">
-            <TopCandidates candidates={topCandidates} />
-          </div>
+          <TopCandidates candidates={topCandidates} />
         )}
-      </section>
+      </Card>
 
-      <div>
+      <div className="pt-2">
         <h1 className="text-xl font-medium tracking-tight">Growth Opportunity Map</h1>
         <p className="mt-1 text-xs text-[var(--color-text-dim)]">
           후보 <Value>{total.toLocaleString()}</Value>개 · Theme <Value>{themes.length}</Value>개
         </p>
       </div>
 
-      {themes.map((theme) => (
-        <ThemeSection key={theme.slug} slug={theme.slug} name={theme.name} industries={theme.industries} />
-      ))}
+      <div className="grid grid-cols-1 gap-5">
+        {themes.map((theme) => (
+          <ThemeSection key={theme.slug} slug={theme.slug} name={theme.name} industries={theme.industries} />
+        ))}
+      </div>
     </div>
   )
 }
@@ -83,16 +83,10 @@ function ThemeSection({
   industries: IndustryRow[]
 }) {
   const candidateCount = industries.reduce((n, i) => n + i.candidateCount, 0)
+  const subtitle = industries.length > 0 ? `${industries.length}개 산업 · 후보 ${candidateCount}개` : '후보 없음'
 
   return (
-    <section id={slug}>
-      <div className="mb-3 flex items-baseline gap-2 border-b border-[var(--color-border)] pb-2">
-        <h2 className="text-sm tracking-wide text-[var(--color-text)]">{name}</h2>
-        <span className="text-xs text-[var(--color-text-faint)]">
-          {industries.length > 0 ? `${industries.length}개 산업 · 후보 ${candidateCount}개` : '후보 없음'}
-        </span>
-      </div>
-
+    <Card id={slug} title={name} subtitle={subtitle}>
       {industries.length === 0 ? (
         <div className="border border-dashed border-[var(--color-border)] px-3 py-4 text-xs text-[var(--color-text-faint)]">
           이 Theme에는 아직 후보가 없습니다.
@@ -120,7 +114,7 @@ function ThemeSection({
           </table>
         </div>
       )}
-    </section>
+    </Card>
   )
 }
 
