@@ -10,6 +10,9 @@ import { recentQuarters } from '@/pipeline/quarters'
 import { runJob, type JobStats } from '@/pipeline/runner'
 
 const INCREMENTAL_STALE_DAYS = 120
+// 실패율 경고 메시지에 담을 CIK 샘플 개수. 판정 자체는 config.yaml의
+// ingest.normalize_failure_rate_threshold / normalize_failure_min_sample이 담당한다.
+const FAILURE_SAMPLE_SIZE = 10
 
 export type FundamentalsDeps = {
   raw: Database.Database
@@ -53,24 +56,42 @@ export async function ingestFundamentals(deps: FundamentalsDeps): Promise<JobSta
       }
     }
 
-    // 회사 하나의 정규화가 실패해도(잘못된 사실 조합 등) 이미 받아온 벌크/API
-    // 데이터 전체를 버리지 않는다 — 나머지 회사는 계속 recompute한다.
+    // 회사 하나의 정규화/저장이 실패해도(잘못된 사실 조합, 개별 쓰기 오류 등)
+    // 이미 받아온 벌크/API 데이터 전체를 버리지 않는다 — normalizeFacts와
+    // replaceFinancials를 모두 같은 try 안에 두어 어느 쪽이 던지든 나머지
+    // 회사는 계속 recompute한다.
     let normalized = 0
     let noData = 0
     let normalizeFailed = 0
     const normalizeFailedCiks: string[] = []
     for (const cik of ciks) {
-      let result
       try {
-        result = normalizeFacts(getFacts(raw, cik))
+        const result = normalizeFacts(getFacts(raw, cik))
+        if (result.quarterly.length === 0 && result.annual.length === 0) { noData++; continue }
+        replaceFinancials(raw, cik, result)
+        normalized++
       } catch {
         normalizeFailed++
         normalizeFailedCiks.push(String(cik))
-        continue
       }
-      if (result.quarterly.length === 0 && result.annual.length === 0) { noData++; continue }
-      replaceFinancials(raw, cik, result)
-      normalized++
+    }
+
+    // 회사 단위 격리는 개별 데이터 결함을 잡기 위한 것이지, 정규화 로직 자체가
+    // 깨졌거나(회귀) 벌크 아카이브가 손상된 경우까지 조용히 "성공"으로 덮기
+    // 위한 것이 아니다. 표본이 충분한데 실패율이 임계치를 넘으면 잡 전체를
+    // 던져 runJob이 failed로 기록하게 한다 — 소규모 유니버스(예: 산업 하나에
+    // 회사 3개, 그중 2개 실패)에서는 실패율 자체가 노이즈이므로 최소 표본
+    // 크기 미만이면 이 가드를 건너뛴다.
+    if (ciks.size >= cfg.ingest.normalize_failure_min_sample) {
+      const failureRate = normalizeFailed / ciks.size
+      if (failureRate > cfg.ingest.normalize_failure_rate_threshold) {
+        const sample = normalizeFailedCiks.slice(0, FAILURE_SAMPLE_SIZE).join(', ')
+        throw new Error(
+          `정규화 실패율이 임계치를 초과했습니다: ${(failureRate * 100).toFixed(1)}% ` +
+          `(${normalizeFailed}/${ciks.size}, 임계치 ${(cfg.ingest.normalize_failure_rate_threshold * 100).toFixed(0)}%) ` +
+          `— 실패 CIK 샘플: ${sample}`,
+        )
+      }
     }
 
     return {

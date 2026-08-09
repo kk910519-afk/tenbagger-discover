@@ -13,6 +13,11 @@ ingest:
   sec_user_agent: "TenbaggerDashboard/0.1 (kk910519@gmail.com)"
   sec_rate_limit_per_sec: 10
   cache_dir: "./data/cache"
+  # 정규화 실패율이 이 비율을 넘으면(그리고 표본이 충분하면) 잡 전체를 failed로
+  # 기록한다 — 개별 회사의 데이터 결함이 아니라 정규화 로직/스키마 전반의
+  # 문제일 가능성이 높다는 신호. 근거는 task-11-report.md 참고.
+  normalize_failure_rate_threshold: 0.5
+  normalize_failure_min_sample: 20
 
 classification:
   leader_ratio_of_max: 0.25

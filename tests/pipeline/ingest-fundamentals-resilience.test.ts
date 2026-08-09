@@ -12,9 +12,13 @@ import type { BulkFundamentalProvider, CompanyFactsProvider, RawFact } from '@/p
 const cfg = parseConfig(readFileSync('config.yaml', 'utf8'))
 
 // 이 회사의 사실이 normalizeFacts에 들어가면 던지도록 아래 mock에서 가로챈다.
-// 정상 회사(GOOD_CIK)의 사실은 실제 normalizeFacts로 그대로 흘려보낸다.
+// WRITE_FAIL_CIK는 normalizeFacts는 성공하지만 replaceFinancials(저장 단계)에서
+// 던진다 — Finding 1은 두 호출을 모두 같은 try로 감싸는 것이었으므로, 두
+// throw 지점을 각각 별도로 검증해야 회귀를 잡을 수 있다.
+// 정상 회사(GOOD_CIK)의 사실은 실제 로직으로 그대로 흘려보낸다.
 // vi.mock은 파일 최상단으로 호이스팅되므로 아래 static import보다 먼저 적용된다.
 const POISON_CIK = 4000000
+const WRITE_FAIL_CIK = 4500000
 const GOOD_CIK = 1045810
 
 vi.mock('@/providers/fundamental/normalizer', async (importOriginal) => {
@@ -26,6 +30,23 @@ vi.mock('@/providers/fundamental/normalizer', async (importOriginal) => {
         throw new Error('malformed facts for poison cik')
       }
       return actual.normalizeFacts(facts)
+    },
+  }
+})
+
+vi.mock('@/db/repositories/financials', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/db/repositories/financials')>()
+  return {
+    ...actual,
+    replaceFinancials: (
+      raw: Database.Database,
+      cik: number,
+      r: Parameters<typeof actual.replaceFinancials>[2],
+    ) => {
+      if (cik === WRITE_FAIL_CIK) {
+        throw new Error('simulated db write failure for write-fail cik')
+      }
+      return actual.replaceFinancials(raw, cik, r)
     },
   }
 })
@@ -48,9 +69,17 @@ describe('Finding 1 — 정규화 실패가 다른 회사의 recompute를 막지
   // POISON_CIK도 실제 사실을 갖고 있다 (그래야 noData가 아니라 normalizeFacts 자체가
   // 던지는 경로를 검증한다) — mock이 이 cik의 facts만 골라 throw한다.
   const POISON_FACTS = [f(POISON_CIK, 'Revenues', 1, '2025-03-31', 999)]
+  // WRITE_FAIL_CIK는 정상적으로 normalizeFacts를 통과해야 replaceFinancials
+  // 단계에서 던지는 경로를 검증할 수 있다 — 4개 분기를 모두 채워둔다.
+  const WRITE_FAIL_FACTS = [
+    f(WRITE_FAIL_CIK, 'Revenues', 1, '2024-06-30', 200),
+    f(WRITE_FAIL_CIK, 'Revenues', 1, '2024-09-30', 210),
+    f(WRITE_FAIL_CIK, 'Revenues', 1, '2024-12-31', 220),
+    f(WRITE_FAIL_CIK, 'Revenues', 1, '2025-03-31', 230),
+  ]
 
   const bulk: BulkFundamentalProvider = {
-    fetchQuarter: async (_y, q) => (q === 2 ? [...GOOD_FACTS, ...POISON_FACTS] : []),
+    fetchQuarter: async (_y, q) => (q === 2 ? [...GOOD_FACTS, ...POISON_FACTS, ...WRITE_FAIL_FACTS] : []),
   }
   const companyFacts: CompanyFactsProvider = { fetchCompany: async () => [] }
 
@@ -60,7 +89,12 @@ describe('Finding 1 — 정규화 실패가 다른 회사의 recompute를 막지
   beforeAll(async () => {
     raw = getRawDb(join(mkdtempSync(join(tmpdir(), 'tb-fund-resil-')), 'f.db'))
     runMigrations(raw)
-    for (const [cik, ticker] of [[GOOD_CIK, 'NVDA'], [POISON_CIK, 'BADCO']] as const) {
+    const companies = [
+      [GOOD_CIK, 'NVDA'],
+      [POISON_CIK, 'BADCO'],
+      [WRITE_FAIL_CIK, 'WRITEBAD'],
+    ] as const
+    for (const [cik, ticker] of companies) {
       raw.prepare(
         `INSERT INTO companies (cik, ticker, name, is_active, first_seen, last_updated)
          VALUES (?, ?, ?, 1, '2026-08-09', '2026-08-09')`,
@@ -73,26 +107,35 @@ describe('Finding 1 — 정규화 실패가 다른 회사의 recompute를 막지
     stats = await ingestFundamentals({ raw, cfg, bulk, companyFacts, asOf: '2026-08-09' })
   })
 
-  it('잡 전체는 성공으로 기록된다 (한 회사의 실패가 잡을 무너뜨리지 않는다)', () => {
+  it('잡 전체는 성공으로 기록된다 (두 회사의 실패가 잡을 무너뜨리지 않는다)', () => {
     const r = raw
       .prepare("SELECT status FROM job_runs WHERE job='fundamentals' ORDER BY id DESC")
       .get() as { status: string }
     expect(r.status).toBe('succeeded')
   })
 
-  it('실패한 회사는 normalizeFailed 카운트와 CIK 목록에 기록된다', () => {
-    expect(stats.normalizeFailed).toBe(1)
-    expect(stats.normalizeFailedCiks).toEqual([String(POISON_CIK)])
+  it('normalizeFacts에서 던진 회사와 replaceFinancials에서 던진 회사 둘 다 normalizeFailed에 기록된다', () => {
+    expect(stats.normalizeFailed).toBe(2)
+    expect(stats.normalizeFailedCiks).toEqual(
+      [POISON_CIK, WRITE_FAIL_CIK].map(String).sort(),
+    )
   })
 
-  it('정상 회사는 실패한 회사와 무관하게 recompute된다', () => {
+  it('정상 회사는 두 실패 회사와 무관하게 recompute된다', () => {
     expect(stats.normalized).toBe(1)
     const fin = getFinancialsFor(raw, GOOD_CIK)
     expect(fin.quarterly).toHaveLength(4)
   })
 
-  it('실패한 회사는 financials에 아무 것도 쓰지 않는다', () => {
+  it('normalizeFacts에서 실패한 회사는 financials에 아무 것도 쓰지 않는다', () => {
     const fin = getFinancialsFor(raw, POISON_CIK)
+    expect(fin.quarterly).toHaveLength(0)
+    expect(fin.annual).toHaveLength(0)
+    expect(fin.ttm).toHaveLength(0)
+  })
+
+  it('replaceFinancials에서 실패한 회사도 financials에 아무 것도 쓰지 않는다 (부분 쓰기 없음)', () => {
+    const fin = getFinancialsFor(raw, WRITE_FAIL_CIK)
     expect(fin.quarterly).toHaveLength(0)
     expect(fin.annual).toHaveLength(0)
     expect(fin.ttm).toHaveLength(0)
