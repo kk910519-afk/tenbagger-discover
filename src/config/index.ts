@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import { configSchema, type AppConfig } from './schema.js'
 
@@ -15,9 +16,14 @@ export function parseConfig(raw: string): AppConfig {
   return result.data
 }
 
-let cached: AppConfig | null = null
+const cache = new Map<string, AppConfig>()
 
 export function loadConfig(path = 'config.yaml'): AppConfig {
-  if (!cached) cached = parseConfig(readFileSync(path, 'utf8'))
-  return cached
+  const key = resolve(path)
+  let cfg = cache.get(key)
+  if (!cfg) {
+    cfg = parseConfig(readFileSync(key, 'utf8'))
+    cache.set(key, cfg)
+  }
+  return cfg
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseConfig } from '@/config'
+import { parseConfig, loadConfig } from '@/config'
 import { readFileSync } from 'node:fs'
 
 describe('parseConfig', () => {
@@ -43,5 +43,28 @@ quality_gate: { revenue_decline_years: 2, extreme_dilution: 0.5, dilution_warnin
   runway_critical_quarters: 2, runway_low_quarters: 6 }
 `
     expect(() => parseConfig(bad)).toThrow(/오름차순/)
+  })
+
+  it('알 수 없는 키(오타 등)가 있으면 거부한다', () => {
+    const raw = readFileSync('config.yaml', 'utf8')
+    // universe 블록에 존재하지 않는 키(weight 오타 waight)를 주입한다.
+    const withTypo = raw.replace(
+      'exclude_sic: ["6770"]',
+      'exclude_sic: ["6770"]\n  waight: 999',
+    )
+    expect(() => parseConfig(withTypo)).toThrow(/Unrecognized key/)
+  })
+
+  it('loadConfig는 경로별로 다른 config를 캐싱한다', () => {
+    const real = loadConfig('config.yaml')
+    const alt = loadConfig('tests/fixtures/config-alt.yaml')
+
+    expect(real.scoring.wacc_assumption).toBe(0.09)
+    expect(alt.scoring.wacc_assumption).toBe(0.05)
+    expect(real.scoring.wacc_assumption).not.toBe(alt.scoring.wacc_assumption)
+
+    // 같은 경로를 다시 호출하면 캐시된 동일 객체를 반환한다.
+    expect(loadConfig('config.yaml')).toBe(real)
+    expect(loadConfig('tests/fixtures/config-alt.yaml')).toBe(alt)
   })
 })
