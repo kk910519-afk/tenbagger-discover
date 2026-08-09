@@ -6506,3 +6506,1611 @@ git commit -m "feat: Tenbagger 팩터 1-3 (매출성장·가속도·TAM)
 TAM CAGR이 미큐레이션이면 산업 구성기업 매출성장률 중앙값으로 대체해
 첫 실행부터 동작하게 하고, 어느 쪽을 썼는지 detail에 명시한다."
 ```
+
+---
+
+### Task 17: Tenbagger 팩터 4-5 (마진 · 영업레버리지)
+
+**Files:**
+- Create: `src/engines/tenbagger/factors/gross-margin.ts`, `operating-leverage.ts`
+- Test: `tests/engines/factors-margin.test.ts`
+
+**Interfaces:**
+- Consumes: `FactorFn`/`scored`/`noData`/`pct` (Task 16), 지표 함수 (Task 13)
+- Produces:
+  - `grossMarginFactor: FactorFn` (key `gross_margin`, weight 10)
+  - `operatingLeverageFactor: FactorFn` (key `operating_leverage`, weight 10)
+
+- [ ] **Step 1: 실패하는 테스트 작성**
+
+`tests/engines/factors-margin.test.ts`:
+
+```ts
+import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { parseConfig } from '@/config'
+import { grossMarginFactor } from '@/engines/tenbagger/factors/gross-margin'
+import { operatingLeverageFactor } from '@/engines/tenbagger/factors/operating-leverage'
+import type { FactorContext } from '@/engines/tenbagger/factor-utils'
+import type { CompanySnapshot, FinancialPeriod } from '@/domain/types'
+
+const cfg = parseConfig(readFileSync('config.yaml', 'utf8'))
+
+function fp(periodEnd: string, over: Partial<FinancialPeriod> = {}): FinancialPeriod {
+  return {
+    periodEnd, periodType: 'TTM', revenue: null, grossProfit: null,
+    operatingIncome: null, netIncome: null, ocf: null, capex: null, fcf: null,
+    cash: null, totalDebt: null, equity: null, sharesDiluted: null,
+    sharesOutstanding: null, sbc: null, rdExpense: null, ...over,
+  }
+}
+
+function ctx(over: Partial<CompanySnapshot>): FactorContext {
+  return {
+    cfg, flags: [],
+    snapshot: {
+      cik: 1, ticker: 'T', name: 'T',
+      themeSlug: 'ai-software-semi', industrySlug: 'semiconductors',
+      industry: {
+        slug: 'semiconductors', name: 'Semiconductors', themeSlug: 'ai-software-semi',
+        tamUsd: null, tamCagr: null, tamSource: null, tamAsOf: null,
+      },
+      classificationSource: 'sic', marketCap: 1e9, price: 10,
+      priceDate: '2026-08-08', sharesOutstanding: 1e8,
+      ttm: [], annual: [], quarterly: [],
+      industryStats: {
+        candidateCount: 5, medianGrossMargin: 0.6,
+        medianRevenueGrowth: 0.18, distributions: {},
+      },
+      asOf: '2026-08-09', ...over,
+    },
+  }
+}
+
+/** 마진이 개선되는 8개 분기 (최근순) */
+function improvingQuarters(): FinancialPeriod[] {
+  return [0.74, 0.72, 0.70, 0.68, 0.66, 0.64, 0.62, 0.60].map((gm, i) =>
+    fp(`2025-${String(20 - i).padStart(2, '0')}`, {
+      periodType: 'Q', revenue: 100, grossProfit: gm * 100,
+    }),
+  )
+}
+
+describe('grossMarginFactor', () => {
+  it('수준과 추세를 블렌드한다', () => {
+    const r = grossMarginFactor(
+      ctx({
+        ttm: [fp('2025-03-31', { revenue: 1000, grossProfit: 740 })],
+        quarterly: improvingQuarters(),
+      }),
+    )
+    expect(r.key).toBe('gross_margin')
+    expect(r.weight).toBe(10)
+    expect(r.status).toBe('SCORED')
+    expect(r.raw).toBeCloseTo(0.74)
+    expect(r.points!).toBeGreaterThan(9)   // 74% + 개선 추세
+    expect(r.detail).toContain('74.0%')
+    expect(r.detail).toContain('bp')
+  })
+
+  it('분기가 부족하면 수준만으로 채점한다', () => {
+    const r = grossMarginFactor(
+      ctx({ ttm: [fp('2025-03-31', { revenue: 1000, grossProfit: 400 })] }),
+    )
+    expect(r.status).toBe('SCORED')
+    expect(r.detail).toContain('추세 산출 불가')
+  })
+
+  it('매출총이익이 없으면 NO_DATA', () => {
+    const r = grossMarginFactor(ctx({ ttm: [fp('2025-03-31', { revenue: 1000 })] }))
+    expect(r.status).toBe('NO_DATA')
+  })
+})
+
+describe('operatingLeverageFactor', () => {
+  /** 현재와 1년 전 TTM. index 4가 1년 전 */
+  function ttmPair(now: Partial<FinancialPeriod>, prior: Partial<FinancialPeriod>) {
+    const out = [fp('2025-03-31', now)]
+    for (let i = 1; i < 4; i++) out.push(fp(`2024-${12 - i}-31`))
+    out.push(fp('2024-03-31', prior))
+    return out
+  }
+
+  it('마진이 개선되고 opex가 매출보다 느리게 늘면 고득점', () => {
+    const r = operatingLeverageFactor(
+      ctx({
+        ttm: ttmPair(
+          { revenue: 1500, grossProfit: 1050, operatingIncome: 300 },  // opex 750, 마진 20%
+          { revenue: 1000, grossProfit: 700, operatingIncome: 100 },   // opex 600, 마진 10%
+        ),
+      }),
+    )
+    expect(r.key).toBe('operating_leverage')
+    expect(r.status).toBe('SCORED')
+    // 매출 +50%, opex +25% → 격차 +25%p, 영업이익률 +10%p
+    expect(r.points!).toBeGreaterThan(9)
+    expect(r.detail).toContain('영업이익률')
+  })
+
+  it('opex가 매출보다 빨리 늘면 저득점', () => {
+    const r = operatingLeverageFactor(
+      ctx({
+        ttm: ttmPair(
+          { revenue: 1100, grossProfit: 770, operatingIncome: -50 },
+          { revenue: 1000, grossProfit: 700, operatingIncome: 100 },
+        ),
+      }),
+    )
+    expect(r.points!).toBeLessThan(3)
+  })
+
+  it('1년 전 TTM이 없으면 NO_DATA', () => {
+    const r = operatingLeverageFactor(
+      ctx({ ttm: [fp('2025-03-31', { revenue: 1000, operatingIncome: 100 })] }),
+    )
+    expect(r.status).toBe('NO_DATA')
+  })
+})
+```
+
+- [ ] **Step 2: 테스트 실패 확인**
+
+Run: `npx vitest run tests/engines/factors-margin.test.ts`
+Expected: FAIL — `Cannot find module '@/engines/tenbagger/factors/gross-margin'`
+
+- [ ] **Step 3: 구현**
+
+`src/engines/tenbagger/factors/gross-margin.ts`:
+
+```ts
+import { interpolate } from '@/domain/curve'
+import { grossMargin, grossMarginTrendBps } from '@/domain/metrics'
+import { scored, noData, pct, type FactorFn } from '../factor-utils.js'
+
+const KEY = 'gross_margin'
+const TREND_QUARTERS = 8
+
+export const grossMarginFactor: FactorFn = ({ snapshot, cfg }) => {
+  const f = cfg.scoring.factors.gross_margin
+  const level = grossMargin(snapshot.ttm[0])
+  if (level === null) return noData(KEY, f.weight, '매출총이익 데이터 없음')
+
+  const levelScore = interpolate(f.level_curve, level)
+  const trendBps = grossMarginTrendBps(snapshot.quarterly, TREND_QUARTERS)
+
+  if (trendBps === null) {
+    return scored(
+      KEY, f.weight, level, levelScore,
+      `매출총이익률 ${pct(level)} · 추세 산출 불가 (분기 ${TREND_QUARTERS}개 필요)`,
+    )
+  }
+
+  const normalized =
+    f.blend.level * levelScore + f.blend.trend * interpolate(f.trend_curve, trendBps)
+
+  return scored(
+    KEY, f.weight, level, normalized,
+    `매출총이익률 ${pct(level)} · 추세 ${trendBps > 0 ? '+' : ''}${trendBps.toFixed(0)}bp/년`,
+  )
+}
+```
+
+`src/engines/tenbagger/factors/operating-leverage.ts`:
+
+```ts
+import { interpolate } from '@/domain/curve'
+import { operatingMargin, opexGrowth, ttmRevenueGrowth } from '@/domain/metrics'
+import { scored, noData, pct, type FactorFn } from '../factor-utils.js'
+
+const KEY = 'operating_leverage'
+const QUARTERS_PER_YEAR = 4
+
+export const operatingLeverageFactor: FactorFn = ({ snapshot, cfg }) => {
+  const f = cfg.scoring.factors.operating_leverage
+  const now = operatingMargin(snapshot.ttm[0])
+  const prior = operatingMargin(snapshot.ttm[QUARTERS_PER_YEAR])
+  const revGrowth = ttmRevenueGrowth(snapshot.ttm)
+  const opex = opexGrowth(snapshot.ttm)
+
+  const marginDeltaPp = now !== null && prior !== null ? (now - prior) * 100 : null
+  const growthGap = revGrowth !== null && opex !== null ? revGrowth - opex : null
+
+  if (marginDeltaPp === null && growthGap === null) {
+    return noData(KEY, f.weight, '1년 전 TTM 손익 데이터 없음')
+  }
+
+  // 한쪽만 있으면 그 값 단독으로 채점한다
+  let normalized: number
+  const parts: string[] = []
+  if (marginDeltaPp !== null && growthGap !== null) {
+    normalized =
+      f.blend.margin_delta * interpolate(f.margin_delta_curve, marginDeltaPp) +
+      f.blend.growth_gap * interpolate(f.growth_gap_curve, growthGap)
+    parts.push(`영업이익률 ${marginDeltaPp > 0 ? '+' : ''}${marginDeltaPp.toFixed(1)}%p`)
+    parts.push(`매출-비용 증가율 격차 ${pct(growthGap)}p`)
+  } else if (marginDeltaPp !== null) {
+    normalized = interpolate(f.margin_delta_curve, marginDeltaPp)
+    parts.push(`영업이익률 ${marginDeltaPp > 0 ? '+' : ''}${marginDeltaPp.toFixed(1)}%p`)
+    parts.push('비용 증가율 산출 불가')
+  } else {
+    normalized = interpolate(f.growth_gap_curve, growthGap!)
+    parts.push(`매출-비용 증가율 격차 ${pct(growthGap)}p`)
+    parts.push('영업이익률 변화 산출 불가')
+  }
+
+  return scored(KEY, f.weight, marginDeltaPp, normalized, parts.join(' · '))
+}
+```
+
+- [ ] **Step 4: 테스트 통과 확인**
+
+Run: `npx vitest run tests/engines/factors-margin.test.ts`
+Expected: PASS (6 tests)
+
+- [ ] **Step 5: 커밋**
+
+```bash
+git add -A
+git commit -m "feat: Tenbagger 팩터 4-5 (매출총이익률·영업레버리지)
+
+마진은 수준과 8분기 추세를 블렌드하고, 분기가 부족하면 수준만 쓴다.
+영업레버리지는 영업이익률 변화와 매출-비용 증가율 격차를 함께 본다."
+```
+
+---
+
+### Task 18: Tenbagger 팩터 6-9 (시가총액 기회 · 경쟁우위 · 재무상태 · 기관)
+
+**Files:**
+- Create: `src/engines/tenbagger/factors/market-cap-opportunity.ts`, `competitive-advantage.ts`, `balance-sheet.ts`, `institutional-insider.ts`
+- Test: `tests/engines/factors-quality.test.ts`
+
+**Interfaces:**
+- Consumes: `FactorFn`/`scored`/`noData`/`notImplemented`/`pct` (Task 16), `hasWarning` (Task 15), 지표 함수 (Task 13), `stdev` (Task 2)
+- Produces:
+  - `marketCapOpportunityFactor: FactorFn` (key `market_cap_opportunity`, weight 15)
+  - `competitiveAdvantageFactor: FactorFn` (key `competitive_advantage`, weight 10)
+  - `balanceSheetFactor: FactorFn` (key `balance_sheet`, weight 5)
+  - `institutionalInsiderFactor: FactorFn` (key `institutional_insider`, weight 5, 항상 `NOT_IMPLEMENTED`)
+
+**§7 함정 해소 — 승수 게이트.** 작을수록 고득점인 구조가 부실 소형주를 상위로 밀어올리지 않도록, 구간표 점수에 게이트 승수를 곱한다. 게이트가 0이 되는 사유를 `detail`에 반드시 남긴다.
+
+**경쟁우위는 Moat가 아니다.** 4개 재무 프록시의 평균이며 UI에서 "Moat"로 표기하지 않는다. 각 신호는 독립적으로 `NO_DATA`가 될 수 있고, 사용 가능한 신호로만 정규화한다.
+
+- [ ] **Step 1: 실패하는 테스트 작성**
+
+`tests/engines/factors-quality.test.ts`:
+
+```ts
+import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { parseConfig } from '@/config'
+import { marketCapOpportunityFactor } from '@/engines/tenbagger/factors/market-cap-opportunity'
+import { competitiveAdvantageFactor } from '@/engines/tenbagger/factors/competitive-advantage'
+import { balanceSheetFactor } from '@/engines/tenbagger/factors/balance-sheet'
+import { institutionalInsiderFactor } from '@/engines/tenbagger/factors/institutional-insider'
+import type { FactorContext } from '@/engines/tenbagger/factor-utils'
+import type { CompanySnapshot, FinancialPeriod, RedFlag } from '@/domain/types'
+
+const cfg = parseConfig(readFileSync('config.yaml', 'utf8'))
+
+function fp(periodEnd: string, over: Partial<FinancialPeriod> = {}): FinancialPeriod {
+  return {
+    periodEnd, periodType: 'TTM', revenue: null, grossProfit: null,
+    operatingIncome: null, netIncome: null, ocf: null, capex: null, fcf: null,
+    cash: null, totalDebt: null, equity: null, sharesDiluted: null,
+    sharesOutstanding: null, sbc: null, rdExpense: null, ...over,
+  }
+}
+
+function ctx(over: Partial<CompanySnapshot>, flags: RedFlag[] = []): FactorContext {
+  return {
+    cfg, flags,
+    snapshot: {
+      cik: 1, ticker: 'T', name: 'T',
+      themeSlug: 'ai-software-semi', industrySlug: 'semiconductors',
+      industry: {
+        slug: 'semiconductors', name: 'Semiconductors', themeSlug: 'ai-software-semi',
+        tamUsd: null, tamCagr: null, tamSource: null, tamAsOf: null,
+      },
+      classificationSource: 'sic', marketCap: 1e9, price: 10,
+      priceDate: '2026-08-08', sharesOutstanding: 1e8,
+      ttm: [], annual: [], quarterly: [],
+      industryStats: {
+        candidateCount: 5, medianGrossMargin: 0.60,
+        medianRevenueGrowth: 0.18, distributions: {},
+      },
+      asOf: '2026-08-09', ...over,
+    },
+  }
+}
+
+/** 성장 중인 TTM 계열 — 게이트를 통과시키기 위한 기본값 */
+function growingTtm(over: Partial<FinancialPeriod> = {}): FinancialPeriod[] {
+  const now = fp('2025-03-31', { revenue: 1250, ...over })
+  const mid = [1, 2, 3].map((i) => fp(`2024-${12 - i}-31`))
+  const prior = fp('2024-03-31', { revenue: 1000 })
+  return [now, ...mid, prior]
+}
+
+const WARNING: RedFlag = {
+  code: 'DILUTION', severity: 'WARNING', message: 'x', evidence: {},
+}
+
+describe('marketCapOpportunityFactor', () => {
+  it('$1B 미만은 만점 15점', () => {
+    const r = marketCapOpportunityFactor(ctx({ marketCap: 5e8, ttm: growingTtm() }))
+    expect(r.key).toBe('market_cap_opportunity')
+    expect(r.points).toBe(15)
+    expect(r.raw).toBe(5e8)
+  })
+
+  it('$100B 이상은 1점', () => {
+    expect(marketCapOpportunityFactor(ctx({ marketCap: 2e11, ttm: growingTtm() })).points)
+      .toBe(1)
+  })
+
+  it('구간 경계는 상한 미만 기준', () => {
+    expect(marketCapOpportunityFactor(ctx({ marketCap: 3e9, ttm: growingTtm() })).points)
+      .toBe(12)   // 3e9는 $1B~$3B 구간의 상한이므로 다음 구간
+  })
+
+  it('매출이 감소 중이면 게이트 0', () => {
+    const shrinking = [
+      fp('2025-03-31', { revenue: 800 }),
+      fp('2024-12-31'), fp('2024-09-30'), fp('2024-06-30'),
+      fp('2024-03-31', { revenue: 1000 }),
+    ]
+    const r = marketCapOpportunityFactor(ctx({ marketCap: 5e8, ttm: shrinking }))
+    expect(r.points).toBe(0)
+    expect(r.detail).toContain('매출 감소')
+  })
+
+  it('매출이 $10M 미만이면 게이트 0', () => {
+    const tiny = growingTtm({ revenue: 5_000_000 })
+    tiny[4] = fp('2024-03-31', { revenue: 4_000_000 })
+    const r = marketCapOpportunityFactor(ctx({ marketCap: 5e8, ttm: tiny }))
+    expect(r.points).toBe(0)
+    expect(r.detail).toContain('매출 규모')
+  })
+
+  it('WARNING Red Flag가 있으면 절반', () => {
+    const r = marketCapOpportunityFactor(ctx({ marketCap: 5e8, ttm: growingTtm() }, [WARNING]))
+    expect(r.points).toBe(7.5)
+    expect(r.detail).toContain('WARNING')
+  })
+
+  it('시가총액이 없으면 NO_DATA', () => {
+    expect(marketCapOpportunityFactor(ctx({ marketCap: null, ttm: growingTtm() })).status)
+      .toBe('NO_DATA')
+  })
+})
+
+describe('competitiveAdvantageFactor', () => {
+  function stableQuarters(gm: number): FinancialPeriod[] {
+    return Array.from({ length: 8 }, (_, i) =>
+      fp(`2025-${String(20 - i).padStart(2, '0')}`, {
+        periodType: 'Q', revenue: 100, grossProfit: gm * 100,
+      }),
+    )
+  }
+
+  it('ROIC·마진 안정성·산업 대비 마진·R&D를 종합한다', () => {
+    const r = competitiveAdvantageFactor(
+      ctx({
+        ttm: [fp('2025-03-31', {
+          revenue: 1000, grossProfit: 800, operatingIncome: 400,
+          totalDebt: 500, equity: 2000, cash: 500, rdExpense: 200,
+        })],
+        quarterly: stableQuarters(0.80),
+      }),
+    )
+    expect(r.key).toBe('competitive_advantage')
+    expect(r.weight).toBe(10)
+    expect(r.status).toBe('SCORED')
+    expect(r.points!).toBeGreaterThan(7)
+    expect(r.detail).toContain('ROIC')
+  })
+
+  it('신호가 하나도 없으면 NO_DATA', () => {
+    expect(competitiveAdvantageFactor(ctx({ ttm: [], quarterly: [] })).status).toBe('NO_DATA')
+  })
+
+  it('일부 신호만 있어도 그 신호로만 정규화한다', () => {
+    const r = competitiveAdvantageFactor(
+      ctx({ ttm: [fp('2025-03-31', { revenue: 1000, rdExpense: 200 })] }),
+    )
+    expect(r.status).toBe('SCORED')
+    expect(r.detail).toContain('4개 중 1개')
+  })
+})
+
+describe('balanceSheetFactor', () => {
+  it('흑자 기업은 순현금과 레버리지로 채점한다', () => {
+    const r = balanceSheetFactor(
+      ctx({
+        marketCap: 1e10,
+        ttm: [fp('2025-03-31', {
+          revenue: 1000, operatingIncome: 300, fcf: 250,
+          cash: 3e9, totalDebt: 5e8,
+        })],
+      }),
+    )
+    expect(r.key).toBe('balance_sheet')
+    expect(r.weight).toBe(5)
+    expect(r.points!).toBeGreaterThan(4)
+    expect(r.detail).toContain('순현금')
+  })
+
+  it('적자 기업은 현금 런웨이로 채점한다', () => {
+    const r = balanceSheetFactor(
+      ctx({ ttm: [fp('2025-03-31', { fcf: -400, cash: 4000 })] }),   // 런웨이 40분기
+    )
+    expect(r.points).toBe(5)
+    expect(r.detail).toContain('런웨이')
+  })
+
+  it('런웨이가 짧으면 저득점', () => {
+    const r = balanceSheetFactor(ctx({ ttm: [fp('2025-03-31', { fcf: -400, cash: 300 })] }))
+    expect(r.points!).toBeLessThan(1)
+  })
+
+  it('재무 데이터가 없으면 NO_DATA', () => {
+    expect(balanceSheetFactor(ctx({ ttm: [fp('2025-03-31', {})] })).status).toBe('NO_DATA')
+  })
+})
+
+describe('institutionalInsiderFactor', () => {
+  it('항상 NOT_IMPLEMENTED이며 5점 가중치를 보고한다', () => {
+    const r = institutionalInsiderFactor(ctx({}))
+    expect(r.key).toBe('institutional_insider')
+    expect(r.weight).toBe(5)
+    expect(r.status).toBe('NOT_IMPLEMENTED')
+    expect(r.points).toBeNull()
+    expect(r.detail).toContain('Phase 4')
+  })
+})
+```
+
+- [ ] **Step 2: 테스트 실패 확인**
+
+Run: `npx vitest run tests/engines/factors-quality.test.ts`
+Expected: FAIL — `Cannot find module '@/engines/tenbagger/factors/market-cap-opportunity'`
+
+- [ ] **Step 3: 구현**
+
+`src/engines/tenbagger/factors/market-cap-opportunity.ts`:
+
+```ts
+import { ttmRevenueGrowth } from '@/domain/metrics'
+import { hasWarning } from '@/engines/quality'
+import { noData, pct, type FactorFn } from '../factor-utils.js'
+import type { FactorResult } from '@/domain/types'
+
+const KEY = 'market_cap_opportunity'
+
+function bandPoints(
+  marketCap: number,
+  bands: { max: number | null; points: number }[],
+): number {
+  for (const b of bands) {
+    if (b.max === null || marketCap < b.max) return b.points
+  }
+  return bands[bands.length - 1]?.points ?? 0
+}
+
+export const marketCapOpportunityFactor: FactorFn = ({ snapshot, cfg, flags }) => {
+  const f = cfg.scoring.factors.market_cap_opportunity
+  const marketCap = snapshot.marketCap
+  if (marketCap === null || marketCap <= 0) {
+    return noData(KEY, f.weight, '시가총액 없음 — 주가 또는 발행주식수 결측')
+  }
+
+  const base = bandPoints(marketCap, f.bands)
+  const revenue = snapshot.ttm[0]?.revenue ?? null
+  const growth = ttmRevenueGrowth(snapshot.ttm)
+
+  // 게이트: 작을수록 고득점인 구조가 부실 소형주를 밀어올리지 않게 한다
+  let gate = 1
+  let gateReason = ''
+  if (growth !== null && growth < f.gate.zero_if_revenue_growth_below) {
+    gate = 0
+    gateReason = `게이트 0 — 매출 감소 ${pct(growth)}`
+  } else if (revenue !== null && revenue < f.gate.zero_if_revenue_below) {
+    gate = 0
+    gateReason = `게이트 0 — 매출 규모 $${(revenue / 1e6).toFixed(1)}M`
+  } else if (hasWarning(flags)) {
+    gate = f.gate.warning_multiplier
+    gateReason = `게이트 ${f.gate.warning_multiplier} — WARNING Red Flag 보유`
+  }
+
+  const billions = (marketCap / 1e9).toFixed(2)
+  const detail = gateReason
+    ? `시가총액 $${billions}B → ${base}점, ${gateReason}`
+    : `시가총액 $${billions}B → ${base}점`
+
+  const result: FactorResult = {
+    key: KEY, weight: f.weight, points: base * gate, raw: marketCap,
+    status: 'SCORED', detail,
+  }
+  return result
+}
+```
+
+`src/engines/tenbagger/factors/competitive-advantage.ts`:
+
+```ts
+import { interpolate } from '@/domain/curve'
+import { stdev } from '@/domain/stats'
+import { grossMargin, grossMarginSeries, roic } from '@/domain/metrics'
+import { scored, noData, pct, type FactorFn } from '../factor-utils.js'
+
+const KEY = 'competitive_advantage'
+const STABILITY_QUARTERS = 8
+const SIGNAL_COUNT = 4
+
+export const competitiveAdvantageFactor: FactorFn = ({ snapshot, cfg }) => {
+  const f = cfg.scoring.factors.competitive_advantage
+  const ttm = snapshot.ttm[0]
+  const signals: { score: number; label: string }[] = []
+
+  // 1. ROIC 스프레드 — 자본비용을 넘는 초과수익
+  const r = roic(ttm, cfg.scoring.tax_rate)
+  if (r !== null) {
+    const spread = r - cfg.scoring.wacc_assumption
+    signals.push({
+      score: interpolate(f.signals.roic_spread, spread),
+      label: `ROIC ${pct(r)} (스프레드 ${pct(spread)})`,
+    })
+  }
+
+  // 2. 마진 안정성 — 변동성이 낮으면 전환비용·무형자산 시사
+  const series = grossMarginSeries(snapshot.quarterly, STABILITY_QUARTERS)
+  if (series.length === STABILITY_QUARTERS) {
+    const mean = series.reduce((a, b) => a + b, 0) / series.length
+    const sd = stdev(series)
+    if (sd !== null && mean > 0) {
+      const stability = 1 - sd / mean
+      signals.push({
+        score: interpolate(f.signals.gm_stability, stability),
+        label: `마진 안정성 ${stability.toFixed(3)}`,
+      })
+    }
+  }
+
+  // 3. 산업 대비 마진 — 후보 3개 미만 산업은 중앙값이 무의미
+  const gm = grossMargin(ttm)
+  const industryGm = snapshot.industryStats.medianGrossMargin
+  if (
+    gm !== null && industryGm !== null &&
+    snapshot.industryStats.candidateCount >= cfg.scoring.min_industry_candidates
+  ) {
+    const delta = gm - industryGm
+    signals.push({
+      score: interpolate(f.signals.gm_vs_industry, delta),
+      label: `산업 대비 마진 ${pct(delta)}p`,
+    })
+  }
+
+  // 4. R&D 집약도 — 무형자산 축적
+  if (ttm && ttm.rdExpense !== null && ttm.revenue !== null && ttm.revenue > 0) {
+    const intensity = ttm.rdExpense / ttm.revenue
+    signals.push({
+      score: interpolate(f.signals.rd_intensity, intensity),
+      label: `R&D 집약도 ${pct(intensity)}`,
+    })
+  }
+
+  if (signals.length === 0) {
+    return noData(KEY, f.weight, '재무 프록시 4개 신호를 하나도 계산할 수 없음')
+  }
+
+  const normalized = signals.reduce((s, x) => s + x.score, 0) / signals.length
+  const coverage =
+    signals.length < SIGNAL_COUNT ? ` (4개 중 ${signals.length}개 신호)` : ''
+
+  return scored(
+    KEY, f.weight, normalized, normalized,
+    `${signals.map((s) => s.label).join(' · ')}${coverage}`,
+  )
+}
+```
+
+`src/engines/tenbagger/factors/balance-sheet.ts`:
+
+```ts
+import { interpolate } from '@/domain/curve'
+import { cashRunwayQuarters, debtToEbitda, netCashToMarketCap } from '@/domain/metrics'
+import { scored, noData, pct, type FactorFn } from '../factor-utils.js'
+
+const KEY = 'balance_sheet'
+
+export const balanceSheetFactor: FactorFn = ({ snapshot, cfg }) => {
+  const f = cfg.scoring.factors.balance_sheet
+  const ttm = snapshot.ttm[0]
+
+  // 적자 기업: 런웨이가 유일하게 의미 있는 지표
+  const runway = cashRunwayQuarters(snapshot.ttm)
+  if (runway !== null) {
+    return scored(
+      KEY, f.weight, runway, interpolate(f.runway_curve, runway),
+      `현금 런웨이 ${runway.toFixed(1)}분기 (FCF 적자)`,
+    )
+  }
+
+  // 흑자 기업: 순현금 포지션 + 레버리지
+  const netCash = netCashToMarketCap(ttm, snapshot.marketCap)
+  const leverage = debtToEbitda(ttm)
+  if (netCash === null && leverage === null) {
+    return noData(KEY, f.weight, '현금·부채 데이터 없음')
+  }
+
+  if (netCash !== null && leverage !== null) {
+    const normalized =
+      f.profitable_blend.net_cash * interpolate(f.net_cash_curve, netCash) +
+      f.profitable_blend.leverage * interpolate(f.leverage_curve, leverage)
+    return scored(
+      KEY, f.weight, netCash, normalized,
+      `순현금 시총 대비 ${pct(netCash)} · 부채/영업이익 ${leverage.toFixed(1)}배`,
+    )
+  }
+  if (netCash !== null) {
+    return scored(
+      KEY, f.weight, netCash, interpolate(f.net_cash_curve, netCash),
+      `순현금 시총 대비 ${pct(netCash)} · 레버리지 산출 불가`,
+    )
+  }
+  return scored(
+    KEY, f.weight, leverage, interpolate(f.leverage_curve, leverage!),
+    `부채/영업이익 ${leverage!.toFixed(1)}배 · 순현금 산출 불가`,
+  )
+}
+```
+
+`src/engines/tenbagger/factors/institutional-insider.ts`:
+
+```ts
+import { notImplemented, type FactorFn } from '../factor-utils.js'
+
+/**
+ * 기관 보유·내부자 거래 신호. 13F와 Form 4 파싱이 필요해 Phase 4로 미룬다.
+ * NOT_IMPLEMENTED는 모든 기업에 동일 적용되므로 completeness 분모에서 제외되고
+ * 상대 순위를 왜곡하지 않는다.
+ */
+export const institutionalInsiderFactor: FactorFn = ({ cfg }) =>
+  notImplemented('institutional_insider', cfg.scoring.factors.institutional_insider.weight)
+```
+
+- [ ] **Step 4: 테스트 통과 확인**
+
+Run: `npx vitest run tests/engines/factors-quality.test.ts`
+Expected: PASS (15 tests)
+
+- [ ] **Step 5: 커밋**
+
+```bash
+git add -A
+git commit -m "feat: Tenbagger 팩터 6-9 (시총 기회·경쟁우위·재무상태·기관)
+
+시가총액 기회는 구간표에 게이트 승수를 곱해 매출이 감소 중인 소형주가
+15점을 받지 못하게 한다. 게이트 사유는 detail에 남긴다.
+경쟁우위는 재무 프록시 4개의 평균이며 Moat 분석이 아니다.
+기관/내부자는 NOT_IMPLEMENTED로 completeness 분모에서 제외된다."
+```
+
+---
+
+### Task 19: Tenbagger 엔진 조립 (rescale · completeness)
+
+**Files:**
+- Create: `src/engines/tenbagger/index.ts`
+- Test: `tests/engines/tenbagger.test.ts`, `tests/fixtures/companies.ts`
+
+**Interfaces:**
+- Consumes: 팩터 9개 (Task 16-18), `FactorResult` (Task 2)
+- Produces:
+  - `type TenbaggerResult = { score: number | null; completeness: number; factors: FactorResult[] }`
+  - `scoreTenbagger(snapshot, cfg, flags): TenbaggerResult`
+  - `ENGINE_VERSION: string` — 엔진 코드 버전. `scores.engine_version`에 config 해시와 함께 기록된다
+  - `tests/fixtures/companies.ts`에서 `earlyTenbagger()`, `valueTrap()`, `megaCap()`, `sparseData()` 스냅샷 팩토리 export
+
+**정규화 규칙 (설계 문서 §8.1)**
+
+```
+score        = 100 × Σpoints / Σ(weight where status='SCORED')
+completeness = Σ(weight where 'SCORED') / Σ(weight where status ≠ 'NOT_IMPLEMENTED')
+```
+
+`NOT_IMPLEMENTED`는 모든 기업에 동일 적용되므로 `completeness` 분모에서 제외한다. `NO_DATA`는 그 기업만의 결함이므로 분모에 남겨 completeness를 떨어뜨린다.
+
+- [ ] **Step 1: 픽스처 기업 4종 작성**
+
+`tests/fixtures/companies.ts`:
+
+```ts
+import type { CompanySnapshot, FinancialPeriod, IndustryStats } from '@/domain/types'
+
+const INDUSTRY = {
+  slug: 'semiconductors', name: 'Semiconductors', themeSlug: 'ai-software-semi',
+  tamUsd: null, tamCagr: null, tamSource: null, tamAsOf: null,
+}
+
+const STATS: IndustryStats = {
+  candidateCount: 12, medianGrossMargin: 0.55,
+  medianRevenueGrowth: 0.15, distributions: {},
+}
+
+function period(
+  periodEnd: string, periodType: 'Q' | 'A' | 'TTM', over: Partial<FinancialPeriod>,
+): FinancialPeriod {
+  return {
+    periodEnd, periodType, revenue: null, grossProfit: null, operatingIncome: null,
+    netIncome: null, ocf: null, capex: null, fcf: null, cash: null, totalDebt: null,
+    equity: null, sharesDiluted: null, sharesOutstanding: null, sbc: null,
+    rdExpense: null, ...over,
+  }
+}
+
+/** TTM 13개(3년) 생성. scale은 분기마다의 성장 배수. */
+function ttmSeries(
+  latestRevenue: number, quarterlyGrowth: number, shape: Partial<FinancialPeriod>,
+): FinancialPeriod[] {
+  return Array.from({ length: 13 }, (_, i) =>
+    period(`2025-${String(40 - i).padStart(2, '0')}`, 'TTM', {
+      ...shape,
+      revenue: latestRevenue / Math.pow(1 + quarterlyGrowth, i),
+      grossProfit:
+        shape.grossProfit === undefined
+          ? null
+          : (latestRevenue / Math.pow(1 + quarterlyGrowth, i)) *
+            (shape.grossProfit / (shape.revenue ?? 1)),
+    }),
+  )
+}
+
+function quarterSeries(
+  latestRevenue: number, quarterlyGrowth: number, gm: number,
+): FinancialPeriod[] {
+  return Array.from({ length: 12 }, (_, i) => {
+    const rev = latestRevenue / Math.pow(1 + quarterlyGrowth, i)
+    return period(`2025-${String(40 - i).padStart(2, '0')}`, 'Q', {
+      revenue: rev, grossProfit: rev * gm,
+    })
+  })
+}
+
+function base(over: Partial<CompanySnapshot>): CompanySnapshot {
+  return {
+    cik: 1, ticker: 'X', name: 'X Inc',
+    themeSlug: 'ai-software-semi', industrySlug: 'semiconductors',
+    industry: INDUSTRY, classificationSource: 'sic',
+    marketCap: null, price: 10, priceDate: '2026-08-08', sharesOutstanding: 1e8,
+    ttm: [], annual: [], quarterly: [], industryStats: STATS,
+    asOf: '2026-08-09', ...over,
+  }
+}
+
+/** 고성장·고마진·소형 — 높은 점수가 나와야 한다 */
+export function earlyTenbagger(): CompanySnapshot {
+  const shape = {
+    revenue: 400_000_000, grossProfit: 320_000_000, operatingIncome: 40_000_000,
+    ocf: 60_000_000, capex: 10_000_000, fcf: 50_000_000,
+    cash: 500_000_000, totalDebt: 50_000_000, equity: 700_000_000,
+    sharesDiluted: 100_000_000, sharesOutstanding: 100_000_000,
+    sbc: 40_000_000, rdExpense: 80_000_000,
+  }
+  return base({
+    ticker: 'GROW', marketCap: 2_500_000_000,
+    ttm: ttmSeries(400_000_000, 0.09, shape),
+    quarterly: quarterSeries(110_000_000, 0.09, 0.80),
+  })
+}
+
+/** 매출 감소 소형주 — 낮은 점수와 게이트 0이 나와야 한다 */
+export function valueTrap(): CompanySnapshot {
+  const shape = {
+    revenue: 200_000_000, grossProfit: 60_000_000, operatingIncome: -20_000_000,
+    ocf: -15_000_000, capex: 5_000_000, fcf: -20_000_000,
+    cash: 30_000_000, totalDebt: 120_000_000, equity: 40_000_000,
+    sharesDiluted: 90_000_000, sharesOutstanding: 90_000_000,
+    sbc: 10_000_000, rdExpense: 8_000_000,
+  }
+  return base({
+    ticker: 'TRAP', marketCap: 400_000_000,
+    ttm: ttmSeries(200_000_000, -0.04, shape),
+    quarterly: quarterSeries(48_000_000, -0.04, 0.30),
+    annual: [
+      period('2024-12-31', 'A', { revenue: 200_000_000 }),
+      period('2023-12-31', 'A', { revenue: 240_000_000 }),
+      period('2022-12-31', 'A', { revenue: 280_000_000 }),
+    ],
+  })
+}
+
+/** 펀더멘털은 우수하나 시가총액 $200B — 시총 기회 1점이 나와야 한다 */
+export function megaCap(): CompanySnapshot {
+  const shape = {
+    revenue: 120_000_000_000, grossProfit: 90_000_000_000,
+    operatingIncome: 60_000_000_000, ocf: 65_000_000_000, capex: 5_000_000_000,
+    fcf: 60_000_000_000, cash: 40_000_000_000, totalDebt: 10_000_000_000,
+    equity: 80_000_000_000, sharesDiluted: 24_000_000_000,
+    sharesOutstanding: 24_000_000_000, sbc: 4_000_000_000, rdExpense: 12_000_000_000,
+  }
+  return base({
+    ticker: 'MEGA', marketCap: 200_000_000_000,
+    ttm: ttmSeries(120_000_000_000, 0.05, shape),
+    quarterly: quarterSeries(32_000_000_000, 0.05, 0.75),
+  })
+}
+
+/** TTM이 2개뿐 — completeness가 낮게 나와야 한다 */
+export function sparseData(): CompanySnapshot {
+  return base({
+    ticker: 'SPARSE', marketCap: 800_000_000,
+    ttm: [
+      period('2025-03-31', 'TTM', { revenue: 50_000_000 }),
+      period('2024-12-31', 'TTM', { revenue: 48_000_000 }),
+    ],
+  })
+}
+```
+
+- [ ] **Step 2: 실패하는 테스트 작성**
+
+`tests/engines/tenbagger.test.ts`:
+
+```ts
+import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { parseConfig } from '@/config'
+import { scoreTenbagger, ENGINE_VERSION } from '@/engines/tenbagger'
+import { evaluateQuality } from '@/engines/quality'
+import { earlyTenbagger, valueTrap, megaCap, sparseData } from '../fixtures/companies'
+
+const cfg = parseConfig(readFileSync('config.yaml', 'utf8'))
+
+function run(s: ReturnType<typeof earlyTenbagger>) {
+  const flags = evaluateQuality(s, cfg)
+  return { result: scoreTenbagger(s, cfg, flags), flags }
+}
+
+describe('scoreTenbagger — 구조', () => {
+  const { result } = run(earlyTenbagger())
+
+  it('팩터 9개를 모두 보고한다', () => {
+    expect(result.factors).toHaveLength(9)
+    expect(result.factors.map((f) => f.key)).toContain('institutional_insider')
+  })
+
+  it('가중치 합이 100이다', () => {
+    expect(result.factors.reduce((s, f) => s + f.weight, 0)).toBe(100)
+  })
+
+  it('기관/내부자는 NOT_IMPLEMENTED다', () => {
+    const f = result.factors.find((x) => x.key === 'institutional_insider')!
+    expect(f.status).toBe('NOT_IMPLEMENTED')
+  })
+
+  it('ENGINE_VERSION이 정의되어 있다', () => {
+    expect(ENGINE_VERSION).toMatch(/\S/)
+  })
+})
+
+describe('scoreTenbagger — 정규화', () => {
+  it('NOT_IMPLEMENTED는 completeness 분모에서 제외된다', () => {
+    const { result } = run(earlyTenbagger())
+    // 9개 중 기관(5점) 제외 → 분모 95. 나머지가 모두 채점되면 completeness 1.0
+    expect(result.completeness).toBeCloseTo(1.0, 2)
+  })
+
+  it('점수는 채점된 가중치로만 정규화된다', () => {
+    const { result } = run(earlyTenbagger())
+    const scoredFactors = result.factors.filter((f) => f.status === 'SCORED')
+    const points = scoredFactors.reduce((s, f) => s + (f.points ?? 0), 0)
+    const weights = scoredFactors.reduce((s, f) => s + f.weight, 0)
+    expect(result.score).toBeCloseTo((100 * points) / weights, 6)
+  })
+
+  it('데이터가 부족하면 completeness가 낮다', () => {
+    const { result } = run(sparseData())
+    expect(result.completeness).toBeLessThan(cfg.scoring.min_completeness)
+  })
+
+  it('채점된 팩터가 하나도 없으면 score는 null', () => {
+    const empty = { ...sparseData(), ttm: [], quarterly: [], marketCap: null }
+    const { result } = run(empty)
+    expect(result.score).toBeNull()
+    expect(result.completeness).toBe(0)
+  })
+})
+
+describe('scoreTenbagger — 픽스처 기업별 기대 동작', () => {
+  it('초기 텐배거 패턴은 높은 점수', () => {
+    const { result } = run(earlyTenbagger())
+    expect(result.score!).toBeGreaterThan(65)
+  })
+
+  it('밸류 트랩은 낮은 점수이고 시총 기회 게이트가 0이다', () => {
+    const { result, flags } = run(valueTrap())
+    expect(result.score!).toBeLessThan(35)
+    const mc = result.factors.find((f) => f.key === 'market_cap_opportunity')!
+    expect(mc.points).toBe(0)
+    expect(flags.some((f) => f.code === 'REVENUE_DECLINE_2Y')).toBe(true)
+  })
+
+  it('밸류 트랩이 초기 텐배거보다 반드시 낮다', () => {
+    expect(run(valueTrap()).result.score!).toBeLessThan(run(earlyTenbagger()).result.score!)
+  })
+
+  it('메가캡은 시총 기회 1점이지만 다른 팩터는 우수하다', () => {
+    const { result } = run(megaCap())
+    const mc = result.factors.find((f) => f.key === 'market_cap_opportunity')!
+    expect(mc.points).toBe(1)
+    const gm = result.factors.find((f) => f.key === 'gross_margin')!
+    expect(gm.points!).toBeGreaterThan(7)
+  })
+
+  it('메가캡이 초기 텐배거보다 낮다 — 규모 자체가 성장 잠재력을 제한한다', () => {
+    expect(run(megaCap()).result.score!).toBeLessThan(run(earlyTenbagger()).result.score!)
+  })
+})
+```
+
+- [ ] **Step 3: 테스트 실패 확인**
+
+Run: `npx vitest run tests/engines/tenbagger.test.ts`
+Expected: FAIL — `Cannot find module '@/engines/tenbagger'`
+
+- [ ] **Step 4: 구현**
+
+`src/engines/tenbagger/index.ts`:
+
+```ts
+import type { AppConfig } from '@/config'
+import type { CompanySnapshot, FactorResult, RedFlag } from '@/domain/types'
+import type { FactorContext, FactorFn } from './factor-utils.js'
+import { revenueGrowthFactor } from './factors/revenue-growth.js'
+import { revenueAccelerationFactor } from './factors/revenue-acceleration.js'
+import { tamIndustryGrowthFactor } from './factors/tam-industry-growth.js'
+import { grossMarginFactor } from './factors/gross-margin.js'
+import { operatingLeverageFactor } from './factors/operating-leverage.js'
+import { marketCapOpportunityFactor } from './factors/market-cap-opportunity.js'
+import { competitiveAdvantageFactor } from './factors/competitive-advantage.js'
+import { balanceSheetFactor } from './factors/balance-sheet.js'
+import { institutionalInsiderFactor } from './factors/institutional-insider.js'
+
+/** 팩터 구성이나 정규화 규칙을 바꾸면 반드시 올린다. scores.engine_version에 기록된다. */
+export const ENGINE_VERSION = 'tenbagger-1.0.0'
+
+const FACTORS: FactorFn[] = [
+  revenueGrowthFactor,
+  revenueAccelerationFactor,
+  tamIndustryGrowthFactor,
+  grossMarginFactor,
+  operatingLeverageFactor,
+  marketCapOpportunityFactor,
+  competitiveAdvantageFactor,
+  balanceSheetFactor,
+  institutionalInsiderFactor,
+]
+
+export type TenbaggerResult = {
+  score: number | null
+  completeness: number
+  factors: FactorResult[]
+}
+
+export function scoreTenbagger(
+  snapshot: CompanySnapshot,
+  cfg: AppConfig,
+  flags: RedFlag[],
+): TenbaggerResult {
+  const ctx: FactorContext = { snapshot, cfg, flags }
+  const factors = FACTORS.map((fn) => fn(ctx))
+
+  let scoredPoints = 0
+  let scoredWeight = 0
+  let implementedWeight = 0
+
+  for (const f of factors) {
+    if (f.status !== 'NOT_IMPLEMENTED') implementedWeight += f.weight
+    if (f.status === 'SCORED') {
+      scoredPoints += f.points ?? 0
+      scoredWeight += f.weight
+    }
+  }
+
+  return {
+    score: scoredWeight === 0 ? null : (100 * scoredPoints) / scoredWeight,
+    completeness: implementedWeight === 0 ? 0 : scoredWeight / implementedWeight,
+    factors,
+  }
+}
+```
+
+- [ ] **Step 5: 테스트 통과 확인**
+
+Run: `npx vitest run tests/engines/tenbagger.test.ts`
+Expected: PASS (12 tests)
+
+점수 기대값이 빗나가면 **곡선을 먼저 의심하지 말고 픽스처를 확인한다.** 예를 들어 `earlyTenbagger`의 분기 성장률 0.09는 TTM YoY 약 42%가 되어야 한다. 실제 값을 `console.log`로 확인한 뒤, 픽스처가 의도대로면 `config.yaml`의 곡선을 조정하고 그 변경을 커밋 메시지에 남긴다.
+
+- [ ] **Step 6: 커밋**
+
+```bash
+git add -A
+git commit -m "feat: Tenbagger 엔진 조립 — rescale 및 completeness
+
+채점된 팩터의 가중치로만 정규화하고 결측을 0점으로 처리하지 않는다.
+NOT_IMPLEMENTED는 모든 기업에 동일 적용되므로 completeness 분모에서 제외하고
+NO_DATA는 분모에 남겨 그 기업의 데이터 결함을 드러낸다.
+픽스처 4종으로 상대 순위(텐배거 > 메가캡 > 밸류트랩)를 고정한다."
+```
+
+---
+
+### Task 20: Leader / Challenger / Emerging 분류 엔진
+
+**Files:**
+- Create: `src/engines/classify/index.ts`
+- Test: `tests/engines/classify.test.ts`
+
+**Interfaces:**
+- Consumes: `CompanySnapshot`/`Category` (Task 2), `AppConfig` (Task 1)
+- Produces:
+  - `classifyIndustry(members: CompanySnapshot[], cfg: AppConfig): Map<number, Category>` — 한 산업 내에서 판정
+  - `classifyAll(snapshots: CompanySnapshot[], cfg: AppConfig): Map<number, Category>` — 산업별로 묶어 전체 판정
+
+**규칙 (설계 문서 §10)**
+
+```
+Leader: 시총 내림차순. 시총 ≥ (산업 최대 × leader_ratio_of_max), 최대 5개, 최소 2개.
+        후보가 leader_min_industry_candidates(3) 미만인 산업은 Leader를 지정하지 않는다.
+비-Leader:
+  시총 < $2B                      → EMERGING
+  $2B ≤ 시총 < $5B                → 영업이익 ≤ 0 또는 매출 < $500M 이면 EMERGING, 아니면 CHALLENGER
+  $5B ≤ 시총                      → CHALLENGER
+시총이 null이면 EMERGING (규모를 알 수 없는 기업을 벤치마크로 쓸 수 없다)
+```
+
+- [ ] **Step 1: 실패하는 테스트 작성**
+
+`tests/engines/classify.test.ts`:
+
+```ts
+import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { parseConfig } from '@/config'
+import { classifyIndustry, classifyAll } from '@/engines/classify'
+import type { CompanySnapshot, FinancialPeriod } from '@/domain/types'
+
+const cfg = parseConfig(readFileSync('config.yaml', 'utf8'))
+
+function co(
+  cik: number, marketCap: number | null,
+  fin: Partial<FinancialPeriod> = {}, industrySlug = 'semiconductors',
+): CompanySnapshot {
+  const ttm: FinancialPeriod[] = [{
+    periodEnd: '2025-03-31', periodType: 'TTM',
+    revenue: 1_000_000_000, grossProfit: null, operatingIncome: 100_000_000,
+    netIncome: null, ocf: null, capex: null, fcf: null, cash: null,
+    totalDebt: null, equity: null, sharesDiluted: null, sharesOutstanding: null,
+    sbc: null, rdExpense: null, ...fin,
+  }]
+  return {
+    cik, ticker: `T${cik}`, name: `T${cik}`,
+    themeSlug: 'ai-software-semi', industrySlug,
+    industry: {
+      slug: industrySlug, name: industrySlug, themeSlug: 'ai-software-semi',
+      tamUsd: null, tamCagr: null, tamSource: null, tamAsOf: null,
+    },
+    classificationSource: 'sic', marketCap, price: null, priceDate: null,
+    sharesOutstanding: null, ttm, annual: [], quarterly: [],
+    industryStats: {
+      candidateCount: 0, medianGrossMargin: null,
+      medianRevenueGrowth: null, distributions: {},
+    },
+    asOf: '2026-08-09',
+  }
+}
+
+describe('classifyIndustry — Leader', () => {
+  it('시총 최대값의 25% 이상인 상위 기업을 Leader로 지정한다', () => {
+    const m = classifyIndustry([
+      co(1, 400e9), co(2, 200e9), co(3, 50e9), co(4, 10e9), co(5, 1e9),
+    ], cfg)
+    expect(m.get(1)).toBe('LEADER')
+    expect(m.get(2)).toBe('LEADER')
+    expect(m.get(3)).toBe('CHALLENGER')   // 50e9 < 400e9 × 0.25 = 100e9
+  })
+
+  it('조건에 미달해도 상위 2개는 Leader로 만든다', () => {
+    const m = classifyIndustry([co(1, 400e9), co(2, 10e9), co(3, 5e9)], cfg)
+    expect(m.get(1)).toBe('LEADER')
+    expect(m.get(2)).toBe('LEADER')
+  })
+
+  it('Leader는 최대 5개까지', () => {
+    const members = Array.from({ length: 8 }, (_, i) => co(i + 1, 100e9 - i * 1e9))
+    const m = classifyIndustry(members, cfg)
+    expect([...m.values()].filter((v) => v === 'LEADER')).toHaveLength(5)
+  })
+
+  it('후보가 3개 미만이면 Leader를 지정하지 않는다', () => {
+    const m = classifyIndustry([co(1, 400e9), co(2, 100e9)], cfg)
+    expect([...m.values()]).not.toContain('LEADER')
+    expect(m.get(1)).toBe('CHALLENGER')
+  })
+})
+
+describe('classifyIndustry — Challenger / Emerging', () => {
+  const leaders = [co(101, 500e9), co(102, 400e9), co(103, 300e9)]
+
+  it('시총 $2B 미만은 Emerging', () => {
+    const m = classifyIndustry([...leaders, co(1, 1.5e9)], cfg)
+    expect(m.get(1)).toBe('EMERGING')
+  })
+
+  it('$2B~$5B에서 영업적자면 Emerging', () => {
+    const m = classifyIndustry(
+      [...leaders, co(1, 3e9, { operatingIncome: -10_000_000 })], cfg,
+    )
+    expect(m.get(1)).toBe('EMERGING')
+  })
+
+  it('$2B~$5B에서 매출이 $500M 미만이면 Emerging', () => {
+    const m = classifyIndustry([...leaders, co(1, 3e9, { revenue: 300_000_000 })], cfg)
+    expect(m.get(1)).toBe('EMERGING')
+  })
+
+  it('$2B~$5B에서 흑자이고 매출이 충분하면 Challenger', () => {
+    const m = classifyIndustry([...leaders, co(1, 3e9)], cfg)
+    expect(m.get(1)).toBe('CHALLENGER')
+  })
+
+  it('$5B 이상 비-Leader는 Challenger', () => {
+    const m = classifyIndustry([...leaders, co(1, 20e9, { operatingIncome: -1 })], cfg)
+    expect(m.get(1)).toBe('CHALLENGER')
+  })
+
+  it('시총이 null이면 Emerging', () => {
+    const m = classifyIndustry([...leaders, co(1, null)], cfg)
+    expect(m.get(1)).toBe('EMERGING')
+  })
+})
+
+describe('classifyAll', () => {
+  it('산업별로 독립 판정한다', () => {
+    const m = classifyAll([
+      co(1, 400e9, {}, 'semiconductors'), co(2, 200e9, {}, 'semiconductors'),
+      co(3, 100e9, {}, 'semiconductors'),
+      co(4, 3e9, {}, 'cybersecurity'), co(5, 2.5e9, {}, 'cybersecurity'),
+      co(6, 2.2e9, {}, 'cybersecurity'),
+    ], cfg)
+    expect(m.get(1)).toBe('LEADER')
+    expect(m.get(4)).toBe('LEADER')   // 작은 산업에서도 최대값 기준으로 Leader가 나온다
+    expect(m.size).toBe(6)
+  })
+})
+```
+
+- [ ] **Step 2: 테스트 실패 확인**
+
+Run: `npx vitest run tests/engines/classify.test.ts`
+Expected: FAIL — `Cannot find module '@/engines/classify'`
+
+- [ ] **Step 3: 구현**
+
+`src/engines/classify/index.ts`:
+
+```ts
+import type { AppConfig } from '@/config'
+import type { Category, CompanySnapshot } from '@/domain/types'
+
+function nonLeaderCategory(s: CompanySnapshot, cfg: AppConfig): Category {
+  const c = cfg.classification
+  const mc = s.marketCap
+  // 규모를 알 수 없는 기업을 Challenger로 올리지 않는다
+  if (mc === null) return 'EMERGING'
+  if (mc < c.challenger_min_market_cap) return 'EMERGING'
+
+  if (mc < c.emerging_max_market_cap) {
+    const ttm = s.ttm[0]
+    const unprofitable = ttm?.operatingIncome !== undefined && ttm?.operatingIncome !== null
+      ? ttm.operatingIncome <= 0
+      : true   // 손익을 모르면 성숙하다고 볼 수 없다
+    const small = ttm?.revenue === null || ttm?.revenue === undefined
+      ? true
+      : ttm.revenue < c.emerging_revenue_threshold
+    return unprofitable || small ? 'EMERGING' : 'CHALLENGER'
+  }
+  return 'CHALLENGER'
+}
+
+export function classifyIndustry(
+  members: CompanySnapshot[],
+  cfg: AppConfig,
+): Map<number, Category> {
+  const c = cfg.classification
+  const out = new Map<number, Category>()
+
+  const ranked = [...members].sort(
+    (a, b) => (b.marketCap ?? -1) - (a.marketCap ?? -1),
+  )
+
+  const leaders = new Set<number>()
+  // 후보가 적은 산업에서 "상위 2개"는 정보가 아니다
+  if (ranked.length >= c.leader_min_industry_candidates) {
+    const maxCap = ranked[0]?.marketCap ?? null
+    if (maxCap !== null && maxCap > 0) {
+      const threshold = maxCap * c.leader_ratio_of_max
+      for (let i = 0; i < ranked.length && leaders.size < c.leader_max; i++) {
+        const s = ranked[i]!
+        const qualifies = s.marketCap !== null && s.marketCap >= threshold
+        if (qualifies || i < c.leader_min) leaders.add(s.cik)
+        else break
+      }
+    }
+  }
+
+  for (const s of members) {
+    out.set(s.cik, leaders.has(s.cik) ? 'LEADER' : nonLeaderCategory(s, cfg))
+  }
+  return out
+}
+
+export function classifyAll(
+  snapshots: CompanySnapshot[],
+  cfg: AppConfig,
+): Map<number, Category> {
+  const byIndustry = new Map<string, CompanySnapshot[]>()
+  for (const s of snapshots) {
+    const list = byIndustry.get(s.industrySlug)
+    if (list) list.push(s)
+    else byIndustry.set(s.industrySlug, [s])
+  }
+
+  const out = new Map<number, Category>()
+  for (const members of byIndustry.values()) {
+    for (const [cik, category] of classifyIndustry(members, cfg)) out.set(cik, category)
+  }
+  return out
+}
+```
+
+- [ ] **Step 4: 테스트 통과 확인**
+
+Run: `npx vitest run tests/engines/classify.test.ts`
+Expected: PASS (11 tests)
+
+- [ ] **Step 5: 커밋**
+
+```bash
+git add -A
+git commit -m "feat: Leader/Challenger/Emerging 분류 엔진
+
+스펙에서 겹치던 Challenger(2B~30B)와 Emerging(300M~5B) 구간을
+2B~5B 구간의 수익성·매출 규모 조건으로 결정론적으로 해소한다.
+후보 3개 미만 산업은 Leader를 지정하지 않는다."
+```
+
+---
+
+### Task 21: compute-scores 잡
+
+**Files:**
+- Create: `src/db/repositories/scores.ts`, `src/pipeline/jobs/compute-scores.ts`
+- Test: `tests/pipeline/compute-scores.test.ts`
+
+**Interfaces:**
+- Consumes: `buildSnapshots` (Task 14), `evaluateQuality` (Task 15), `scoreTenbagger`/`ENGINE_VERSION` (Task 19), `classifyAll` (Task 20), `percentileOf` (Task 2), `DISTRIBUTION_KEYS` (Task 14)
+- Produces:
+  - `writeScores(raw, rows: ScoreWrite[]): void`
+  - `type ScoreWrite = { cik: number; asOf: string; tenbagger: number | null; completeness: number; category: Category | null; engineVersion: string; factors: FactorResult[]; percentiles: Record<string, number | null>; flags: RedFlag[] }`
+  - `computeScores(deps: ScoreDeps): Promise<JobStats>`
+  - `type ScoreDeps = { raw; cfg; taxonomy; asOf: string }`
+  - `configHash(cfg: AppConfig): string` — `engine_version`에 붙일 config 내용 해시 8자리
+
+**팩터 키 → 분포 키 매핑** (백분위 표시용). 매핑이 없는 팩터는 백분위를 저장하지 않는다.
+
+```
+revenue_growth        → revenue_growth
+revenue_acceleration  → revenue_acceleration
+gross_margin          → gross_margin
+market_cap_opportunity→ market_cap
+```
+
+- [ ] **Step 1: 실패하는 테스트 작성**
+
+`tests/pipeline/compute-scores.test.ts`:
+
+```ts
+import { describe, it, expect, beforeAll } from 'vitest'
+import { readFileSync, mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import type Database from 'better-sqlite3'
+import { getRawDb, runMigrations } from '@/db/client'
+import { parseConfig } from '@/config'
+import { loadTaxonomy } from '@/taxonomy'
+import { computeScores } from '@/pipeline/jobs/compute-scores'
+
+const cfg = parseConfig(readFileSync('config.yaml', 'utf8'))
+const taxonomy = loadTaxonomy()
+
+let raw: Database.Database
+let stats: Record<string, unknown>
+
+function seed(db: Database.Database, cik: number, ticker: string, marketCap: number,
+              revenueNow: number, revenuePrior: number, gm: number) {
+  db.prepare(
+    `INSERT INTO companies (cik, ticker, name, sic, is_active, first_seen, last_updated)
+     VALUES (?, ?, ?, '3674', 1, '2026-08-09', '2026-08-09')`,
+  ).run(cik, ticker, ticker)
+  db.prepare(
+    `INSERT INTO company_industry (cik, industry_slug, theme_slug, is_primary, source)
+     VALUES (?, 'semiconductors', 'ai-software-semi', 1, 'sic')`,
+  ).run(cik)
+  const ins = db.prepare(
+    `INSERT INTO financials (cik, period_end, period_type, revenue, gross_profit, computed_at)
+     VALUES (?, ?, 'TTM', ?, ?, '2026-08-09')`,
+  )
+  const ends = ['2025-03-31', '2024-12-31', '2024-09-30', '2024-06-30', '2024-03-31']
+  ends.forEach((e, i) => {
+    const rev = i === 4 ? revenuePrior : revenueNow
+    ins.run(cik, e, rev, rev * gm)
+  })
+  db.prepare(
+    `INSERT INTO market_data (cik, date, price, shares_outstanding, market_cap)
+     VALUES (?, '2026-08-08', 10, ?, ?)`,
+  ).run(cik, marketCap / 10, marketCap)
+}
+
+beforeAll(async () => {
+  raw = getRawDb(join(mkdtempSync(join(tmpdir(), 'tb-score-')), 'sc.db'))
+  runMigrations(raw)
+  seed(raw, 1, 'BIG', 300e9, 100e9, 90e9, 0.70)
+  seed(raw, 2, 'MID', 8e9, 2e9, 1.5e9, 0.65)
+  seed(raw, 3, 'SMALL', 900e6, 200e6, 130e6, 0.80)
+  stats = await computeScores({ raw, cfg, taxonomy, asOf: '2026-08-09' })
+})
+
+describe('computeScores', () => {
+  it('모든 유니버스 기업의 점수를 쓴다', () => {
+    const n = raw.prepare('SELECT COUNT(*) c FROM scores').get() as { c: number }
+    expect(n.c).toBe(3)
+    expect(stats.scored).toBe(3)
+  })
+
+  it('팩터 9개를 score_factors에 남긴다', () => {
+    const n = raw
+      .prepare('SELECT COUNT(*) c FROM score_factors WHERE cik = 3')
+      .get() as { c: number }
+    expect(n.c).toBe(9)
+  })
+
+  it('분류 결과를 저장한다', () => {
+    const rows = raw
+      .prepare('SELECT cik, category FROM scores ORDER BY cik')
+      .all() as { cik: number; category: string }[]
+    expect(rows.find((r) => r.cik === 1)!.category).toBe('LEADER')
+    expect(rows.find((r) => r.cik === 3)!.category).toBe('EMERGING')
+  })
+
+  it('소형 고성장주가 메가캡보다 높은 점수를 받는다', () => {
+    const rows = raw
+      .prepare('SELECT cik, tenbagger FROM scores')
+      .all() as { cik: number; tenbagger: number }[]
+    const big = rows.find((r) => r.cik === 1)!.tenbagger
+    const small = rows.find((r) => r.cik === 3)!.tenbagger
+    expect(small).toBeGreaterThan(big)
+  })
+
+  it('백분위를 저장한다', () => {
+    const r = raw
+      .prepare(
+        "SELECT percentile FROM score_factors WHERE cik = 3 AND factor_key = 'gross_margin'",
+      )
+      .get() as { percentile: number | null }
+    expect(r.percentile).toBeCloseTo(2 / 3)   // 0.80은 3개 중 2개보다 크다
+  })
+
+  it('engine_version에 config 해시를 포함한다', () => {
+    const r = raw
+      .prepare('SELECT engine_version FROM scores WHERE cik = 1')
+      .get() as { engine_version: string }
+    expect(r.engine_version).toMatch(/^tenbagger-1\.0\.0\+[0-9a-f]{8}$/)
+  })
+
+  it('as_of가 다르면 이력이 쌓이고 latest_scores는 1건만 준다', async () => {
+    await computeScores({ raw, cfg, taxonomy, asOf: '2026-08-16' })
+    const all = raw
+      .prepare('SELECT COUNT(*) c FROM scores WHERE cik = 1')
+      .get() as { c: number }
+    const latest = raw
+      .prepare('SELECT COUNT(*) c FROM latest_scores WHERE cik = 1')
+      .get() as { c: number }
+    expect(all.c).toBe(2)
+    expect(latest.c).toBe(1)
+  })
+
+  it('job_runs에 성공 기록을 남긴다', () => {
+    const r = raw
+      .prepare("SELECT status FROM job_runs WHERE job='scores' ORDER BY id DESC")
+      .get() as { status: string }
+    expect(r.status).toBe('succeeded')
+  })
+})
+```
+
+- [ ] **Step 2: 테스트 실패 확인**
+
+Run: `npx vitest run tests/pipeline/compute-scores.test.ts`
+Expected: FAIL — `Cannot find module '@/pipeline/jobs/compute-scores'`
+
+- [ ] **Step 3: scores 리포지토리 구현**
+
+`src/db/repositories/scores.ts`:
+
+```ts
+import type Database from 'better-sqlite3'
+import type { Category, FactorResult, RedFlag } from '@/domain/types'
+
+export type ScoreWrite = {
+  cik: number
+  asOf: string
+  tenbagger: number | null
+  completeness: number
+  category: Category | null
+  engineVersion: string
+  factors: FactorResult[]
+  percentiles: Record<string, number | null>
+  flags: RedFlag[]
+}
+
+export function writeScores(raw: Database.Database, rows: ScoreWrite[]): void {
+  const insScore = raw.prepare(
+    `INSERT OR REPLACE INTO scores
+       (cik, as_of, tenbagger, completeness, category, engine_version)
+     VALUES (@cik, @asOf, @tenbagger, @completeness, @category, @engineVersion)`,
+  )
+  const insFactor = raw.prepare(
+    `INSERT OR REPLACE INTO score_factors
+       (cik, as_of, engine, factor_key, raw, points, weight, status, percentile, detail)
+     VALUES (@cik, @asOf, 'tenbagger', @key, @raw, @points, @weight, @status, @percentile, @detail)`,
+  )
+  const insFlag = raw.prepare(
+    `INSERT OR REPLACE INTO red_flags (cik, as_of, code, severity, message, evidence)
+     VALUES (@cik, @asOf, @code, @severity, @message, @evidence)`,
+  )
+
+  raw.transaction(() => {
+    for (const r of rows) {
+      insScore.run({
+        cik: r.cik, asOf: r.asOf, tenbagger: r.tenbagger,
+        completeness: r.completeness, category: r.category,
+        engineVersion: r.engineVersion,
+      })
+      for (const f of r.factors) {
+        insFactor.run({
+          cik: r.cik, asOf: r.asOf, key: f.key, raw: f.raw, points: f.points,
+          weight: f.weight, status: f.status,
+          percentile: r.percentiles[f.key] ?? null, detail: f.detail,
+        })
+      }
+      for (const flag of r.flags) {
+        insFlag.run({
+          cik: r.cik, asOf: r.asOf, code: flag.code, severity: flag.severity,
+          message: flag.message, evidence: JSON.stringify(flag.evidence),
+        })
+      }
+    }
+  })()
+}
+```
+
+- [ ] **Step 4: 잡 구현**
+
+`src/pipeline/jobs/compute-scores.ts`:
+
+```ts
+import { createHash } from 'node:crypto'
+import type Database from 'better-sqlite3'
+import type { AppConfig } from '@/config'
+import type { Taxonomy } from '@/taxonomy'
+import { percentileOf } from '@/domain/stats'
+import { evaluateQuality } from '@/engines/quality'
+import { scoreTenbagger, ENGINE_VERSION } from '@/engines/tenbagger'
+import { classifyAll } from '@/engines/classify'
+import { buildSnapshots } from '@/pipeline/snapshot'
+import { writeScores, type ScoreWrite } from '@/db/repositories/scores'
+import { runJob, type JobStats } from '@/pipeline/runner'
+
+/** 팩터 키 → IndustryStats.distributions 키. 없는 팩터는 백분위를 저장하지 않는다. */
+const PERCENTILE_SOURCE: Record<string, string> = {
+  revenue_growth: 'revenue_growth',
+  revenue_acceleration: 'revenue_acceleration',
+  gross_margin: 'gross_margin',
+  market_cap_opportunity: 'market_cap',
+}
+
+export function configHash(cfg: AppConfig): string {
+  return createHash('sha256').update(JSON.stringify(cfg)).digest('hex').slice(0, 8)
+}
+
+export type ScoreDeps = {
+  raw: Database.Database
+  cfg: AppConfig
+  taxonomy: Taxonomy
+  asOf: string
+}
+
+export async function computeScores(deps: ScoreDeps): Promise<JobStats> {
+  const { raw, cfg, taxonomy, asOf } = deps
+
+  return runJob(raw, 'scores', async () => {
+    const snapshots = buildSnapshots({ raw, taxonomy, cfg, asOf })
+    const categories = classifyAll(snapshots, cfg)
+    const engineVersion = `${ENGINE_VERSION}+${configHash(cfg)}`
+
+    const rows: ScoreWrite[] = []
+    let redFlagged = 0
+    let insufficient = 0
+
+    for (const s of snapshots) {
+      const flags = evaluateQuality(s, cfg)
+      const result = scoreTenbagger(s, cfg, flags)
+
+      const percentiles: Record<string, number | null> = {}
+      for (const f of result.factors) {
+        const key = PERCENTILE_SOURCE[f.key]
+        if (!key || f.raw === null) continue
+        const dist = s.industryStats.distributions[key]
+        if (!dist || dist.length < cfg.scoring.min_industry_candidates) continue
+        percentiles[f.key] = percentileOf(dist, f.raw)
+      }
+
+      if (flags.some((f) => f.severity === 'CRITICAL')) redFlagged++
+      if (result.completeness < cfg.scoring.min_completeness) insufficient++
+
+      rows.push({
+        cik: s.cik, asOf, tenbagger: result.score,
+        completeness: result.completeness,
+        category: categories.get(s.cik) ?? null,
+        engineVersion, factors: result.factors, percentiles, flags,
+      })
+    }
+
+    writeScores(raw, rows)
+
+    return {
+      scored: rows.length,
+      redFlagged,
+      insufficient,
+      engineVersion,
+    }
+  })
+}
+```
+
+- [ ] **Step 5: 테스트 통과 확인**
+
+Run: `npx vitest run tests/pipeline/compute-scores.test.ts`
+Expected: PASS (8 tests)
+
+- [ ] **Step 6: 전체 테스트 확인**
+
+Run: `npm test`
+Expected: 모든 테스트 통과
+
+- [ ] **Step 7: 커밋**
+
+```bash
+git add -A
+git commit -m "feat: compute-scores 잡
+
+스냅샷 조립 → Quality Gate → Tenbagger 엔진 → 분류 순으로 실행하고
+점수·팩터·Red Flag를 append-only로 저장한다.
+engine_version에 config 해시를 붙여 점수 변화가 로직 변경 때문인지
+데이터 변경 때문인지 구분할 수 있게 한다."
+```
