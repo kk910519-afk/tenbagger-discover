@@ -16,11 +16,11 @@ beforeAll(() => {
 const EXPECTED_TABLES = [
   'companies', 'listings', 'financial_facts', 'market_data',
   'financials', 'company_industry', 'scores', 'score_factors',
-  'red_flags', 'themes', 'industries', 'job_runs',
+  'red_flags', 'valuations', 'themes', 'industries', 'job_runs',
 ]
 
 describe('마이그레이션', () => {
-  it('테이블 12개를 생성한다', () => {
+  it('테이블 13개를 생성한다', () => {
     const rows = raw
       .prepare("SELECT name FROM sqlite_master WHERE type='table'")
       .all() as { name: string }[]

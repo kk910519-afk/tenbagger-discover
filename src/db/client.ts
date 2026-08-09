@@ -130,6 +130,29 @@ CREATE TABLE IF NOT EXISTS red_flags (
   PRIMARY KEY (cik, as_of, code)
 );
 
+CREATE TABLE IF NOT EXISTS valuations (
+  cik INTEGER NOT NULL,
+  as_of TEXT NOT NULL,
+  fair_value_status TEXT NOT NULL CHECK (fair_value_status IN ('OK','INSUFFICIENT_DATA')),
+  fair_value_reason TEXT,
+  fair_value_per_share REAL,
+  fair_value_assumptions TEXT,
+  fair_value_detail TEXT NOT NULL,
+  price_to_fair_value_status TEXT NOT NULL CHECK (price_to_fair_value_status IN ('OK','UNAVAILABLE')),
+  price_to_fair_value_ratio REAL,
+  margin_of_safety REAL,
+  valuation_status TEXT CHECK (valuation_status IN ('UNDERVALUED','FAIRLY_VALUED','OVERVALUED')),
+  moat_signal TEXT NOT NULL CHECK (moat_signal IN ('WIDE','NARROW','NONE','INSUFFICIENT_DATA')),
+  moat_periods_evaluated INTEGER NOT NULL,
+  moat_periods_clearing INTEGER NOT NULL,
+  moat_evidence TEXT NOT NULL,
+  uncertainty_level TEXT NOT NULL CHECK (uncertainty_level IN ('LOW','MEDIUM','HIGH','VERY_HIGH')),
+  uncertainty_score REAL NOT NULL,
+  uncertainty_drivers TEXT NOT NULL,
+  engine_version TEXT NOT NULL,
+  PRIMARY KEY (cik, as_of)
+);
+
 CREATE TABLE IF NOT EXISTS themes (
   slug TEXT PRIMARY KEY,
   name TEXT NOT NULL,

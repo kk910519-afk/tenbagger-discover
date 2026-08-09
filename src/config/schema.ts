@@ -142,7 +142,51 @@ export const configSchema = z
         runway_low_quarters: z.number(),
       })
       .strict(),
+    valuation: z
+      .object({
+        projection_years: z.number().int().positive(),
+        terminal_growth_rate: z.number(),
+        // x = 예측 연차(1..projection_years), y = 초기값(성장률/마진)에 남아있는 가중치(1=초기값 그대로,
+        // 0=터미널/성숙값으로 완전 수렴). 성장률 페이드와 FCF마진 페이드가 같은 스케줄을 공유한다.
+        fade_curve: curve,
+        mature_fcf_margin: z.number(),
+        price_to_fair_value: z
+          .object({
+            undervalued_max_ratio: z.number().positive(),
+            overvalued_min_ratio: z.number().positive(),
+          })
+          .strict(),
+        moat: z
+          .object({
+            lookback_periods: z.number().int().positive(),
+            min_periods_required: z.number().int().positive(),
+            wide_clear_ratio: z.number().min(0).max(1),
+            narrow_clear_ratio: z.number().min(0).max(1),
+          })
+          .strict(),
+        uncertainty: z
+          .object({
+            growth_lookback_quarters: z.number().int().positive(),
+            min_periods: z.number().int().positive(),
+            revenue_predictability_curve: curve,
+            operating_margin_volatility_curve: curve,
+            data_completeness_curve: curve,
+            level_thresholds: z
+              .object({
+                medium: z.number().min(0).max(1),
+                high: z.number().min(0).max(1),
+                very_high: z.number().min(0).max(1),
+              })
+              .strict(),
+          })
+          .strict(),
+      })
+      .strict(),
   })
   .strict()
+  .refine((cfg) => cfg.valuation.terminal_growth_rate < cfg.scoring.wacc_assumption, {
+    message: 'valuation.terminal_growth_rate는 scoring.wacc_assumption보다 작아야 합니다',
+    path: ['valuation', 'terminal_growth_rate'],
+  })
 
 export type AppConfig = z.infer<typeof configSchema>

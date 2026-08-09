@@ -99,3 +99,24 @@ quality_gate:
   debt_to_ebitda: 5
   runway_critical_quarters: 2
   runway_low_quarters: 6
+
+valuation:
+  projection_years: 5
+  terminal_growth_rate: 0.025
+  fade_curve: [[0, 1.00], [1, 0.80], [2, 0.60], [3, 0.40], [4, 0.20], [5, 0.00]]
+  mature_fcf_margin: 0.15
+  price_to_fair_value:
+    undervalued_max_ratio: 0.85
+    overvalued_min_ratio: 1.15
+  moat:
+    lookback_periods: 8
+    min_periods_required: 4
+    wide_clear_ratio: 0.75
+    narrow_clear_ratio: 0.40
+  uncertainty:
+    growth_lookback_quarters: 8
+    min_periods: 4
+    revenue_predictability_curve: [[0.00, 0.00], [0.08, 0.20], [0.15, 0.45], [0.30, 0.75], [0.50, 1.00]]
+    operating_margin_volatility_curve: [[0.00, 0.00], [0.02, 0.20], [0.05, 0.45], [0.10, 0.75], [0.20, 1.00]]
+    data_completeness_curve: [[0.00, 1.00], [0.50, 0.75], [0.70, 0.45], [0.85, 0.20], [1.00, 0.00]]
+    level_thresholds: { medium: 0.25, high: 0.50, very_high: 0.75 }

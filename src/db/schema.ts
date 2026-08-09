@@ -152,6 +152,32 @@ export const industries = sqliteTable('industries', {
   tamAsOf: text('tam_as_of'),
 })
 
+export const valuations = sqliteTable(
+  'valuations',
+  {
+    cik: integer('cik').notNull(),
+    asOf: text('as_of').notNull(),
+    fairValueStatus: text('fair_value_status').notNull(),
+    fairValueReason: text('fair_value_reason'),
+    fairValuePerShare: real('fair_value_per_share'),
+    fairValueAssumptions: text('fair_value_assumptions'),
+    fairValueDetail: text('fair_value_detail').notNull(),
+    priceToFairValueStatus: text('price_to_fair_value_status').notNull(),
+    priceToFairValueRatio: real('price_to_fair_value_ratio'),
+    marginOfSafety: real('margin_of_safety'),
+    valuationStatus: text('valuation_status'),
+    moatSignal: text('moat_signal').notNull(),
+    moatPeriodsEvaluated: integer('moat_periods_evaluated').notNull(),
+    moatPeriodsClearing: integer('moat_periods_clearing').notNull(),
+    moatEvidence: text('moat_evidence').notNull(),
+    uncertaintyLevel: text('uncertainty_level').notNull(),
+    uncertaintyScore: real('uncertainty_score').notNull(),
+    uncertaintyDrivers: text('uncertainty_drivers').notNull(),
+    engineVersion: text('engine_version').notNull(),
+  },
+  (t) => ({ pk: primaryKey({ columns: [t.cik, t.asOf] }) }),
+)
+
 export const jobRuns = sqliteTable('job_runs', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   job: text('job').notNull(),

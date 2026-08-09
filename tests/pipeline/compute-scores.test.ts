@@ -6,7 +6,7 @@ import type Database from 'better-sqlite3'
 import { getRawDb, runMigrations } from '@/db/client'
 import { parseConfig } from '@/config'
 import { loadTaxonomy } from '@/taxonomy'
-import { computeScores, configHash } from '@/pipeline/jobs/compute-scores'
+import { computeScores, configHash, valuationConfigHash } from '@/pipeline/jobs/compute-scores'
 
 const cfg = parseConfig(readFileSync('config.yaml', 'utf8'))
 const taxonomy = loadTaxonomy()
@@ -318,6 +318,56 @@ describe('computeScores', () => {
       .prepare("SELECT status FROM job_runs WHERE job='scores' ORDER BY id DESC")
       .get() as { status: string }
     expect(r.status).toBe('succeeded')
+  })
+})
+
+describe('computeScores — valuations', () => {
+  it('점수와 함께 회사당 한 행씩 valuations를 쓴다', () => {
+    const n = raw
+      .prepare('SELECT COUNT(*) c FROM valuations WHERE as_of = ?')
+      .get('2026-08-09') as { c: number }
+    expect(n.c).toBe(8)
+  })
+
+  it('FCF·영업이익 데이터가 없는 시드 기업은 NOT_CASH_GENERATIVE로 INSUFFICIENT_DATA를 남긴다', () => {
+    // seed()는 revenue·gross_profit만 채우고 operating_income·fcf는 비워 둔다 — 현금전환
+    // 증거가 전혀 없는 기업이 valuations에서도 조용히 숫자를 얻지 않는지 확인한다.
+    const r = raw
+      .prepare('SELECT fair_value_status, fair_value_reason FROM valuations WHERE cik = 1 AND as_of = ?')
+      .get('2026-08-09') as { fair_value_status: string; fair_value_reason: string | null }
+    expect(r.fair_value_status).toBe('INSUFFICIENT_DATA')
+    expect(r.fair_value_reason).toBe('NOT_CASH_GENERATIVE')
+  })
+
+  it('engine_version에 valuation config 해시를 포함한다', () => {
+    const r = raw
+      .prepare('SELECT engine_version FROM valuations WHERE cik = 1 AND as_of = ?')
+      .get('2026-08-09') as { engine_version: string }
+    expect(r.engine_version).toMatch(/^valuation-1\.0\.0\+[0-9a-f]{8}$/)
+  })
+
+  it('동일 as_of 재실행은 valuations도 중복 없이 교체한다', async () => {
+    await computeScores({ raw, cfg, taxonomy, asOf: '2026-08-09' })
+    const n = raw
+      .prepare('SELECT COUNT(*) c FROM valuations WHERE as_of = ?')
+      .get('2026-08-09') as { c: number }
+    expect(n.c).toBe(8)
+  })
+})
+
+describe('valuationConfigHash', () => {
+  it('valuation 섹션과 무관한 설정이 달라도 해시는 같다', () => {
+    const a = structuredClone(cfg)
+    const b = structuredClone(cfg)
+    b.scoring.wacc_assumption = a.scoring.wacc_assumption + 0.01
+    expect(valuationConfigHash(b)).toBe(valuationConfigHash(a))
+  })
+
+  it('valuation 섹션 값이 다르면 해시도 다르다', () => {
+    const a = structuredClone(cfg)
+    const b = structuredClone(cfg)
+    b.valuation.mature_fcf_margin = a.valuation.mature_fcf_margin + 0.01
+    expect(valuationConfigHash(b)).not.toBe(valuationConfigHash(a))
   })
 })
 

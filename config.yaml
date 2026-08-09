@@ -102,3 +102,28 @@ quality_gate:
   debt_to_ebitda: 5
   runway_critical_quarters: 2
   runway_low_quarters: 6
+
+# Fair Value 엔진(src/engines/valuation) 설정. wacc_assumption·tax_rate는 scoring에서 재사용한다.
+valuation:
+  projection_years: 5
+  terminal_growth_rate: 0.025       # 장기 명목 GDP 성장률에 근접한 값 — scoring.wacc_assumption(0.09)보다 반드시 작아야 함
+  # x=예측 연차(1..projection_years), y=초기값(성장률/FCF마진)에 남는 가중치.
+  # y=1: 초기 추정치 그대로, y=0: 터미널 성장률/성숙 마진으로 완전 수렴.
+  # projection_years년째에 0에 도달해 명시적 예측과 터미널가치 사이에 불연속이 생기지 않게 한다.
+  fade_curve: [[0, 1.00], [1, 0.80], [2, 0.60], [3, 0.40], [4, 0.20], [5, 0.00]]
+  mature_fcf_margin: 0.15           # 장기 정상화 FCF마진 가정
+  price_to_fair_value:
+    undervalued_max_ratio: 0.85     # price/fair_value ≤ 0.85 → UNDERVALUED
+    overvalued_min_ratio: 1.15      # price/fair_value ≥ 1.15 → OVERVALUED
+  moat:
+    lookback_periods: 8             # 최근 연간 8개 기간(최대)까지만 본다
+    min_periods_required: 4         # ROIC 산출 가능 기간이 4개 미만이면 INSUFFICIENT_DATA
+    wide_clear_ratio: 0.75          # 유효 기간의 75% 이상에서 ROIC>WACC → WIDE
+    narrow_clear_ratio: 0.40        # 40~75% → NARROW, 그 미만은 NONE
+  uncertainty:
+    growth_lookback_quarters: 8     # 매출 YoY·영업이익률 변동성 계산에 쓰는 최근 TTM 구간 수
+    min_periods: 4                  # 이 미만이면 해당 드라이버는 UNAVAILABLE
+    revenue_predictability_curve: [[0.00, 0.00], [0.08, 0.20], [0.15, 0.45], [0.30, 0.75], [0.50, 1.00]]
+    operating_margin_volatility_curve: [[0.00, 0.00], [0.02, 0.20], [0.05, 0.45], [0.10, 0.75], [0.20, 1.00]]
+    data_completeness_curve: [[0.00, 1.00], [0.50, 0.75], [0.70, 0.45], [0.85, 0.20], [1.00, 0.00]]
+    level_thresholds: { medium: 0.25, high: 0.50, very_high: 0.75 }
