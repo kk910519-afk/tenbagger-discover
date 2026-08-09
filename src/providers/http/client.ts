@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { mkdirSync, readFileSync, writeFileSync, existsSync, renameSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync, existsSync, renameSync, unlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 
@@ -60,8 +60,17 @@ export function createHttpClient(opts: HttpClientOptions): HttpClient {
         const buf = Buffer.from(await res.arrayBuffer())
         if (o?.cache) {
           const tmpPath = join(opts.cacheDir, `${randomBytes(8).toString('hex')}.tmp`)
-          writeFileSync(tmpPath, buf)
-          renameSync(tmpPath, path)
+          try {
+            writeFileSync(tmpPath, buf)
+            renameSync(tmpPath, path)
+          } catch (e) {
+            // Clean up temp file on write/rename failure to avoid orphans
+            try {
+              if (existsSync(tmpPath)) unlinkSync(tmpPath)
+            } catch {}
+            // Rethrow cache error
+            throw e
+          }
         }
         return buf
       }

@@ -41,7 +41,11 @@ describe('createHttpClient', () => {
     await client.getText('https://example.com/2')
     // 두 번째 호출은 간격을 채우기 위해 sleep해야 한다
     expect(sleeps.length).toBeGreaterThanOrEqual(1)
-    expect(sleeps.some((s) => s > 0 && s <= 100)).toBe(true)
+    // 대기 시간이 ~100ms (허용오차 ±10ms)
+    const rateLimitedSleep = sleeps.find((s) => s > 0)
+    expect(rateLimitedSleep).toBeDefined()
+    expect(rateLimitedSleep).toBeGreaterThan(90)
+    expect(rateLimitedSleep).toBeLessThan(110)
   })
 
   it('concurrent requests는 rate limit을 지킨다 (nextSlotAt 예약)', async () => {
@@ -61,12 +65,24 @@ describe('createHttpClient', () => {
       client.getText('https://example.com/4'),
       client.getText('https://example.com/5'),
     ])
-    // 5번 요청했으므로, 4개의 slot 예약이 필요 (첫 번째는 wait=0)
-    // sleep은 대략 [0 또는 없음, ~100, ~100, ~100]이어야 한다
-    expect(sleeps.length).toBeGreaterThanOrEqual(3)
-    // 모든 sleep이 같은 값이면 안 됨 (concurrent bug의 증상)
-    const uniqueSleeps = new Set(sleeps)
-    expect(uniqueSleeps.size).toBeGreaterThan(1) // 다양한 대기 시간이 있어야 함
+    // 5번 요청했으므로, slot 예약은 0, 100, 200, 300, 400ms
+    // sleep은 대략 [0, ~100, ~100, ~100, ~100]이어야 한다 (순서 상관없음)
+    const sortedSleeps = sleeps.sort((a, b) => a - b)
+    expect(sortedSleeps.length).toBeGreaterThanOrEqual(4)
+
+    // 각 연속된 대기시간이 약 100ms씩 증가하는 사다리 패턴 검증
+    // 허용오차: ±15ms (동기화 오버헤드 고려)
+    const positiveSleeps = sortedSleeps.filter((s) => s > 0)
+    expect(positiveSleeps.length).toBeGreaterThanOrEqual(3)
+    for (let i = 1; i < positiveSleeps.length; i++) {
+      const curr = positiveSleeps[i]
+      const prev = positiveSleeps[i - 1]
+      if (curr !== undefined && prev !== undefined) {
+        const diff = curr - prev
+        expect(diff).toBeGreaterThan(85)
+        expect(diff).toBeLessThan(115)
+      }
+    }
   })
 
   it('429를 만나면 재시도하고 성공하면 값을 반환한다', async () => {
@@ -165,5 +181,28 @@ describe('createHttpClient', () => {
     const binFiles = files.filter((f: string) => f.endsWith('.bin'))
     expect(tmpFiles).toHaveLength(0)
     expect(binFiles.length).toBeGreaterThan(0)
+  })
+
+  it('여러 요청의 cache 쓰기 후 .tmp 파일이 남지 않는다', async () => {
+    const cacheDir = tmpCache()
+    const client = createHttpClient({
+      userAgent: 'x',
+      rateLimitPerSec: 1000,
+      cacheDir,
+      fetchImpl: async () => okResponse('data'),
+    })
+
+    // 여러 URL에 대해 캐시 쓰기
+    await client.getText('https://example.com/1', { cache: true })
+    await client.getText('https://example.com/2', { cache: true })
+    await client.getText('https://example.com/3', { cache: true })
+
+    // 모든 쓰기가 완료된 후 .tmp 파일이 없어야 함
+    const fs = require('node:fs')
+    const files = fs.readdirSync(cacheDir)
+    const tmpFiles = files.filter((f: string) => f.endsWith('.tmp'))
+    const binFiles = files.filter((f: string) => f.endsWith('.bin'))
+    expect(tmpFiles).toHaveLength(0)
+    expect(binFiles).toHaveLength(3)
   })
 })
