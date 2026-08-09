@@ -12,6 +12,7 @@ ingest:
   bulk_quarters: 8
   sec_user_agent: "TenbaggerDashboard/0.1 (kk910519@gmail.com)"
   sec_rate_limit_per_sec: 10
+  finnhub_rate_limit_per_sec: 1
   cache_dir: "./data/cache"
   normalize_failure_rate_threshold: 0.5
   normalize_failure_min_sample: 20

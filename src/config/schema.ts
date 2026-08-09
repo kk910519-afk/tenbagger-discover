@@ -28,6 +28,7 @@ export const configSchema = z
         bulk_quarters: z.number().int().positive(),
         sec_user_agent: z.string().min(1),
         sec_rate_limit_per_sec: z.number().positive(),
+        finnhub_rate_limit_per_sec: z.number().positive(),
         cache_dir: z.string(),
         normalize_failure_rate_threshold: z.number().min(0).max(1),
         normalize_failure_min_sample: z.number().int().positive(),

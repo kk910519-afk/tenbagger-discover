@@ -23,7 +23,8 @@ describe('parseConfig', () => {
 universe: { exchanges: [N], min_market_cap: 1, min_avg_dollar_volume: null,
   exclude_financial_status: [], exclude_sic: [], security_name_include: [],
   security_name_exclude: [] }
-ingest: { bulk_quarters: 1, sec_user_agent: "x", sec_rate_limit_per_sec: 10, cache_dir: ".",
+ingest: { bulk_quarters: 1, sec_user_agent: "x", sec_rate_limit_per_sec: 10,
+  finnhub_rate_limit_per_sec: 1, cache_dir: ".",
   normalize_failure_rate_threshold: 0.5, normalize_failure_min_sample: 20 }
 classification: { leader_ratio_of_max: 0.25, leader_max: 5, leader_min: 2,
   leader_min_industry_candidates: 3, challenger_min_market_cap: 1,

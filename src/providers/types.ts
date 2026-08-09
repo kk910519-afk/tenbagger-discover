@@ -51,3 +51,10 @@ export type BulkFundamentalProvider = {
 export type CompanyFactsProvider = {
   fetchCompany(cik: number): Promise<RawFact[]>
 }
+
+export type Quote = { price: number; date: string }
+
+export type PriceProvider = {
+  name: string
+  fetchQuote(ticker: string): Promise<Quote | null>
+}
