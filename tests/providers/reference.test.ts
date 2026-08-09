@@ -1,6 +1,13 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'node:fs'
-import { parseTickerMap, parseSubmissions } from '@/providers/reference/sec-submissions'
+import { readFileSync, mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { parseTickerMap, parseSubmissions, createSecReferenceProvider } from '@/providers/reference/sec-submissions'
+import { createHttpClient } from '@/providers/http/client'
+
+function tmpCache() {
+  return mkdtempSync(join(tmpdir(), 'tb-ref-'))
+}
 
 describe('parseTickerMap', () => {
   it('객체 맵을 배열로 변환한다', () => {
@@ -36,5 +43,32 @@ describe('parseSubmissions', () => {
   it('cik이 없으면 null을 반환한다', () => {
     const { cik, ...rest } = raw
     expect(parseSubmissions(rest)).toBeNull()
+  })
+})
+
+describe('createSecReferenceProvider().fetchCompany', () => {
+  it('404는 상장폐지/합병 등으로 흔히 발생하므로 null을 반환하고 잡을 중단시키지 않는다', async () => {
+    const http = createHttpClient({
+      userAgent: 'x',
+      rateLimitPerSec: 1000,
+      cacheDir: tmpCache(),
+      fetchImpl: async () => new Response('not found', { status: 404 }),
+      sleepImpl: async () => {},
+    })
+    const provider = createSecReferenceProvider(http)
+    await expect(provider.fetchCompany(9999999)).resolves.toBeNull()
+  })
+
+  it('404 이외의 에러(예: 500)는 그대로 다시 던진다', async () => {
+    const http = createHttpClient({
+      userAgent: 'x',
+      rateLimitPerSec: 1000,
+      cacheDir: tmpCache(),
+      maxRetries: 0,
+      fetchImpl: async () => new Response('boom', { status: 500 }),
+      sleepImpl: async () => {},
+    })
+    const provider = createSecReferenceProvider(http)
+    await expect(provider.fetchCompany(1045810)).rejects.toThrow(/500/)
   })
 })

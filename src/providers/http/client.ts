@@ -5,6 +5,19 @@ import { randomBytes } from 'node:crypto'
 
 export type FetchOpts = { cache?: boolean }
 
+/**
+ * HTTP 실패를 나타내는 에러. 메시지 문자열(한국어 포함)은 다른 모듈이 정규식으로
+ * 파싱하기 쉬우므로, 상태코드로 분기해야 하는 호출자는 메시지 대신 `status`를 봐야 한다.
+ */
+export class HttpError extends Error {
+  readonly status: number
+  constructor(message: string, status: number) {
+    super(message)
+    this.name = 'HttpError'
+    this.status = status
+  }
+}
+
 export type HttpClient = {
   getText(url: string, o?: FetchOpts): Promise<string>
   getJson<T>(url: string, o?: FetchOpts): Promise<T>
@@ -75,9 +88,9 @@ export function createHttpClient(opts: HttpClientOptions): HttpClient {
         return buf
       }
       if (!RETRYABLE.has(res.status)) {
-        throw new Error(`HTTP ${res.status} (재시도 불가): ${url}`)
+        throw new HttpError(`HTTP ${res.status} (재시도 불가): ${url}`, res.status)
       }
-      lastError = new Error(`HTTP ${res.status}: ${url}`)
+      lastError = new HttpError(`HTTP ${res.status}: ${url}`, res.status)
       if (attempt < maxRetries) await sleep(Math.min(2 ** attempt * 500, 8000))
     }
     throw lastError ?? new Error(`요청 실패: ${url}`)
