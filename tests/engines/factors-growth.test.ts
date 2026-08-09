@@ -61,6 +61,12 @@ describe('revenueGrowthFactor', () => {
     const r = revenueGrowthFactor(ctx({ ttm: ttmOf({ 0: 1250, 4: 1000 }).slice(0, 5) }))
     expect(r.status).toBe('SCORED')
     expect(r.detail).toContain('3Y CAGR 없음')
+    // TTM YoY = (1250-1000)/1000 = 0.25 — 블렌드하지 않고 그 값 단독으로 채점된다.
+    // curve의 [0.25, 0.60] 점과 정확히 일치하므로 normalized = 0.60, points = 20 × 0.60 = 12.
+    // 만약 블렌드 비율(0.6/0.4)이 단일 입력에도 적용되어 나머지를 0으로 친다면
+    // normalized는 0.6×0.60=0.36, points=7.2로 절반 가까이 깎여 이 값과 어긋난다.
+    expect(r.raw).toBeCloseTo(0.25)
+    expect(r.points).toBeCloseTo(12)
   })
 
   it('성장률을 계산할 수 없으면 NO_DATA', () => {
@@ -144,5 +150,43 @@ describe('tamIndustryGrowthFactor', () => {
       }),
     )
     expect(r.status).toBe('NO_DATA')
+  })
+
+  it('산업 후보가 min_industry_candidates 미만이면 중앙값이 있어도 대체하지 않는다 (자기참조 방지)', () => {
+    // candidateCount: 1 — 이 산업의 중앙값은 채점 대상 기업 자기 자신의 매출성장률과 같다.
+    // 이를 대체값으로 쓰면 revenue_growth와 사실상 같은 신호가 15점을 한 번 더 얹어주게 된다.
+    const r = tamIndustryGrowthFactor(
+      ctx({
+        industryStats: {
+          candidateCount: 1, medianGrossMargin: 0.6,
+          medianRevenueGrowth: 0.40, distributions: {},
+        },
+        ttm: ttmOf({ 0: 1400, 4: 1000 }),
+      }),
+    )
+    expect(r.status).toBe('NO_DATA')
+    expect(r.points).toBeNull()
+    expect(r.detail).toContain('산업 후보 1개')
+    expect(r.detail).toContain('최소 3개 필요')
+  })
+
+  it('산업 후보가 적어도 TAM이 큐레이션되어 있으면 그대로 채점한다', () => {
+    const r = tamIndustryGrowthFactor(
+      ctx({
+        industry: {
+          slug: 'niche', name: 'Niche', themeSlug: 'ai-software-semi',
+          tamUsd: 50_000_000_000, tamCagr: 0.20,
+          tamSource: 'Curated Report', tamAsOf: '2025-12-31',
+        },
+        industryStats: {
+          candidateCount: 1, medianGrossMargin: 0.6,
+          medianRevenueGrowth: 0.40, distributions: {},
+        },
+        ttm: ttmOf({ 0: 1_000_000 }),
+      }),
+    )
+    expect(r.status).toBe('SCORED')
+    expect(r.raw).toBeCloseTo(0.20)
+    expect(r.detail).toContain('Curated Report')
   })
 })
