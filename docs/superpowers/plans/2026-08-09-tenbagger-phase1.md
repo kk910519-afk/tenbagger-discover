@@ -8114,3 +8114,1344 @@ git commit -m "feat: compute-scores 잡
 engine_version에 config 해시를 붙여 점수 변화가 로직 변경 때문인지
 데이터 변경 때문인지 구분할 수 있게 한다."
 ```
+
+---
+
+## Stage D — 실행 및 화면 (Task 22-26)
+
+### Task 22: 파이프라인 CLI
+
+**Files:**
+- Create: `src/pipeline/cli.ts`
+- Modify: `package.json` (스크립트가 `cli.ts`를 가리키도록)
+- Test: `tests/pipeline/cli.test.ts`
+
+**Interfaces:**
+- Consumes: 잡 4개 (Task 7, 11, 12, 21), `loadConfig` (Task 1), `loadTaxonomy` (Task 3), `getRawDb`/`runMigrations` (Task 4), `createHttpClient` (Task 5), Provider 팩토리 (Task 6, 8, 12)
+- Produces:
+  - `buildDeps(env: NodeJS.ProcessEnv, asOf: string)` — 실제 Provider를 묶어 반환
+  - `runPipeline(command: string, env, asOf): Promise<void>` — `universe | fundamentals | prices | scores | all`
+
+**runner.ts와 분리하는 이유:** 잡들이 `runner.ts`의 `runJob`을 import하므로, `runner.ts`가 잡을 import하면 순환 참조가 된다. CLI 진입점은 별도 파일에 둔다.
+
+- [ ] **Step 1: package.json 스크립트 수정**
+
+```json
+    "db:migrate": "tsx src/db/migrate.ts",
+    "pipeline:universe": "tsx src/pipeline/cli.ts universe",
+    "pipeline:fundamentals": "tsx src/pipeline/cli.ts fundamentals",
+    "pipeline:prices": "tsx src/pipeline/cli.ts prices",
+    "pipeline:scores": "tsx src/pipeline/cli.ts scores",
+    "pipeline:all": "tsx src/pipeline/cli.ts all"
+```
+
+- [ ] **Step 2: 실패하는 테스트 작성**
+
+`tests/pipeline/cli.test.ts`:
+
+```ts
+import { describe, it, expect } from 'vitest'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { buildDeps, PIPELINE_COMMANDS } from '@/pipeline/cli'
+
+describe('PIPELINE_COMMANDS', () => {
+  it('지원 명령을 노출한다', () => {
+    expect(PIPELINE_COMMANDS).toEqual(
+      ['universe', 'fundamentals', 'prices', 'scores', 'all'],
+    )
+  })
+})
+
+describe('buildDeps', () => {
+  const env = {
+    PRICE_PROVIDER: 'fixture',
+    DATABASE_PATH: join(mkdtempSync(join(tmpdir(), 'tb-cli-')), 'c.db'),
+  }
+
+  it('설정·분류·Provider를 묶어 반환한다', () => {
+    const d = buildDeps(env, '2026-08-09')
+    expect(d.cfg.universe.min_market_cap).toBe(300_000_000)
+    expect(d.taxonomy.industries.size).toBe(49)
+    expect(d.prices.name).toBe('fixture')
+    expect(typeof d.listings.fetchListings).toBe('function')
+    expect(typeof d.bulk.fetchQuarter).toBe('function')
+    d.raw.close()
+  })
+
+  it('SEC 클라이언트와 시세 클라이언트의 rate limit을 분리한다', () => {
+    // 같은 클라이언트를 쓰면 SEC의 10 req/s가 Finnhub의 1 req/s를 위반한다
+    const d = buildDeps(env, '2026-08-09')
+    expect(d.secHttp).not.toBe(d.priceHttp)
+    d.raw.close()
+  })
+})
+```
+
+- [ ] **Step 3: 테스트 실패 확인**
+
+Run: `npx vitest run tests/pipeline/cli.test.ts`
+Expected: FAIL — `Cannot find module '@/pipeline/cli'`
+
+- [ ] **Step 4: 구현**
+
+`src/pipeline/cli.ts`:
+
+```ts
+import { loadConfig } from '@/config'
+import { loadTaxonomy } from '@/taxonomy'
+import { getRawDb, runMigrations } from '@/db/client'
+import { createHttpClient } from '@/providers/http/client'
+import { createNasdaqTraderProvider } from '@/providers/listing/nasdaq-trader'
+import { createSecReferenceProvider } from '@/providers/reference/sec-submissions'
+import { createSecBulkProvider } from '@/providers/fundamental/sec-bulk'
+import { createCompanyFactsProvider } from '@/providers/fundamental/sec-companyfacts'
+import { getPriceProvider } from '@/providers/price'
+import { ingestUniverse, seedTaxonomy } from './jobs/ingest-universe.js'
+import { ingestFundamentals } from './jobs/ingest-fundamentals.js'
+import { refreshPrices } from './jobs/refresh-prices.js'
+import { computeScores } from './jobs/compute-scores.js'
+
+export const PIPELINE_COMMANDS = [
+  'universe', 'fundamentals', 'prices', 'scores', 'all',
+] as const
+
+export type PipelineCommand = (typeof PIPELINE_COMMANDS)[number]
+
+export function buildDeps(env: NodeJS.ProcessEnv, asOf: string) {
+  const cfg = loadConfig()
+  const taxonomy = loadTaxonomy()
+  const raw = getRawDb(env.DATABASE_PATH)
+  runMigrations(raw)
+
+  // SEC는 초당 10요청, Finnhub 무료 티어는 초당 1요청.
+  // 하나의 클라이언트를 공유하면 느슨한 쪽 제한이 엄격한 쪽을 위반한다.
+  const secHttp = createHttpClient({
+    userAgent: cfg.ingest.sec_user_agent,
+    rateLimitPerSec: cfg.ingest.sec_rate_limit_per_sec,
+    cacheDir: cfg.ingest.cache_dir,
+  })
+  const priceHttp = createHttpClient({
+    userAgent: cfg.ingest.sec_user_agent,
+    rateLimitPerSec: cfg.ingest.finnhub_rate_limit_per_sec,
+    cacheDir: cfg.ingest.cache_dir,
+  })
+
+  return {
+    cfg, taxonomy, raw, asOf, secHttp, priceHttp,
+    listings: createNasdaqTraderProvider(secHttp),
+    reference: createSecReferenceProvider(secHttp),
+    bulk: createSecBulkProvider(secHttp),
+    companyFacts: createCompanyFactsProvider(secHttp),
+    prices: getPriceProvider(priceHttp, env),
+  }
+}
+
+function report(name: string, stats: Record<string, unknown>): void {
+  console.log(`\n[${name}]`)
+  for (const [k, v] of Object.entries(stats)) {
+    console.log(`  ${k}: ${Array.isArray(v) ? `${v.length}건` : v}`)
+  }
+}
+
+export async function runPipeline(
+  command: string,
+  env: NodeJS.ProcessEnv,
+  asOf: string,
+): Promise<void> {
+  if (!(PIPELINE_COMMANDS as readonly string[]).includes(command)) {
+    throw new Error(
+      `알 수 없는 명령: ${command} (${PIPELINE_COMMANDS.join(' | ')})`,
+    )
+  }
+  const d = buildDeps(env, asOf)
+  const run = new Set(command === 'all' ? PIPELINE_COMMANDS.slice(0, 4) : [command])
+
+  try {
+    if (run.has('universe')) {
+      seedTaxonomy(d.raw, d.taxonomy)
+      report('universe', await ingestUniverse({
+        raw: d.raw, cfg: d.cfg, taxonomy: d.taxonomy,
+        listings: d.listings, reference: d.reference,
+      }))
+    }
+    if (run.has('fundamentals')) {
+      report('fundamentals', await ingestFundamentals({
+        raw: d.raw, cfg: d.cfg, bulk: d.bulk,
+        companyFacts: d.companyFacts, asOf: d.asOf,
+      }))
+    }
+    if (run.has('prices')) {
+      report('prices', await refreshPrices({ raw: d.raw, prices: d.prices }))
+    }
+    if (run.has('scores')) {
+      report('scores', await computeScores({
+        raw: d.raw, cfg: d.cfg, taxonomy: d.taxonomy, asOf: d.asOf,
+      }))
+    }
+  } finally {
+    d.raw.close()
+  }
+}
+
+// tsx로 직접 실행될 때만 동작한다
+if (process.argv[1]?.endsWith('cli.ts')) {
+  const command = process.argv[2] ?? 'all'
+  const asOf = process.argv[3] ?? new Date().toISOString().slice(0, 10)
+  runPipeline(command, process.env, asOf).catch((e) => {
+    console.error(e)
+    process.exit(1)
+  })
+}
+```
+
+- [ ] **Step 5: 테스트 통과 확인**
+
+Run: `npx vitest run tests/pipeline/cli.test.ts`
+Expected: PASS (3 tests)
+
+- [ ] **Step 6: 커밋**
+
+```bash
+git add -A
+git commit -m "feat: 파이프라인 CLI
+
+SEC(10 req/s)와 Finnhub(1 req/s)의 rate limit이 다르므로
+HTTP 클라이언트를 분리해 느슨한 쪽이 엄격한 쪽을 위반하지 않게 한다.
+runner.ts와 분리해 잡→runner 순환 참조를 피한다."
+```
+
+---
+
+### Task 23: Next.js 셋업 & 디자인 토큰
+
+> **구현자 참고:** 이 태스크부터 Task 26까지는 UI다. 시작 전에 `frontend-design` 스킬을 호출해 시각 설계 원칙을 확인할 것.
+
+**Files:**
+- Create: `next.config.ts`, `postcss.config.mjs`, `src/app/globals.css`, `src/app/layout.tsx`
+- Create: `src/app/_components/Value.tsx`, `Badge.tsx`, `ScoreBar.tsx`
+- Create: `src/app/_lib/format.ts`
+- Test: `tests/ui/format.test.ts`
+
+**Interfaces:**
+- Consumes: 없음
+- Produces:
+  - `formatUsd(v: number | null): string` — `2_500_000_000` → `"$2.50B"`, `null` → `"—"`
+  - `formatPct(v: number | null, digits?: number): string` — `0.384` → `"+38.4%"`
+  - `formatScore(v: number | null): string` — `78.34` → `"78"`
+  - `formatDate(v: string | null): string`
+  - `stalenessOf(dateIso: string | null, asOf: string, thresholdDays: number): 'FRESH' | 'STALE' | 'UNKNOWN'`
+  - `<Value>`, `<Badge>`, `<ScoreBar>` 컴포넌트
+
+**시각 원칙 (설계 문서 §11.4)**
+- 다크 기반. 숫자는 `font-variant-numeric: tabular-nums`로 자릿수 정렬
+- 장식(그라디언트·그림자·과한 보더) 없음
+- 색은 의미가 있을 때만: Green=긍정, Red=위험, Yellow=관찰, Blue=정보, Purple=Emerging/Discovery
+- 점수는 **위치와 굵기로 먼저** 구분하고 색은 보조
+
+- [ ] **Step 1: 실패하는 테스트 작성**
+
+`tests/ui/format.test.ts`:
+
+```ts
+import { describe, it, expect } from 'vitest'
+import { formatUsd, formatPct, formatScore, formatDate, stalenessOf } from '@/app/_lib/format'
+
+describe('formatUsd', () => {
+  it('조·십억·백만 단위로 축약한다', () => {
+    expect(formatUsd(2_500_000_000_000)).toBe('$2.50T')
+    expect(formatUsd(2_500_000_000)).toBe('$2.50B')
+    expect(formatUsd(340_000_000)).toBe('$340M')
+    expect(formatUsd(950_000)).toBe('$0.95M')
+  })
+  it('null은 대시', () => expect(formatUsd(null)).toBe('—'))
+  it('음수도 처리한다', () => expect(formatUsd(-1_200_000_000)).toBe('-$1.20B'))
+})
+
+describe('formatPct', () => {
+  it('부호를 붙인다', () => {
+    expect(formatPct(0.384)).toBe('+38.4%')
+    expect(formatPct(-0.052)).toBe('-5.2%')
+    expect(formatPct(0)).toBe('0.0%')
+  })
+  it('자릿수를 조정할 수 있다', () => expect(formatPct(0.384, 0)).toBe('+38%'))
+  it('null은 대시', () => expect(formatPct(null)).toBe('—'))
+})
+
+describe('formatScore', () => {
+  it('정수로 반올림한다', () => expect(formatScore(78.34)).toBe('78'))
+  it('null은 대시', () => expect(formatScore(null)).toBe('—'))
+})
+
+describe('formatDate', () => {
+  it('ISO 타임스탬프에서 날짜만 남긴다', () => {
+    expect(formatDate('2026-08-09T01:23:45.000Z')).toBe('2026-08-09')
+    expect(formatDate('2026-08-09')).toBe('2026-08-09')
+  })
+  it('null은 대시', () => expect(formatDate(null)).toBe('—'))
+})
+
+describe('stalenessOf', () => {
+  it('임계 이내면 FRESH', () => {
+    expect(stalenessOf('2026-08-06', '2026-08-09', 5)).toBe('FRESH')
+  })
+  it('임계를 넘으면 STALE', () => {
+    expect(stalenessOf('2026-07-01', '2026-08-09', 5)).toBe('STALE')
+  })
+  it('날짜가 없으면 UNKNOWN', () => {
+    expect(stalenessOf(null, '2026-08-09', 5)).toBe('UNKNOWN')
+  })
+})
+```
+
+- [ ] **Step 2: 테스트 실패 확인**
+
+Run: `npx vitest run tests/ui/format.test.ts`
+Expected: FAIL — `Cannot find module '@/app/_lib/format'`
+
+- [ ] **Step 3: format 구현**
+
+`src/app/_lib/format.ts`:
+
+```ts
+const DASH = '—'
+const DAY_MS = 86_400_000
+
+export function formatUsd(v: number | null): string {
+  if (v === null || !Number.isFinite(v)) return DASH
+  const sign = v < 0 ? '-' : ''
+  const abs = Math.abs(v)
+  if (abs >= 1e12) return `${sign}$${(abs / 1e12).toFixed(2)}T`
+  if (abs >= 1e9) return `${sign}$${(abs / 1e9).toFixed(2)}B`
+  if (abs >= 1e8) return `${sign}$${(abs / 1e6).toFixed(0)}M`
+  return `${sign}$${(abs / 1e6).toFixed(2)}M`
+}
+
+export function formatPct(v: number | null, digits = 1): string {
+  if (v === null || !Number.isFinite(v)) return DASH
+  const sign = v > 0 ? '+' : ''
+  return `${sign}${(v * 100).toFixed(digits)}%`
+}
+
+export function formatScore(v: number | null): string {
+  if (v === null || !Number.isFinite(v)) return DASH
+  return String(Math.round(v))
+}
+
+export function formatDate(v: string | null): string {
+  if (!v) return DASH
+  return v.slice(0, 10)
+}
+
+export type Staleness = 'FRESH' | 'STALE' | 'UNKNOWN'
+
+export function stalenessOf(
+  dateIso: string | null,
+  asOf: string,
+  thresholdDays: number,
+): Staleness {
+  if (!dateIso) return 'UNKNOWN'
+  const age = (Date.parse(asOf) - Date.parse(dateIso.slice(0, 10))) / DAY_MS
+  if (!Number.isFinite(age)) return 'UNKNOWN'
+  return age > thresholdDays ? 'STALE' : 'FRESH'
+}
+```
+
+- [ ] **Step 4: 테스트 통과 확인**
+
+Run: `npx vitest run tests/ui/format.test.ts`
+Expected: PASS (13 tests)
+
+- [ ] **Step 5: Next.js 설정 파일 작성**
+
+`next.config.ts`:
+
+```ts
+import type { NextConfig } from 'next'
+
+const config: NextConfig = {
+  // better-sqlite3는 네이티브 모듈이므로 번들에 포함하지 않는다
+  serverExternalPackages: ['better-sqlite3'],
+}
+
+export default config
+```
+
+`postcss.config.mjs`:
+
+```js
+export default { plugins: { '@tailwindcss/postcss': {} } }
+```
+
+- [ ] **Step 6: 디자인 토큰 및 레이아웃 작성**
+
+`src/app/globals.css`:
+
+```css
+@import "tailwindcss";
+
+@theme {
+  --color-bg: #0b0d10;
+  --color-surface: #14171c;
+  --color-surface-2: #1b1f26;
+  --color-border: #262b34;
+  --color-text: #e6e9ee;
+  --color-text-dim: #99a1ae;
+  --color-text-faint: #6b7280;
+
+  /* 의미가 있을 때만 쓴다 — 설계문서 §11.4 */
+  --color-positive: #3fb950;
+  --color-risk: #f85149;
+  --color-watch: #d29922;
+  --color-info: #58a6ff;
+  --color-emerging: #a371f7;
+
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
+}
+
+html, body {
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+/* 숫자는 항상 자릿수가 정렬되어야 비교가 가능하다 */
+.num {
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
+}
+
+table { border-collapse: collapse; }
+th { font-weight: 500; color: var(--color-text-dim); text-align: left; }
+th, td { padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--color-border); }
+tbody tr:hover { background: var(--color-surface-2); }
+a { color: inherit; text-decoration: none; }
+a:hover { text-decoration: underline; }
+```
+
+`src/app/layout.tsx`:
+
+```tsx
+import type { ReactNode } from 'react'
+import './globals.css'
+
+export const metadata = {
+  title: 'Tenbagger Discovery',
+  description: '미국 성장주 조기 발견 대시보드',
+}
+
+export default function RootLayout({ children }: { children: ReactNode }) {
+  return (
+    <html lang="ko">
+      <body className="min-h-screen">
+        <header className="border-b border-[var(--color-border)] px-6 py-3">
+          <a href="/" className="text-sm tracking-wide">
+            TENBAGGER <span className="text-[var(--color-text-dim)]">DISCOVERY</span>
+          </a>
+        </header>
+        <main className="px-6 py-5">{children}</main>
+      </body>
+    </html>
+  )
+}
+```
+
+- [ ] **Step 7: 공용 컴포넌트 작성**
+
+`src/app/_components/Value.tsx`:
+
+```tsx
+/** 숫자 표시. 의미가 있을 때만 색을 쓴다. */
+export function Value({
+  children, tone = 'neutral', dim = false,
+}: {
+  children: React.ReactNode
+  tone?: 'neutral' | 'positive' | 'risk' | 'watch'
+  dim?: boolean
+}) {
+  const color =
+    tone === 'positive' ? 'text-[var(--color-positive)]'
+    : tone === 'risk' ? 'text-[var(--color-risk)]'
+    : tone === 'watch' ? 'text-[var(--color-watch)]'
+    : dim ? 'text-[var(--color-text-dim)]'
+    : ''
+  return <span className={`num ${color}`}>{children}</span>
+}
+
+/** 부호에 따라 색을 정하는 값. 0은 중립. */
+export function SignedValue({ value, text }: { value: number | null; text: string }) {
+  const tone = value === null ? 'neutral' : value > 0 ? 'positive' : value < 0 ? 'risk' : 'neutral'
+  return <Value tone={tone}>{text}</Value>
+}
+```
+
+`src/app/_components/Badge.tsx`:
+
+```tsx
+const TONES = {
+  leader: 'border-[var(--color-info)] text-[var(--color-info)]',
+  challenger: 'border-[var(--color-text-dim)] text-[var(--color-text-dim)]',
+  emerging: 'border-[var(--color-emerging)] text-[var(--color-emerging)]',
+  risk: 'border-[var(--color-risk)] text-[var(--color-risk)]',
+  watch: 'border-[var(--color-watch)] text-[var(--color-watch)]',
+  neutral: 'border-[var(--color-border)] text-[var(--color-text-faint)]',
+} as const
+
+export function Badge({
+  children, tone = 'neutral',
+}: {
+  children: React.ReactNode
+  tone?: keyof typeof TONES
+}) {
+  return (
+    <span className={`inline-block rounded border px-1.5 py-0.5 text-[11px] leading-none ${TONES[tone]}`}>
+      {children}
+    </span>
+  )
+}
+
+export function CategoryBadge({ category }: { category: string | null }) {
+  if (!category) return null
+  const tone =
+    category === 'LEADER' ? 'leader'
+    : category === 'EMERGING' ? 'emerging'
+    : 'challenger'
+  return <Badge tone={tone}>{category}</Badge>
+}
+```
+
+`src/app/_components/ScoreBar.tsx`:
+
+```tsx
+import { formatScore } from '../_lib/format'
+
+/**
+ * 점수는 위치와 굵기로 먼저 구분하고 색은 보조로만 쓴다.
+ * 막대 길이가 주된 신호다.
+ */
+export function ScoreBar({
+  value, max = 100, label,
+}: {
+  value: number | null
+  max?: number
+  label?: string
+}) {
+  const pctWidth = value === null ? 0 : Math.max(0, Math.min(100, (value / max) * 100))
+  return (
+    <div className="flex items-center gap-2">
+      {label && <span className="w-44 shrink-0 text-xs text-[var(--color-text-dim)]">{label}</span>}
+      <div className="h-1.5 w-full min-w-24 bg-[var(--color-surface-2)]">
+        <div className="h-full bg-[var(--color-text)]" style={{ width: `${pctWidth}%` }} />
+      </div>
+      <span className="num w-10 shrink-0 text-right text-xs">
+        {value === null ? '—' : formatScore(value)}
+      </span>
+    </div>
+  )
+}
+```
+
+- [ ] **Step 8: 빌드 확인**
+
+Run: `npx next build`
+Expected: 성공. 아직 페이지가 없으므로 라우트 0개로 끝난다.
+
+`serverExternalPackages` 없이 빌드하면 `better-sqlite3` 네이티브 모듈 에러가 난다. 에러가 나면 `next.config.ts`를 확인한다.
+
+- [ ] **Step 9: 커밋**
+
+```bash
+git add -A
+git commit -m "feat: Next.js 셋업 및 디자인 토큰
+
+다크 기반, 숫자는 tabular-nums 고정폭 정렬, 장식 없음.
+색은 의미가 있을 때만 쓰고 점수는 막대 길이로 먼저 구분한다.
+better-sqlite3는 네이티브 모듈이라 서버 외부 패키지로 지정한다."
+```
+
+---
+
+### Task 24: Growth Opportunity Map (홈 화면)
+
+**Files:**
+- Create: `src/app/_queries/map.ts`, `src/app/page.tsx`
+- Test: `tests/ui/map-query.test.ts`
+
+**Interfaces:**
+- Consumes: `getRawDb` (Task 4), `loadConfig` (Task 1), `median` (Task 2)
+- Produces:
+  - `type IndustryRow = { slug; name; themeSlug; candidateCount; medianRevenueGrowth; medianMarketCap; avgTenbagger; topCandidate: { ticker; tenbagger } | null; momentum; riskRatio }`
+  - `type ThemeBlock = { slug; name; displayOrder; industries: IndustryRow[] }`
+  - `getOpportunityMap(raw: Database.Database): ThemeBlock[]`
+
+**Phase 1 지표 정의 (설계 문서 §11.1)**
+- **Industry Momentum** = 후보들의 매출 가속도 중앙값. §26의 스코어 변화율은 최소 4주 이력이 필요하므로 Phase 2에서 대체한다
+- **Industry Risk** = CRITICAL Red Flag 보유 기업 비율
+- **Top Candidate** = LEADER를 제외한 최고 Tenbagger Score. Leader는 벤치마크이지 후보가 아니다(설계 문서 §10)
+
+- [ ] **Step 1: 실패하는 테스트 작성**
+
+`tests/ui/map-query.test.ts`:
+
+```ts
+import { describe, it, expect, beforeAll } from 'vitest'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import type Database from 'better-sqlite3'
+import { getRawDb, runMigrations } from '@/db/client'
+import { getOpportunityMap } from '@/app/_queries/map'
+
+let raw: Database.Database
+let map: ReturnType<typeof getOpportunityMap>
+
+function seed(
+  db: Database.Database, cik: number, ticker: string, industry: string,
+  tenbagger: number, category: string, marketCap: number,
+  growth: number, accel: number, critical = false,
+) {
+  db.prepare(
+    `INSERT INTO companies (cik, ticker, name, is_active, first_seen, last_updated)
+     VALUES (?, ?, ?, 1, '2026-08-09', '2026-08-09')`,
+  ).run(cik, ticker, `${ticker} Inc`)
+  db.prepare(
+    `INSERT INTO company_industry (cik, industry_slug, theme_slug, is_primary, source)
+     VALUES (?, ?, 'ai-software-semi', 1, 'sic')`,
+  ).run(cik, industry)
+  db.prepare(
+    `INSERT INTO scores (cik, as_of, tenbagger, completeness, category, engine_version)
+     VALUES (?, '2026-08-09', ?, 1.0, ?, 'v1')`,
+  ).run(cik, tenbagger, category)
+  db.prepare(
+    `INSERT INTO market_data (cik, date, price, market_cap) VALUES (?, '2026-08-08', 10, ?)`,
+  ).run(cik, marketCap)
+  const insF = db.prepare(
+    `INSERT INTO score_factors (cik, as_of, engine, factor_key, raw, points, weight, status, detail)
+     VALUES (?, '2026-08-09', 'tenbagger', ?, ?, 1, 10, 'SCORED', '')`,
+  )
+  insF.run(cik, 'revenue_growth', growth)
+  insF.run(cik, 'revenue_acceleration', accel)
+  if (critical) {
+    db.prepare(
+      `INSERT INTO red_flags (cik, as_of, code, severity, message)
+       VALUES (?, '2026-08-09', 'RUNWAY_CRITICAL', 'CRITICAL', 'x')`,
+    ).run(cik)
+  }
+}
+
+beforeAll(() => {
+  raw = getRawDb(join(mkdtempSync(join(tmpdir(), 'tb-map-')), 'm.db'))
+  runMigrations(raw)
+  raw.prepare(
+    `INSERT INTO themes (slug, name, display_order)
+     VALUES ('ai-software-semi', 'AI / Software / Semiconductor', 1),
+            ('energy-next', 'Energy / Next Energy', 5)`,
+  ).run()
+  raw.prepare(
+    `INSERT INTO industries (slug, theme_slug, name)
+     VALUES ('semiconductors', 'ai-software-semi', 'Semiconductors'),
+            ('cybersecurity', 'ai-software-semi', 'Cybersecurity'),
+            ('nuclear', 'energy-next', 'Nuclear')`,
+  ).run()
+
+  seed(raw, 1, 'BIG', 'semiconductors', 40, 'LEADER', 300e9, 0.10, 0.01)
+  seed(raw, 2, 'MID', 'semiconductors', 72, 'CHALLENGER', 8e9, 0.28, 0.05)
+  seed(raw, 3, 'SML', 'semiconductors', 85, 'EMERGING', 900e6, 0.45, 0.12, true)
+  seed(raw, 4, 'CYB', 'cybersecurity', 66, 'CHALLENGER', 5e9, 0.30, 0.02)
+
+  map = getOpportunityMap(raw)
+})
+
+describe('getOpportunityMap', () => {
+  it('Theme을 display_order 순으로 반환한다', () => {
+    expect(map.map((t) => t.slug)).toEqual(['ai-software-semi', 'energy-next'])
+  })
+
+  it('후보가 없는 Industry는 제외한다', () => {
+    const energy = map.find((t) => t.slug === 'energy-next')!
+    expect(energy.industries).toHaveLength(0)
+  })
+
+  it('Industry를 평균 Tenbagger 내림차순으로 정렬한다', () => {
+    const ai = map.find((t) => t.slug === 'ai-software-semi')!
+    expect(ai.industries.map((i) => i.slug)).toEqual(['cybersecurity', 'semiconductors'])
+    // semiconductors 평균 = (40+72+85)/3 = 65.7, cybersecurity = 66
+  })
+
+  it('후보 수를 센다', () => {
+    const semi = map[0]!.industries.find((i) => i.slug === 'semiconductors')!
+    expect(semi.candidateCount).toBe(3)
+  })
+
+  it('매출성장률과 시가총액의 중앙값을 낸다', () => {
+    const semi = map[0]!.industries.find((i) => i.slug === 'semiconductors')!
+    expect(semi.medianRevenueGrowth).toBeCloseTo(0.28)
+    expect(semi.medianMarketCap).toBe(8e9)
+  })
+
+  it('Momentum은 매출 가속도 중앙값이다', () => {
+    const semi = map[0]!.industries.find((i) => i.slug === 'semiconductors')!
+    expect(semi.momentum).toBeCloseTo(0.05)
+  })
+
+  it('Top Candidate는 LEADER를 제외한 최고 점수다', () => {
+    const semi = map[0]!.industries.find((i) => i.slug === 'semiconductors')!
+    expect(semi.topCandidate).toEqual({ ticker: 'SML', tenbagger: 85 })
+  })
+
+  it('Risk는 CRITICAL 보유 비율이다', () => {
+    const semi = map[0]!.industries.find((i) => i.slug === 'semiconductors')!
+    expect(semi.riskRatio).toBeCloseTo(1 / 3)
+    const cyb = map[0]!.industries.find((i) => i.slug === 'cybersecurity')!
+    expect(cyb.riskRatio).toBe(0)
+  })
+})
+```
+
+- [ ] **Step 2: 테스트 실패 확인**
+
+Run: `npx vitest run tests/ui/map-query.test.ts`
+Expected: FAIL — `Cannot find module '@/app/_queries/map'`
+
+- [ ] **Step 3: 쿼리 구현**
+
+`src/app/_queries/map.ts`:
+
+```ts
+import type Database from 'better-sqlite3'
+import { median } from '@/domain/stats'
+
+export type IndustryRow = {
+  slug: string
+  name: string
+  themeSlug: string
+  candidateCount: number
+  medianRevenueGrowth: number | null
+  medianMarketCap: number | null
+  avgTenbagger: number | null
+  topCandidate: { ticker: string; tenbagger: number } | null
+  momentum: number | null
+  riskRatio: number
+}
+
+export type ThemeBlock = {
+  slug: string
+  name: string
+  displayOrder: number
+  industries: IndustryRow[]
+}
+
+type CompanyRow = {
+  cik: number
+  ticker: string
+  industrySlug: string
+  tenbagger: number | null
+  category: string | null
+  marketCap: number | null
+  revenueGrowth: number | null
+  acceleration: number | null
+  criticalCount: number
+}
+
+/**
+ * 산업별 집계는 SQL 한 방보다 회사 단위로 뽑아 JS에서 접는 편이 읽기 쉽고
+ * median 구현을 domain/stats와 공유할 수 있다. 유니버스가 수천 건 규모라 성능도 문제없다.
+ */
+function loadCompanies(raw: Database.Database): CompanyRow[] {
+  return raw
+    .prepare(
+      `SELECT c.cik, c.ticker, ci.industry_slug AS industrySlug,
+              s.tenbagger, s.category,
+              (SELECT m.market_cap FROM market_data m
+                WHERE m.cik = c.cik ORDER BY m.date DESC LIMIT 1) AS marketCap,
+              (SELECT f.raw FROM score_factors f
+                WHERE f.cik = c.cik AND f.as_of = s.as_of
+                  AND f.factor_key = 'revenue_growth') AS revenueGrowth,
+              (SELECT f.raw FROM score_factors f
+                WHERE f.cik = c.cik AND f.as_of = s.as_of
+                  AND f.factor_key = 'revenue_acceleration') AS acceleration,
+              (SELECT COUNT(*) FROM red_flags r
+                WHERE r.cik = c.cik AND r.as_of = s.as_of
+                  AND r.severity = 'CRITICAL') AS criticalCount
+       FROM companies c
+       JOIN company_industry ci ON ci.cik = c.cik
+       JOIN latest_scores s ON s.cik = c.cik
+       WHERE c.is_active = 1`,
+    )
+    .all() as CompanyRow[]
+}
+
+export function getOpportunityMap(raw: Database.Database): ThemeBlock[] {
+  const themes = raw
+    .prepare('SELECT slug, name, display_order AS displayOrder FROM themes ORDER BY display_order')
+    .all() as { slug: string; name: string; displayOrder: number }[]
+
+  const industries = raw
+    .prepare('SELECT slug, theme_slug AS themeSlug, name FROM industries')
+    .all() as { slug: string; themeSlug: string; name: string }[]
+
+  const byIndustry = new Map<string, CompanyRow[]>()
+  for (const c of loadCompanies(raw)) {
+    const list = byIndustry.get(c.industrySlug)
+    if (list) list.push(c)
+    else byIndustry.set(c.industrySlug, [c])
+  }
+
+  const rows: IndustryRow[] = []
+  for (const ind of industries) {
+    const members = byIndustry.get(ind.slug)
+    if (!members || members.length === 0) continue
+
+    const nums = (pick: (c: CompanyRow) => number | null) =>
+      members.map(pick).filter((v): v is number => v !== null && Number.isFinite(v))
+
+    const scores = nums((c) => c.tenbagger)
+    // Leader는 Industry Benchmark이지 Tenbagger 후보가 아니다
+    const candidates = members
+      .filter((c) => c.category !== 'LEADER' && c.tenbagger !== null)
+      .sort((a, b) => b.tenbagger! - a.tenbagger!)
+
+    rows.push({
+      slug: ind.slug,
+      name: ind.name,
+      themeSlug: ind.themeSlug,
+      candidateCount: members.length,
+      medianRevenueGrowth: median(nums((c) => c.revenueGrowth)),
+      medianMarketCap: median(nums((c) => c.marketCap)),
+      avgTenbagger: scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : null,
+      topCandidate: candidates[0]
+        ? { ticker: candidates[0].ticker, tenbagger: candidates[0].tenbagger! }
+        : null,
+      momentum: median(nums((c) => c.acceleration)),
+      riskRatio: members.filter((c) => c.criticalCount > 0).length / members.length,
+    })
+  }
+
+  return themes.map((t) => ({
+    ...t,
+    industries: rows
+      .filter((r) => r.themeSlug === t.slug)
+      .sort((a, b) => (b.avgTenbagger ?? -1) - (a.avgTenbagger ?? -1)),
+  }))
+}
+```
+
+- [ ] **Step 4: 테스트 통과 확인**
+
+Run: `npx vitest run tests/ui/map-query.test.ts`
+Expected: PASS (8 tests)
+
+- [ ] **Step 5: 홈 페이지 작성**
+
+`src/app/page.tsx`:
+
+```tsx
+import { getRawDb } from '@/db/client'
+import { getOpportunityMap } from './_queries/map'
+import { formatUsd, formatPct, formatScore } from './_lib/format'
+import { Value, SignedValue } from './_components/Value'
+import { Badge } from './_components/Badge'
+
+export const dynamic = 'force-dynamic'
+
+export default function Home() {
+  const raw = getRawDb()
+  const themes = getOpportunityMap(raw)
+  raw.close()
+
+  const total = themes.reduce(
+    (s, t) => s + t.industries.reduce((n, i) => n + i.candidateCount, 0), 0,
+  )
+
+  if (total === 0) {
+    return (
+      <div className="max-w-xl text-sm text-[var(--color-text-dim)]">
+        <p className="mb-2 text-[var(--color-text)]">데이터가 없습니다.</p>
+        <p>다음 명령으로 파이프라인을 실행하세요.</p>
+        <pre className="mt-3 bg-[var(--color-surface)] p-3 text-xs">
+{`npm run db:migrate
+npm run pipeline:all`}
+        </pre>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-8">
+      <div>
+        <h1 className="text-lg">Growth Opportunity Map</h1>
+        <p className="mt-1 text-xs text-[var(--color-text-dim)]">
+          후보 {total.toLocaleString()}개 · Theme {themes.length}개
+        </p>
+      </div>
+
+      {themes.map((theme) => (
+        <section key={theme.slug}>
+          <h2 className="mb-2 text-sm text-[var(--color-text-dim)]">{theme.name}</h2>
+          {theme.industries.length === 0 ? (
+            <p className="text-xs text-[var(--color-text-faint)]">후보 없음</p>
+          ) : (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-xs">
+                  <th>Industry</th>
+                  <th className="text-right">후보</th>
+                  <th className="text-right">매출성장 중앙값</th>
+                  <th className="text-right">시총 중앙값</th>
+                  <th className="text-right">평균 Score</th>
+                  <th>Top Candidate</th>
+                  <th className="text-right">Momentum</th>
+                  <th className="text-right">Risk</th>
+                </tr>
+              </thead>
+              <tbody>
+                {theme.industries.map((i) => (
+                  <tr key={i.slug}>
+                    <td><a href={`/industry/${i.slug}`}>{i.name}</a></td>
+                    <td className="text-right"><Value dim>{i.candidateCount}</Value></td>
+                    <td className="text-right">
+                      <SignedValue value={i.medianRevenueGrowth} text={formatPct(i.medianRevenueGrowth)} />
+                    </td>
+                    <td className="text-right"><Value dim>{formatUsd(i.medianMarketCap)}</Value></td>
+                    <td className="text-right"><Value>{formatScore(i.avgTenbagger)}</Value></td>
+                    <td>
+                      {i.topCandidate ? (
+                        <a href={`/stock/${i.topCandidate.ticker}`}>
+                          {i.topCandidate.ticker}{' '}
+                          <Value dim>{formatScore(i.topCandidate.tenbagger)}</Value>
+                        </a>
+                      ) : <span className="text-[var(--color-text-faint)]">—</span>}
+                    </td>
+                    <td className="text-right">
+                      <SignedValue value={i.momentum} text={formatPct(i.momentum)} />
+                    </td>
+                    <td className="text-right">
+                      {i.riskRatio > 0
+                        ? <Badge tone="risk">{formatPct(i.riskRatio, 0)}</Badge>
+                        : <span className="text-[var(--color-text-faint)]">—</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </section>
+      ))}
+    </div>
+  )
+}
+```
+
+- [ ] **Step 6: 빌드 확인**
+
+Run: `npx next build`
+Expected: 성공. 라우트 `/`가 생성된다.
+
+- [ ] **Step 7: 커밋**
+
+```bash
+git add -A
+git commit -m "feat: Growth Opportunity Map 홈 화면
+
+산업별 집계는 회사 단위로 뽑아 JS에서 접어 median 구현을 domain과 공유한다.
+Top Candidate에서 LEADER를 제외한다 — Leader는 벤치마크이지 후보가 아니다.
+데이터가 없으면 실행할 명령을 안내한다."
+```
+
+---
+
+### Task 25: Industry 후보 테이블 화면
+
+**Files:**
+- Create: `src/app/_queries/industry.ts`, `src/app/industry/[slug]/page.tsx`
+- Create: `src/app/_components/CandidateTable.tsx`
+- Test: `tests/ui/industry-query.test.ts`
+
+**Interfaces:**
+- Consumes: `getRawDb` (Task 4)
+- Produces:
+  - `type CandidateRow = { cik; ticker; name; category; marketCap; revenueGrowth; revenueCagr3y; grossMargin; fcfMargin; totalDebt; tenbagger; completeness; criticalCount; warningCount }`
+  - `type IndustryView = { slug; name; themeSlug; themeName; groups: { category: Category; rows: CandidateRow[] }[] } | null`
+  - `getIndustryView(raw: Database.Database, slug: string): IndustryView`
+
+**Phase 1 컬럼만 만든다.** Discovery Score / Quality Score / Moat / Fair Value / P-FV는 Phase 2~3 항목이므로 **대시로 채운 빈 컬럼을 만들지 않는다**(설계 문서 §11.2).
+
+기본 표시는 그룹별 상위 10개이며 `?all=1`로 전체를 연다. 서버 렌더링만으로 처리해 클라이언트 JS가 필요 없다.
+
+- [ ] **Step 1: 실패하는 테스트 작성**
+
+`tests/ui/industry-query.test.ts`:
+
+```ts
+import { describe, it, expect, beforeAll } from 'vitest'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import type Database from 'better-sqlite3'
+import { getRawDb, runMigrations } from '@/db/client'
+import { getIndustryView } from '@/app/_queries/industry'
+
+let raw: Database.Database
+
+function seed(
+  db: Database.Database, cik: number, ticker: string,
+  category: string, tenbagger: number, warning = false,
+) {
+  db.prepare(
+    `INSERT INTO companies (cik, ticker, name, is_active, first_seen, last_updated)
+     VALUES (?, ?, ?, 1, '2026-08-09', '2026-08-09')`,
+  ).run(cik, ticker, `${ticker} Inc`)
+  db.prepare(
+    `INSERT INTO company_industry (cik, industry_slug, theme_slug, is_primary, source)
+     VALUES (?, 'semiconductors', 'ai-software-semi', 1, 'sic')`,
+  ).run(cik)
+  db.prepare(
+    `INSERT INTO scores (cik, as_of, tenbagger, completeness, category, engine_version)
+     VALUES (?, '2026-08-09', ?, 0.95, ?, 'v1')`,
+  ).run(cik, tenbagger, category)
+  db.prepare(
+    `INSERT INTO financials
+       (cik, period_end, period_type, revenue, gross_profit, fcf, total_debt, computed_at)
+     VALUES (?, '2025-03-31', 'TTM', 1000, 700, 150, 200, '2026-08-09')`,
+  ).run(cik)
+  db.prepare(
+    `INSERT INTO market_data (cik, date, price, market_cap) VALUES (?, '2026-08-08', 10, 5e9)`,
+  ).run(cik)
+  const insF = db.prepare(
+    `INSERT INTO score_factors (cik, as_of, engine, factor_key, raw, points, weight, status, detail)
+     VALUES (?, '2026-08-09', 'tenbagger', ?, ?, 1, 10, 'SCORED', '')`,
+  )
+  insF.run(cik, 'revenue_growth', 0.35)
+  if (warning) {
+    db.prepare(
+      `INSERT INTO red_flags (cik, as_of, code, severity, message)
+       VALUES (?, '2026-08-09', 'DILUTION', 'WARNING', 'x')`,
+    ).run(cik)
+  }
+}
+
+beforeAll(() => {
+  raw = getRawDb(join(mkdtempSync(join(tmpdir(), 'tb-ind-')), 'i.db'))
+  runMigrations(raw)
+  raw.prepare(
+    `INSERT INTO themes (slug, name, display_order)
+     VALUES ('ai-software-semi', 'AI / Software / Semiconductor', 1)`,
+  ).run()
+  raw.prepare(
+    `INSERT INTO industries (slug, theme_slug, name)
+     VALUES ('semiconductors', 'ai-software-semi', 'Semiconductors')`,
+  ).run()
+  seed(raw, 1, 'LEAD1', 'LEADER', 45)
+  seed(raw, 2, 'LEAD2', 'LEADER', 40)
+  seed(raw, 3, 'CHAL1', 'CHALLENGER', 70, true)
+  seed(raw, 4, 'CHAL2', 'CHALLENGER', 82)
+  seed(raw, 5, 'EMER1', 'EMERGING', 88)
+})
+
+describe('getIndustryView', () => {
+  const view = () => getIndustryView(raw, 'semiconductors')!
+
+  it('없는 산업은 null', () => {
+    expect(getIndustryView(raw, 'nope')).toBeNull()
+  })
+
+  it('Theme 이름을 함께 준다', () => {
+    expect(view().themeName).toBe('AI / Software / Semiconductor')
+  })
+
+  it('그룹을 Leader → Challenger → Emerging 순으로 준다', () => {
+    expect(view().groups.map((g) => g.category)).toEqual(
+      ['LEADER', 'CHALLENGER', 'EMERGING'],
+    )
+  })
+
+  it('그룹 내에서 Tenbagger Score 내림차순으로 정렬한다', () => {
+    const chal = view().groups.find((g) => g.category === 'CHALLENGER')!
+    expect(chal.rows.map((r) => r.ticker)).toEqual(['CHAL2', 'CHAL1'])
+  })
+
+  it('재무 지표를 계산해 붙인다', () => {
+    const r = view().groups[0]!.rows[0]!
+    expect(r.grossMargin).toBeCloseTo(0.7)
+    expect(r.fcfMargin).toBeCloseTo(0.15)
+    expect(r.revenueGrowth).toBeCloseTo(0.35)
+    expect(r.totalDebt).toBe(200)
+  })
+
+  it('Red Flag 개수를 심각도별로 센다', () => {
+    const chal = view().groups.find((g) => g.category === 'CHALLENGER')!
+    expect(chal.rows.find((r) => r.ticker === 'CHAL1')!.warningCount).toBe(1)
+    expect(chal.rows.find((r) => r.ticker === 'CHAL2')!.warningCount).toBe(0)
+  })
+})
+```
+
+- [ ] **Step 2: 테스트 실패 확인**
+
+Run: `npx vitest run tests/ui/industry-query.test.ts`
+Expected: FAIL — `Cannot find module '@/app/_queries/industry'`
+
+- [ ] **Step 3: 쿼리 구현**
+
+`src/app/_queries/industry.ts`:
+
+```ts
+import type Database from 'better-sqlite3'
+import type { Category } from '@/domain/types'
+
+export type CandidateRow = {
+  cik: number
+  ticker: string
+  name: string
+  category: Category | null
+  marketCap: number | null
+  revenueGrowth: number | null
+  grossMargin: number | null
+  fcfMargin: number | null
+  totalDebt: number | null
+  tenbagger: number | null
+  completeness: number
+  criticalCount: number
+  warningCount: number
+}
+
+export type IndustryView = {
+  slug: string
+  name: string
+  themeSlug: string
+  themeName: string
+  groups: { category: Category; rows: CandidateRow[] }[]
+}
+
+const GROUP_ORDER: Category[] = ['LEADER', 'CHALLENGER', 'EMERGING']
+
+export function getIndustryView(
+  raw: Database.Database,
+  slug: string,
+): IndustryView | null {
+  const meta = raw
+    .prepare(
+      `SELECT i.slug, i.name, i.theme_slug AS themeSlug, t.name AS themeName
+       FROM industries i JOIN themes t ON t.slug = i.theme_slug
+       WHERE i.slug = ?`,
+    )
+    .get(slug) as
+    | { slug: string; name: string; themeSlug: string; themeName: string }
+    | undefined
+  if (!meta) return null
+
+  const rows = raw
+    .prepare(
+      `SELECT c.cik, c.ticker, c.name, s.category, s.tenbagger, s.completeness,
+              (SELECT m.market_cap FROM market_data m
+                WHERE m.cik = c.cik ORDER BY m.date DESC LIMIT 1) AS marketCap,
+              f.revenue, f.gross_profit AS grossProfit, f.fcf, f.total_debt AS totalDebt,
+              (SELECT sf.raw FROM score_factors sf
+                WHERE sf.cik = c.cik AND sf.as_of = s.as_of
+                  AND sf.factor_key = 'revenue_growth') AS revenueGrowth,
+              (SELECT COUNT(*) FROM red_flags r
+                WHERE r.cik = c.cik AND r.as_of = s.as_of AND r.severity = 'CRITICAL')
+                AS criticalCount,
+              (SELECT COUNT(*) FROM red_flags r
+                WHERE r.cik = c.cik AND r.as_of = s.as_of AND r.severity = 'WARNING')
+                AS warningCount
+       FROM companies c
+       JOIN company_industry ci ON ci.cik = c.cik
+       JOIN latest_scores s ON s.cik = c.cik
+       LEFT JOIN financials f
+         ON f.cik = c.cik AND f.period_type = 'TTM'
+        AND f.period_end = (SELECT MAX(period_end) FROM financials
+                             WHERE cik = c.cik AND period_type = 'TTM')
+       WHERE ci.industry_slug = ? AND c.is_active = 1`,
+    )
+    .all(slug) as (Omit<CandidateRow, 'grossMargin' | 'fcfMargin'> & {
+      revenue: number | null
+      grossProfit: number | null
+      fcf: number | null
+    })[]
+
+  const ratio = (n: number | null, d: number | null) =>
+    n === null || d === null || d <= 0 ? null : n / d
+
+  const candidates: CandidateRow[] = rows.map((r) => ({
+    cik: r.cik, ticker: r.ticker, name: r.name, category: r.category,
+    marketCap: r.marketCap, revenueGrowth: r.revenueGrowth,
+    grossMargin: ratio(r.grossProfit, r.revenue),
+    fcfMargin: ratio(r.fcf, r.revenue),
+    totalDebt: r.totalDebt,
+    tenbagger: r.tenbagger, completeness: r.completeness,
+    criticalCount: r.criticalCount, warningCount: r.warningCount,
+  }))
+
+  return {
+    ...meta,
+    groups: GROUP_ORDER.map((category) => ({
+      category,
+      rows: candidates
+        .filter((c) => c.category === category)
+        .sort((a, b) => (b.tenbagger ?? -1) - (a.tenbagger ?? -1)),
+    })),
+  }
+}
+```
+
+§18의 3Y CAGR 컬럼은 Phase 1에 넣지 않는다. 3Y CAGR은 `revenue_growth` 팩터 내부의 블렌드에만 쓰이고 `score_factors.raw`에는 TTM YoY만 저장되기 때문이다. 별도 컬럼이 필요해지면 팩터가 두 값을 각각 저장하도록 확장한 뒤 추가한다.
+
+- [ ] **Step 4: 테스트 통과 확인**
+
+Run: `npx vitest run tests/ui/industry-query.test.ts`
+Expected: PASS (6 tests)
+
+- [ ] **Step 5: 테이블 컴포넌트 및 페이지 작성**
+
+`src/app/_components/CandidateTable.tsx`:
+
+```tsx
+import type { CandidateRow } from '../_queries/industry'
+import { formatUsd, formatPct, formatScore } from '../_lib/format'
+import { Value, SignedValue } from './Value'
+import { Badge } from './Badge'
+
+const PREVIEW_COUNT = 10
+
+export function CandidateTable({
+  rows, showAll, industrySlug, insufficientBelow,
+}: {
+  rows: CandidateRow[]
+  showAll: boolean
+  industrySlug: string
+  insufficientBelow: number
+}) {
+  if (rows.length === 0) {
+    return <p className="text-xs text-[var(--color-text-faint)]">해당 없음</p>
+  }
+  const visible = showAll ? rows : rows.slice(0, PREVIEW_COUNT)
+
+  return (
+    <>
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="text-xs">
+            <th>Ticker</th>
+            <th>Company</th>
+            <th className="text-right">Market Cap</th>
+            <th className="text-right">Rev Growth</th>
+            <th className="text-right">Gross Margin</th>
+            <th className="text-right">FCF Margin</th>
+            <th className="text-right">Debt</th>
+            <th className="text-right">Tenbagger</th>
+            <th>Risk</th>
+          </tr>
+        </thead>
+        <tbody>
+          {visible.map((r) => (
+            <tr key={r.cik}>
+              <td><a href={`/stock/${r.ticker}`}>{r.ticker}</a></td>
+              <td className="text-[var(--color-text-dim)]">{r.name}</td>
+              <td className="text-right"><Value dim>{formatUsd(r.marketCap)}</Value></td>
+              <td className="text-right">
+                <SignedValue value={r.revenueGrowth} text={formatPct(r.revenueGrowth)} />
+              </td>
+              <td className="text-right"><Value>{formatPct(r.grossMargin)}</Value></td>
+              <td className="text-right">
+                <SignedValue value={r.fcfMargin} text={formatPct(r.fcfMargin)} />
+              </td>
+              <td className="text-right"><Value dim>{formatUsd(r.totalDebt)}</Value></td>
+              <td className="text-right font-medium"><Value>{formatScore(r.tenbagger)}</Value></td>
+              <td className="space-x-1">
+                {r.criticalCount > 0 && <Badge tone="risk">RED FLAG</Badge>}
+                {r.criticalCount === 0 && r.warningCount > 0 && <Badge tone="watch">WATCH</Badge>}
+                {r.completeness < insufficientBelow && <Badge>DATA {formatPct(r.completeness, 0)}</Badge>}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      {!showAll && rows.length > PREVIEW_COUNT && (
+        <a
+          href={`/industry/${industrySlug}?all=1`}
+          className="mt-2 inline-block text-xs text-[var(--color-info)]"
+        >
+          View All Candidates ({rows.length})
+        </a>
+      )}
+    </>
+  )
+}
+```
+
+`src/app/industry/[slug]/page.tsx`:
+
+```tsx
+import { notFound } from 'next/navigation'
+import { getRawDb } from '@/db/client'
+import { loadConfig } from '@/config'
+import { getIndustryView } from '@/app/_queries/industry'
+import { CandidateTable } from '@/app/_components/CandidateTable'
+
+export const dynamic = 'force-dynamic'
+
+const GROUP_NOTE: Record<string, string> = {
+  LEADER: '산업 벤치마크 — Tenbagger 후보가 아님',
+  CHALLENGER: '비즈니스 모델이 검증된 중형 성장주',
+  EMERGING: '초기 성장 단계 — 수익성 미확보 포함',
+}
+
+export default async function IndustryPage({
+  params, searchParams,
+}: {
+  params: Promise<{ slug: string }>
+  searchParams: Promise<{ all?: string }>
+}) {
+  const { slug } = await params
+  const { all } = await searchParams
+  const cfg = loadConfig()
+  const raw = getRawDb()
+  const view = getIndustryView(raw, slug)
+  raw.close()
+  if (!view) notFound()
+
+  return (
+    <div className="space-y-8">
+      <div>
+        <p className="text-xs text-[var(--color-text-dim)]">{view.themeName}</p>
+        <h1 className="text-lg">{view.name}</h1>
+      </div>
+
+      {view.groups.map((g) => (
+        <section key={g.category}>
+          <h2 className="mb-1 text-sm">
+            {g.category}
+            <span className="ml-2 text-xs text-[var(--color-text-faint)]">
+              {GROUP_NOTE[g.category]}
+            </span>
+          </h2>
+          <CandidateTable
+            rows={g.rows}
+            showAll={all === '1'}
+            industrySlug={slug}
+            insufficientBelow={cfg.scoring.min_completeness}
+          />
+        </section>
+      ))}
+    </div>
+  )
+}
+```
+
+- [ ] **Step 6: 빌드 확인**
+
+Run: `npx next build`
+Expected: 성공. `/industry/[slug]` 라우트가 생성된다.
+
+- [ ] **Step 7: 커밋**
+
+```bash
+git add -A
+git commit -m "feat: Industry 후보 테이블 화면
+
+Leader/Challenger/Emerging 3개 그룹, 그룹 내 Tenbagger Score 내림차순.
+기본 10개 + View All은 쿼리 파라미터로 처리해 클라이언트 JS가 필요 없다.
+Phase 2~3 컬럼(Discovery/Quality/Moat/Fair Value)은 만들지 않는다."
+```
