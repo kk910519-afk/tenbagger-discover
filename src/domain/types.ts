@@ -21,6 +21,20 @@ export type FinancialPeriod = {
   rdExpense: number | null
 }
 
+/**
+ * financials로 나가기 전 물리적으로 불가능한 값을 null로 거부한 기록.
+ * 집계용(잡 통계)이며 DB 컬럼에는 저장하지 않는다 — 무엇을, 왜 거부했는지
+ * "셀 수 있게" 만드는 것이 목적이다(ingest-hardening 과제 3).
+ */
+export type FieldRejection = {
+  cik: number
+  periodEnd: string
+  periodType: PeriodType
+  field: 'revenue' | 'grossProfit'
+  reason: string
+  value: number
+}
+
 export type IndustryMeta = {
   slug: string
   name: string

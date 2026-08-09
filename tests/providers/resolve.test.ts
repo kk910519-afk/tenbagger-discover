@@ -141,6 +141,45 @@ describe('indexFacts — API/bulk 기간 정합 (Apple 실사례 회귀)', () =>
   })
 })
 
+describe('resolveFlow — 매출 태그 공존 시 큰 값 선택 (결함 2, Alphabet 실사례)', () => {
+  // 실측: cik=1652044(Alphabet), 같은 period_end·qtrs·source(bulk)에
+  // RevenueFromContractWithCustomerExcludingAssessedTax와 Revenues가 둘 다
+  // 존재하는데, 어느 쪽이 오염(작은 디멘션 슬라이스)인지가 분기마다 다르다.
+  const EXCL = 'RevenueFromContractWithCustomerExcludingAssessedTax'
+
+  it('Revenues가 크면(진짜 총계) Revenues를 쓴다 — 2024-09-30 실사례', () => {
+    const r = resolveFlow(new Map([
+      [EXCL, 388_000_000],       // 오염된 세그먼트 슬라이스로 추정
+      ['Revenues', 88_268_000_000], // 실제 Alphabet Q3 2024 매출과 일치
+    ]))
+    expect(r.fields.revenue).toBe(88_268_000_000)
+    expect(r.used.revenue).toBe('Revenues')
+  })
+
+  it('Excl이 크면 Excl을 쓴다 — 2024-06-30 실사례 (오염이 반대쪽 태그에 나타남)', () => {
+    const r = resolveFlow(new Map([
+      [EXCL, 48_509_000_000],
+      ['Revenues', 106_000_000], // 오염된 값
+    ]))
+    expect(r.fields.revenue).toBe(48_509_000_000)
+    expect(r.used.revenue).toBe(EXCL)
+  })
+
+  it('둘 다 있고 값이 같으면(오염 없음) 그대로 그 값을 쓴다', () => {
+    const r = resolveFlow(new Map([
+      [EXCL, 3_913_000_000],
+      ['Revenues', 3_913_000_000],
+    ]))
+    expect(r.fields.revenue).toBe(3_913_000_000)
+  })
+
+  it('일반적인 경우 — Excl만 있는 대다수 회사는 영향받지 않는다', () => {
+    const r = resolveFlow(new Map([[EXCL, 253_549_000_000]]))
+    expect(r.fields.revenue).toBe(253_549_000_000)
+    expect(r.used.revenue).toBe(EXCL)
+  })
+})
+
 describe('resolveFlow', () => {
   it('매출 폴백 체인의 1순위를 먼저 쓴다', () => {
     const r = resolveFlow(new Map([

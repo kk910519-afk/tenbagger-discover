@@ -64,12 +64,24 @@ export async function ingestFundamentals(deps: FundamentalsDeps): Promise<JobSta
     let noData = 0
     let normalizeFailed = 0
     const normalizeFailedCiks: string[] = []
+    // 결함 3(ingest-hardening 과제): 물리적으로 불가능해 null로 거부된 필드를
+    // "안 보이게 조용히 사라지는" 대신 셀 수 있게 잡 통계에 남긴다.
+    let rejected = 0
+    const rejectionSample: string[] = []
     for (const cik of ciks) {
       try {
         const result = normalizeFacts(getFacts(raw, cik))
         if (result.quarterly.length === 0 && result.annual.length === 0) { noData++; continue }
         replaceFinancials(raw, cik, result)
         normalized++
+        if (result.rejections.length > 0) {
+          rejected += result.rejections.length
+          for (const r of result.rejections) {
+            if (rejectionSample.length < FAILURE_SAMPLE_SIZE) {
+              rejectionSample.push(`${r.cik}:${r.periodType}:${r.periodEnd}:${r.field}:${r.reason}`)
+            }
+          }
+        }
       } catch {
         normalizeFailed++
         normalizeFailedCiks.push(String(cik))
@@ -107,6 +119,8 @@ export async function ingestFundamentals(deps: FundamentalsDeps): Promise<JobSta
       noData,
       normalizeFailed,
       normalizeFailedCiks,
+      validationRejected: rejected,
+      validationRejectedSample: rejectionSample,
       quarterErrors,
     }
   })

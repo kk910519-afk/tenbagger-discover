@@ -306,6 +306,78 @@ describe('normalizeFacts — API/bulk 중복 기간 정합 (Apple 실사례 회�
   })
 })
 
+describe('normalizeFacts — 물리적으로 불가능한 값 거부 (결함 3)', () => {
+  it('음수 매출은 null로 거부되고 rejections에 기록된다', () => {
+    const r = normalizeFacts([f('Revenues', 1, '2025-03-31', -50)])
+    const q = r.quarterly.find((q) => q.periodEnd === '2025-03-31')!
+    expect(q.revenue).toBeNull()
+    expect(r.rejections).toHaveLength(1)
+    expect(r.rejections[0]).toMatchObject({
+      cik: 1, field: 'revenue', reason: 'revenue_negative', value: -50,
+    })
+  })
+
+  it('매출총이익이 매출을 초과하면 null로 거부된다 (GrossProfit 태그가 직접 오염된 경우)', () => {
+    const r = normalizeFacts([
+      f('Revenues', 1, '2025-03-31', 100),
+      f('GrossProfit', 1, '2025-03-31', 150),
+    ])
+    const q = r.quarterly.find((q) => q.periodEnd === '2025-03-31')!
+    expect(q.revenue).toBe(100)
+    expect(q.grossProfit).toBeNull()
+    expect(r.rejections).toHaveLength(1)
+    expect(r.rejections[0]!.reason).toBe('gross_profit_exceeds_revenue')
+  })
+
+  it('음수 영업이익·자본·FCF는 거부되지 않고 그대로 통과한다 — 적자/부실 신호 보존', () => {
+    const facts = [
+      f('Revenues', 1, '2025-03-31', 100),
+      f('OperatingIncomeLoss', 1, '2025-03-31', -30),
+      f('StockholdersEquity', 0, '2025-03-31', -20),
+      f('NetCashProvidedByUsedInOperatingActivities', 1, '2025-03-31', -10),
+      f('PaymentsToAcquirePropertyPlantAndEquipment', 1, '2025-03-31', 5),
+    ]
+    const r = normalizeFacts(facts)
+    const q = r.quarterly.find((q) => q.periodEnd === '2025-03-31')!
+    expect(q.operatingIncome).toBe(-30)
+    expect(q.equity).toBe(-20)
+    expect(q.ocf).toBe(-10)
+    expect(q.fcf).toBe(-15) // ocf - capex = -10 - 5
+    expect(r.rejections).toHaveLength(0)
+  })
+
+  it('분기 하나에서 매출이 거부되면 그 분기를 포함하는 TTM 매출도 null이 된다 (0/부분합으로 대체하지 않는다)', () => {
+    const facts = [
+      f('Revenues', 1, '2024-06-30', 100),
+      f('Revenues', 1, '2024-09-30', -10), // 불가능한 값 — 거부됨
+      f('Revenues', 1, '2024-12-31', 130),
+      f('Revenues', 1, '2025-03-31', 160),
+    ]
+    const r = normalizeFacts(facts)
+    const badQuarter = r.quarterly.find((q) => q.periodEnd === '2024-09-30')!
+    expect(badQuarter.revenue).toBeNull()
+    expect(r.ttm[0]!.periodEnd).toBe('2025-03-31')
+    expect(r.ttm[0]!.revenue).toBeNull()
+  })
+
+  it('연간에서 유도된 Q4 자체가 음수 매출이면 그 Q4만 거부된다', () => {
+    // 연간 매출(300)이 분기 3개 합(320)보다 작아 차감하면 Q4가 음수가 된다.
+    const facts = [
+      f('Revenues', 4, '2024-12-31', 300, '10-K'),
+      f('Revenues', 1, '2024-03-31', 100),
+      f('Revenues', 1, '2024-06-30', 110),
+      f('Revenues', 1, '2024-09-30', 110),
+    ]
+    const r = normalizeFacts(facts)
+    const q4 = r.quarterly.find((q) => q.periodEnd === '2024-12-31')!
+    expect(q4.revenue).toBeNull()
+    expect(r.rejections.some((x) => x.periodType === 'Q' && x.periodEnd === '2024-12-31')).toBe(true)
+    // 연간 자체(매출 300, 유효)는 거부되지 않는다.
+    const annual = r.annual.find((a) => a.periodEnd === '2024-12-31')!
+    expect(annual.revenue).toBe(300)
+  })
+})
+
 describe('normalizeFacts — 연간 및 출처 기록', () => {
   it('연간 기간을 최근순으로 만든다', () => {
     const r = normalizeFacts([
@@ -322,6 +394,6 @@ describe('normalizeFacts — 연간 및 출처 기록', () => {
 
   it('데이터가 없으면 빈 결과를 반환한다', () => {
     const r = normalizeFacts([])
-    expect(r).toEqual({ quarterly: [], annual: [], ttm: [], sourceTags: {} })
+    expect(r).toEqual({ quarterly: [], annual: [], ttm: [], sourceTags: {}, rejections: [] })
   })
 })

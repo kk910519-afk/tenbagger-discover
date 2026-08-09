@@ -15,7 +15,8 @@
     "pipeline:fundamentals": "tsx src/pipeline/cli.ts fundamentals",
     "pipeline:prices": "tsx src/pipeline/cli.ts prices",
     "pipeline:scores": "tsx src/pipeline/cli.ts scores",
-    "pipeline:all": "tsx src/pipeline/cli.ts all"
+    "pipeline:all": "tsx src/pipeline/cli.ts all",
+    "query": "node scripts/query.mjs"
   },
   "keywords": [],
   "author": "",

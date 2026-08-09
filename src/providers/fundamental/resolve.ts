@@ -157,6 +157,42 @@ function firstOf(
   return null
 }
 
+const REVENUE_TAG_EXCL_TAX = 'RevenueFromContractWithCustomerExcludingAssessedTax'
+const REVENUE_TAG_TOTAL = 'Revenues'
+
+/**
+ * 매출 태그 해석. 결함 2(ingest-hardening 과제): 같은 회계기간·같은 소스에
+ * `Revenues`와 `RevenueFromContractWithCustomerExcludingAssessedTax`가 둘 다
+ * bulk로 존재할 때, 기존 체인 순서(Excl 우선)는 어느 쪽이 오염됐는지와
+ * 무관하게 항상 Excl을 골라 틀린 값을 낼 수 있었다(Alphabet 실사례).
+ *
+ * 실 DB 전수 조사(두 태그가 같은 cik·period_end·qtrs·source에 함께 존재하는
+ * 747개 사례)로 확인한 것: 두 값이 다를 때 작은 쪽은 정도의 차이만 있을 뿐
+ * 거의 항상 디멘션 오염(세그먼트/제품 축 슬라이스가 연결 총계 자리에 새어
+ * 들어온 값)이었다 — 근접-0 값(예: GOOGL 2024-09-30 Excl=388,000,000 vs
+ * Revenues=88,268,000,000, 실제 분기 매출과 일치)부터 두 자릿수~세 자릿수
+ * 배율 차이까지 전부. 그리고 오염이 어느 태그에 나타나는지는 고정돼 있지
+ * 않다 — 같은 회사(Alphabet)의 다른 분기(2024-06-30)에서는 정반대로
+ * Revenues=106,000,000(오염)이고 Excl=48,509,000,000(더 큼)이었다. 즉
+ * "Excl이 항상 맞다"도 "Revenues가 항상 맞다"도 실측과 맞지 않는다 —
+ * 오염된 값은 디멘션 슬라이스이므로 정의상 진짜 연결 총계의 부분집합이라
+ * 항상 작다는 점만 일관됐다. 그래서 둘 다 있으면 더 큰 값을 취한다.
+ *
+ * 두 태그 중 하나만 있는 회사(대다수)는 영향이 없다 — 기존 체인 순서
+ * (Excl → Revenues → SalesRevenueNet → RevenueInclTax)를 그대로 따른다.
+ * 두 값이 같으면(실측 747건 중 198건) 어느 쪽을 골라도 결과는 같다.
+ */
+function resolveRevenue(tags: Map<string, number>): { value: number; tag: string } | null {
+  const excl = tags.get(REVENUE_TAG_EXCL_TAX)
+  const total = tags.get(REVENUE_TAG_TOTAL)
+  if (typeof excl === 'number' && typeof total === 'number') {
+    return total > excl
+      ? { value: total, tag: REVENUE_TAG_TOTAL }
+      : { value: excl, tag: REVENUE_TAG_EXCL_TAX }
+  }
+  return firstOf(tags, REVENUE_CHAIN)
+}
+
 export type ResolvedFlow = {
   revenue: number | null
   grossProfit: number | null
@@ -174,7 +210,7 @@ export function resolveFlow(
 ): { fields: ResolvedFlow; used: Record<string, string> } {
   const used: Record<string, string> = {}
 
-  const rev = firstOf(tags, REVENUE_CHAIN)
+  const rev = resolveRevenue(tags)
   if (rev) used.revenue = rev.tag
 
   let grossProfit: number | null = null

@@ -89,6 +89,7 @@ describe('replaceFinancials — 재계산 시 이전 회차의 소멸된 기간�
       annual: [period('2024-12-31', 'A', 460)],
       ttm: [period('2024-12-31', 'TTM', 460)],
       sourceTags: {},
+      rejections: [],
     }
     replaceFinancials(raw, OTHER_CIK, first)
     const n = raw.prepare('SELECT COUNT(*) c FROM financials WHERE cik = ?').get(OTHER_CIK) as { c: number }
@@ -104,6 +105,7 @@ describe('replaceFinancials — 재계산 시 이전 회차의 소멸된 기간�
       annual: [],
       ttm: [],
       sourceTags: {},
+      rejections: [],
     }
     replaceFinancials(raw, OTHER_CIK, second)
 

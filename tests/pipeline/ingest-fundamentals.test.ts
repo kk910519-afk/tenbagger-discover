@@ -102,6 +102,57 @@ describe('ingestFundamentals', () => {
   })
 })
 
+describe('ingestFundamentals — 불가능한 값 거부를 잡 통계로 노출한다 (결함 3)', () => {
+  const REJECT_CIK = 4000000
+
+  function badFact(tag: string, qtrs: number, periodEnd: string, value: number): RawFact {
+    return {
+      cik: REJECT_CIK, tag, unit: 'USD', periodStart: null, periodEnd, qtrs, value,
+      form: qtrs === 4 ? '10-K' : '10-Q', filedDate: '2026-08-01',
+      accession: `r-${periodEnd}-${qtrs}`, source: 'bulk',
+    }
+  }
+
+  const badBulk: BulkFundamentalProvider = {
+    fetchQuarter: async (_y, q) => (q === 2 ? [badFact('Revenues', 1, '2025-03-31', -999)] : []),
+  }
+  const noApiCalls: CompanyFactsProvider = { fetchCompany: async () => [] }
+
+  let rejectRaw: Database.Database
+  let rejectStats: Record<string, unknown>
+
+  beforeAll(async () => {
+    rejectRaw = getRawDb(join(mkdtempSync(join(tmpdir(), 'tb-fund-reject-')), 'f.db'))
+    runMigrations(rejectRaw)
+    rejectRaw.prepare(
+      `INSERT INTO companies (cik, ticker, name, is_active, first_seen, last_updated)
+       VALUES (${REJECT_CIK}, 'BADCO', 'BAD DATA CORP', 1, '2026-08-09', '2026-08-09')`,
+    ).run()
+    rejectRaw.prepare(
+      `INSERT INTO company_industry (cik, industry_slug, theme_slug, is_primary, source)
+       VALUES (${REJECT_CIK}, 'ai-infrastructure', 'ai-software-semi', 1, 'override')`,
+    ).run()
+    rejectStats = await ingestFundamentals({
+      raw: rejectRaw, cfg, bulk: badBulk, companyFacts: noApiCalls, asOf: '2026-08-09',
+    })
+  })
+
+  it('거부된 필드 개수가 통계에 나타난다', () => {
+    expect(rejectStats.validationRejected).toBe(1)
+  })
+
+  it('거부 표본에 회사/기간/필드/사유가 담긴다', () => {
+    expect(rejectStats.validationRejectedSample).toEqual([
+      `${REJECT_CIK}:Q:2025-03-31:revenue:revenue_negative`,
+    ])
+  })
+
+  it('거부된 값은 financials에 null로 저장된다 — -999가 아니다', () => {
+    const fin = getFinancialsFor(rejectRaw, REJECT_CIK)
+    expect(fin.quarterly[0]!.revenue).toBeNull()
+  })
+})
+
 describe('selectStaleCiks', () => {
   it('최신 사실이 기준일보다 오래되면 지연으로 판정한다', () => {
     expect(selectStaleCiks(raw, '2026-08-09', 120)).toContain(1045810)
@@ -109,6 +160,35 @@ describe('selectStaleCiks', () => {
 
   it('충분히 최신이면 제외한다', () => {
     expect(selectStaleCiks(raw, '2025-04-15', 120)).not.toContain(1045810)
+  })
+
+  describe('period_end 대신 filed_date로 판정한다 (결함 1 회귀)', () => {
+    // 실측 패턴(예: OTTR CIK 1466593)을 재현: bulk가 채운 period_end는
+    // asOf 근처로 "최신"처럼 보이지만, 실제 마지막 신고(filed_date)는 몇 달
+    // 전이다. period_end 기준이면 이 회사는 절대 stale로 잡히지 않는다 —
+    // 이것이 결함 1이다. filed_date 기준이면 정확히 잡혀야 한다.
+    const OLD_FILER_CIK = 3000000
+
+    beforeAll(() => {
+      raw.prepare(
+        `INSERT INTO companies (cik, ticker, name, is_active, first_seen, last_updated)
+         VALUES (${OLD_FILER_CIK}, 'OLDF', 'OLD FILER CORP', 1, '2026-08-09', '2026-08-09')`,
+      ).run()
+      raw.prepare(
+        `INSERT INTO company_industry (cik, industry_slug, theme_slug, is_primary, source)
+         VALUES (${OLD_FILER_CIK}, 'ai-infrastructure', 'ai-software-semi', 1, 'override')`,
+      ).run()
+      raw.prepare(
+        `INSERT INTO financial_facts
+           (cik, tag, unit, period_start, period_end, qtrs, value, form, filed_date, accession, source)
+         VALUES (${OLD_FILER_CIK}, 'Revenues', 'USD', NULL, '2026-06-30', 1, 100, '10-Q',
+                 '2026-02-20', 'a-old-filer', 'bulk')`,
+      ).run()
+    })
+
+    it('period_end(2026-06-30)는 asOf(2026-08-09)와 가깝지만 filed_date(2026-02-20)는 120일 넘게 오래됐다 — stale로 판정한다', () => {
+      expect(selectStaleCiks(raw, '2026-08-09', 120)).toContain(OLD_FILER_CIK)
+    })
   })
 
   describe('financial_facts가 전혀 없는 기업 (신규 상장사)', () => {

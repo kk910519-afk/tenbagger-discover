@@ -1,5 +1,6 @@
-import type { FinancialPeriod, PeriodType } from '@/domain/types'
+import type { FieldRejection, FinancialPeriod, PeriodType } from '@/domain/types'
 import { sumTTM } from '@/domain/growth'
+import { validatePeriod } from '@/domain/validate'
 import type { RawFact } from '../types.js'
 import { indexFacts, resolveFlow, resolveStock, type FactIndex } from './resolve.js'
 
@@ -9,6 +10,8 @@ export type NormalizeResult = {
   ttm: FinancialPeriod[]
   /** `${periodType}:${periodEnd}` → { field → tag } */
   sourceTags: Record<string, Record<string, string>>
+  /** 물리적으로 불가능해 null로 거부된 필드 기록 (ingest-hardening 결함 3) */
+  rejections: FieldRejection[]
 }
 
 const DAY_MS = 86_400_000
@@ -102,7 +105,25 @@ function buildPeriod(
 
 export function normalizeFacts(facts: RawFact[]): NormalizeResult {
   const sourceTags: Record<string, Record<string, string>> = {}
-  if (facts.length === 0) return { quarterly: [], annual: [], ttm: [], sourceTags }
+  if (facts.length === 0) {
+    return { quarterly: [], annual: [], ttm: [], sourceTags, rejections: [] }
+  }
+
+  const cik = facts[0]!.cik
+  const rejections: FieldRejection[] = []
+
+  // 결함 3(ingest-hardening 과제): financials로 나가는 모든 기간(신고 분기,
+  // 유도된 Q4, 연간, TTM)은 push되기 전에 여기를 거쳐야 한다 — revenue<0,
+  // grossProfit>revenue 같은 물리적으로 불가능한 값이 스코어링/밸류에이션
+  // 엔진에 도달하지 않도록 막는다(src/domain/validate.ts 참고). Q4/TTM은
+  // 이미 검증된 분기 값을 그대로 가감산하므로(부등식은 덧셈/뺄셈에서
+  // 보존된다) 이중 방어이지만, 유도 과정 자체가 새로운 위반을 만들 수도
+  // 있어(예: 연간에서 분기 3개를 뺀 나머지가 음수) 각 지점에서 다시 검증한다.
+  const validate = (p: FinancialPeriod): FinancialPeriod => {
+    const { period, rejections: r } = validatePeriod(cik, p)
+    if (r.length > 0) rejections.push(...r)
+    return period
+  }
 
   const idx = indexFacts(facts)
   const desc = (a: FinancialPeriod, b: FinancialPeriod) =>
@@ -111,7 +132,7 @@ export function normalizeFacts(facts: RawFact[]): NormalizeResult {
   // 연간 (qtrs=4)
   const annual: FinancialPeriod[] = []
   for (const [periodEnd, tags] of idx.duration.get(4) ?? []) {
-    annual.push(buildPeriod(idx, periodEnd, 'A', tags, sourceTags))
+    annual.push(validate(buildPeriod(idx, periodEnd, 'A', tags, sourceTags)))
   }
   annual.sort(desc)
 
@@ -120,7 +141,7 @@ export function normalizeFacts(facts: RawFact[]): NormalizeResult {
   const reportedQuarterEnds = new Set<string>()
   for (const [periodEnd, tags] of idx.duration.get(1) ?? []) {
     reportedQuarterEnds.add(periodEnd)
-    quarterly.push(buildPeriod(idx, periodEnd, 'Q', tags, sourceTags))
+    quarterly.push(validate(buildPeriod(idx, periodEnd, 'Q', tags, sourceTags)))
   }
 
   // Q4 재구성: 연간 종료일에 분기 값이 없고 직전 3개 분기가 인접하게 있으면 차감으로 유도
@@ -164,7 +185,7 @@ export function normalizeFacts(facts: RawFact[]): NormalizeResult {
     q4.equity = stock.fields.equity
     q4.sharesOutstanding = stock.fields.sharesOutstanding
 
-    quarterly.push(q4)
+    quarterly.push(validate(q4))
     sourceTags[`Q:${a.periodEnd}`] = { ...stock.used, derived: 'Q4_from_annual' }
   }
   quarterly.sort(desc)
@@ -186,7 +207,7 @@ export function normalizeFacts(facts: RawFact[]): NormalizeResult {
     p.totalDebt = window[0]!.totalDebt
     p.equity = window[0]!.equity
     p.sharesOutstanding = window[0]!.sharesOutstanding
-    ttm.push(p)
+    ttm.push(validate(p))
 
     // 출처 기록은 anchor(최신 분기) 것을 우선하되, 창 안 어딘가에 유도된 Q4가
     // 있으면 그 사실이 anchor 항목에만 있지 않도록 병합한다 — TTM 합계가
@@ -208,5 +229,5 @@ export function normalizeFacts(facts: RawFact[]): NormalizeResult {
     sourceTags[`TTM:${p.periodEnd}`] = merged
   }
 
-  return { quarterly, annual, ttm, sourceTags }
+  return { quarterly, annual, ttm, sourceTags, rejections }
 }

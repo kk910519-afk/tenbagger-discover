@@ -85,6 +85,17 @@ export function getFinancialsFor(
   }
 }
 
+// 왜 period_end가 아니라 filed_date인가: period_end는 회계기간 "종료일"일 뿐,
+// 그 값이 실제로 언제 신고됐는지와 무관하다 — 회계 마감부터 신고서 제출까지
+// 통상 1~4개월이 걸리므로(fiscal lag), 오늘 날짜와 period_end를 직접 비교하는
+// 것 자체가 잘못된 검사다. 게다가 SEC bulk는 회사가 실제로 신고를 멈춘 뒤에도
+// (혹은 디멘션 오염된 값이라도) period_end만은 계속 최신처럼 채워 넣는 경우가
+// 있어 — Alphabet 실사례: OperatingIncomeLoss가 매 분기 최신 period_end로
+// 들어오지만 값 자체가 틀렸는데도 "최근 period_end가 있다"는 이유만으로
+// 이 회사가 한 번도 stale로 판정된 적이 없어 API 재확인이 전혀 일어나지
+// 않았다(ingest-hardening 과제 결함 1). filed_date는 신고자가 실제로 SEC에
+// 제출한 날짜이므로 "이 회사 데이터가 실제로 언제 갱신됐는가"를 정직하게
+// 측정한다.
 export function selectStaleCiks(
   raw: Database.Database,
   asOf: string,
@@ -97,7 +108,7 @@ export function selectStaleCiks(
     .prepare(
       `SELECT c.cik FROM companies c
        JOIN company_industry ci ON ci.cik = c.cik
-       LEFT JOIN (SELECT cik, MAX(period_end) AS latest FROM financial_facts GROUP BY cik) f
+       LEFT JOIN (SELECT cik, MAX(filed_date) AS latest FROM financial_facts GROUP BY cik) f
          ON f.cik = c.cik
        WHERE f.latest IS NULL OR f.latest < ?
        ORDER BY c.cik`,
