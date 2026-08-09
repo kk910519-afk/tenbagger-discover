@@ -71,6 +71,10 @@ describe('grossMarginFactor', () => {
     )
     expect(r.status).toBe('SCORED')
     expect(r.detail).toContain('추세 산출 불가')
+    // level = 400/1000 = 0.40 → level_curve의 (0.40, 0.50) 노드에 정확히 걸림 → score 0.50
+    // weight 10 → points 5.0. 블렌드(level 0.6)를 잘못 적용하면 3.0이 나와 이 값과 어긋난다.
+    expect(r.raw).toBeCloseTo(0.4)
+    expect(r.points).toBeCloseTo(5.0)
   })
 
   it('매출총이익이 없으면 NO_DATA', () => {
@@ -121,5 +125,55 @@ describe('operatingLeverageFactor', () => {
       ctx({ ttm: [fp('2025-03-31', { revenue: 1000, operatingIncome: 100 })] }),
     )
     expect(r.status).toBe('NO_DATA')
+  })
+
+  it('비용 증가율을 산출할 그로스마진 데이터가 없으면 영업이익률 변화만으로 채점한다', () => {
+    // grossProfit이 없는 분기가 하나라도 있으면 opexGrowth가 null → growthGap null.
+    // operatingMargin은 grossProfit 없이 revenue/operatingIncome만으로 계산되므로 marginDeltaPp는 살아남는다.
+    const r = operatingLeverageFactor(
+      ctx({
+        ttm: [
+          fp('2025-03-31', { revenue: 1500, operatingIncome: 300 }),      // grossProfit 없음 → opex 산출 불가
+          fp('2024-11-31'),
+          fp('2024-10-31'),
+          fp('2024-9-31'),
+          fp('2024-03-31', { revenue: 1000, grossProfit: 700, operatingIncome: 100 }),
+        ],
+      }),
+    )
+    expect(r.status).toBe('SCORED')
+    expect(r.detail).toContain('영업이익률')
+    expect(r.detail).toContain('비용 증가율 산출 불가')
+    // 영업이익률 20% - 10% = +10.0%p → margin_delta_curve의 (10, 1.00) 노드에 정확히 걸림 → score 1.00
+    // weight 10 → points 10.0. 블렌드(margin_delta 0.5)를 잘못 적용하면 5.0이 나와 이 값과 어긋난다.
+    expect(r.raw).toBeCloseTo(10.0)
+    expect(r.points).toBeCloseTo(10.0)
+  })
+
+  it('영업이익률 변화를 산출할 수 없으면 매출-비용 증가율 격차만으로 채점한다', () => {
+    // 당기 매출을 0으로 두면 operatingMargin(now)이 revenue<=0으로 null이 되어
+    // marginDeltaPp가 null이 된다. opexOf는 revenue와 무관하게 grossProfit/operatingIncome만
+    // 필요하므로 growthGap은 살아남는다. opexOf(now)=0, opexOf(prior)=600으로 두면
+    // revGrowth(-1) - opexGrowth(-1) = growthGap 0으로 딱 떨어진다.
+    const r = operatingLeverageFactor(
+      ctx({
+        ttm: [
+          fp('2025-03-31', { revenue: 0, grossProfit: 0, operatingIncome: 0 }),
+          fp('2024-11-31'),
+          fp('2024-10-31'),
+          fp('2024-9-31'),
+          fp('2024-03-31', { revenue: 1000, grossProfit: 700, operatingIncome: 100 }),
+        ],
+      }),
+    )
+    expect(r.status).toBe('SCORED')
+    expect(r.detail).toContain('매출-비용 증가율 격차')
+    expect(r.detail).toContain('영업이익률 변화 산출 불가')
+    // growthGap = revGrowth(0/1000-1=-1) - opexGrowth(0/600-1=-1) = 0
+    // → growth_gap_curve의 (0, 0.50) 노드에 정확히 걸림 → score 0.50, weight 10 → points 5.0.
+    // 블렌드(growth_gap 0.5)를 잘못 적용하면 2.5가 나와 이 값과 어긋난다.
+    // raw는 marginDeltaPp가 null이므로 growthGap(0)으로 폴백한다.
+    expect(r.raw).toBeCloseTo(0)
+    expect(r.points).toBeCloseTo(5.0)
   })
 })

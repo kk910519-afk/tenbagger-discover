@@ -38,5 +38,7 @@ export const operatingLeverageFactor: FactorFn = ({ snapshot, cfg }) => {
     parts.push('영업이익률 변화 산출 불가')
   }
 
-  return scored(KEY, f.weight, marginDeltaPp, normalized, parts.join(' · '))
+  // raw는 실제로 채점에 쓰인 값을 담는다 — 한쪽만 있으면 그 값이 raw다.
+  // 둘 중 어느 쪽이었는지는 위 detail 문자열이 알려준다.
+  return scored(KEY, f.weight, marginDeltaPp ?? growthGap, normalized, parts.join(' · '))
 }
