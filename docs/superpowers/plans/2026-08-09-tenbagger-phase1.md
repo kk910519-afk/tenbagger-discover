@@ -14,7 +14,7 @@
 
 - Node.js 24 / npm 12 / Windows. 쉘 명령은 PowerShell 기준으로 검증할 것.
 - TypeScript `strict: true`. `any` 금지. 결측은 `null`이며 `0`으로 대체하지 않는다.
-- **`src/engines/**`는 `src/db` 또는 `src/providers`를 import할 수 없다.** Task 12의 테스트가 이를 강제한다.
+- **`src/engines/**`는 `src/db` 또는 `src/providers`를 import할 수 없다.** Task 13의 테스트가 이를 강제한다.
 - SEC 요청에는 `User-Agent: TenbaggerDashboard/0.1 (kk910519@gmail.com)` 헤더가 필수이며 초당 10요청을 넘지 않는다.
 - YAML에 숫자 구분자 언더스코어(`300_000_000`)를 쓰지 않는다. YAML 1.2에서 문자열로 파싱된다. 평문 숫자만 사용한다.
 - 금액 단위는 전부 USD 원단위(달러). 비율은 소수(0.38 = 38%). 마진 추세만 bps 단위.
@@ -617,10 +617,13 @@ export type IndustryMeta = {
   tamAsOf: string | null
 }
 
-/** factorKey → 해당 산업 후보들의 정렬된 원시 지표 배열 */
 export type IndustryStats = {
   candidateCount: number
+  /** 경쟁우위 팩터의 "산업 대비 GM" 신호에 쓰인다 */
   medianGrossMargin: number | null
+  /** TAM CAGR이 큐레이션되지 않은 산업의 성장률 대체값 */
+  medianRevenueGrowth: number | null
+  /** 지표 키 → 오름차순 정렬된 값 배열. 백분위 표시용 */
   distributions: Record<string, number[]>
 }
 
@@ -5162,4 +5165,1344 @@ Finnhub /quote와 픽스처 두 구현을 env 값 하나로 전환한다.
 키가 없으면 발급 방법과 대안을 담은 에러를 던진다.
 시가총액 = 주가 x SEC 발행주식수. 주식수가 없으면 시가총액은 null이며
 주가는 그대로 저장한다. 무료 티어에 거래량이 없어 volume은 null이다."
+```
+
+---
+
+## Stage C — 스코어링 (Task 13-21)
+
+### Task 13: 아키텍처 테스트 & 도메인 지표 함수
+
+**Files:**
+- Create: `src/domain/metrics.ts`
+- Test: `tests/architecture.test.ts`, `tests/domain/metrics.test.ts`
+
+**Interfaces:**
+- Consumes: `FinancialPeriod` (Task 2), `yoy`/`cagr` (Task 2), `olsSlope`/`stdev` (Task 2)
+- Produces (전부 `src/domain/metrics.ts`, 인자는 최근순 배열):
+  - `ttmRevenueGrowth(ttm: FinancialPeriod[]): number | null` — `ttm[0]` 대 `ttm[4]`
+  - `revenueCagr3y(ttm: FinancialPeriod[]): number | null` — `ttm[0]` 대 `ttm[12]`, 3년
+  - `revenueAcceleration(quarterly: FinancialPeriod[]): number | null`
+  - `grossMargin(p: FinancialPeriod | undefined): number | null`
+  - `operatingMargin(p): number | null`
+  - `fcfMargin(p): number | null`
+  - `grossMarginSeries(quarterly: FinancialPeriod[], n: number): number[]` — **오래된 순**으로 반환(OLS 기울기가 양수면 개선)
+  - `grossMarginTrendBps(quarterly, n): number | null` — 분기당 기울기를 연율 bps로
+  - `roic(p: FinancialPeriod | undefined, taxRate: number): number | null`
+  - `cashRunwayQuarters(ttm: FinancialPeriod[]): number | null` — FCF ≥ 0이면 null
+  - `netCashToMarketCap(p, marketCap): number | null`
+  - `debtToEbitda(p): number | null`
+  - `opexGrowth(ttm: FinancialPeriod[]): number | null`
+
+이 함수들은 스냅샷 통계(Task 14)와 팩터(Task 16-18) 양쪽에서 쓰인다. 한 곳에 두어 두 경로가 다른 값을 내는 일을 막는다.
+
+- [ ] **Step 1: 아키텍처 테스트 작성**
+
+`tests/architecture.test.ts`:
+
+```ts
+import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { globSync } from 'node:fs'
+
+/**
+ * engines/는 순수 함수여야 한다. DB나 Provider를 import하면
+ * 네트워크 없이 테스트할 수 없고 Provider 교체 시 엔진까지 고쳐야 한다.
+ */
+describe('아키텍처 경계', () => {
+  it('engines는 db와 providers를 import하지 않는다', () => {
+    const files = globSync('src/engines/**/*.ts')
+    const violations: string[] = []
+    for (const file of files) {
+      const src = readFileSync(file, 'utf8')
+      for (const m of src.matchAll(/from\s+['"]([^'"]+)['"]/g)) {
+        const spec = m[1]!
+        if (/(^|\/)(@\/)?(db|providers)(\/|$)/.test(spec)) {
+          violations.push(`${file} → ${spec}`)
+        }
+      }
+    }
+    expect(violations).toEqual([])
+  })
+
+  it('engines 파일이 실제로 존재한다 (테스트가 공허하지 않음을 보장)', () => {
+    expect(globSync('src/engines/**/*.ts').length).toBeGreaterThan(0)
+  })
+})
+```
+
+> `globSync`는 Node 22+의 `node:fs`에 있다. Node 24이므로 사용 가능하다.
+> 두 번째 테스트는 Task 15에서 첫 엔진 파일이 생기기 전까지 실패한다.
+> **Step 1에서는 첫 번째 테스트만 작성하고, 두 번째는 Task 15의 커밋에서 추가한다.**
+
+- [ ] **Step 2: 아키텍처 테스트 통과 확인**
+
+Run: `npx vitest run tests/architecture.test.ts`
+Expected: PASS (1 test — `src/engines/`가 비어 있으므로 위반 0)
+
+- [ ] **Step 3: 지표 실패 테스트 작성**
+
+`tests/domain/metrics.test.ts`:
+
+```ts
+import { describe, it, expect } from 'vitest'
+import type { FinancialPeriod } from '@/domain/types'
+import {
+  ttmRevenueGrowth, revenueCagr3y, revenueAcceleration,
+  grossMargin, operatingMargin, fcfMargin,
+  grossMarginSeries, grossMarginTrendBps,
+  roic, cashRunwayQuarters, netCashToMarketCap, debtToEbitda, opexGrowth,
+} from '@/domain/metrics'
+
+function p(over: Partial<FinancialPeriod> & { periodEnd: string }): FinancialPeriod {
+  return {
+    periodType: 'TTM', revenue: null, grossProfit: null, operatingIncome: null,
+    netIncome: null, ocf: null, capex: null, fcf: null, cash: null,
+    totalDebt: null, equity: null, sharesDiluted: null, sharesOutstanding: null,
+    sbc: null, rdExpense: null, ...over,
+  }
+}
+
+/** 최근순 TTM 계열 — index가 클수록 과거 */
+function ttmSeries(revenues: (number | null)[]): FinancialPeriod[] {
+  return revenues.map((r, i) =>
+    p({ periodEnd: `2025-${String(12 - i).padStart(2, '0')}-31`, revenue: r }),
+  )
+}
+
+describe('ttmRevenueGrowth', () => {
+  it('현재 TTM과 4분기 전 TTM을 비교한다', () => {
+    const s = ttmSeries([500, 480, 460, 440, 400])
+    expect(ttmRevenueGrowth(s)).toBeCloseTo(0.25)
+  })
+  it('4분기 전 TTM이 없으면 null', () => {
+    expect(ttmRevenueGrowth(ttmSeries([500, 480]))).toBeNull()
+  })
+})
+
+describe('revenueCagr3y', () => {
+  it('12분기 전과 비교해 3년 CAGR을 낸다', () => {
+    const s = ttmSeries(Array(13).fill(null).map((_, i) => (i === 0 ? 200 : i === 12 ? 100 : 150)))
+    expect(revenueCagr3y(s)).toBeCloseTo(0.2599, 3)
+  })
+  it('이력이 짧으면 null', () => {
+    expect(revenueCagr3y(ttmSeries([200, 190]))).toBeNull()
+  })
+})
+
+describe('revenueAcceleration', () => {
+  it('최근 2개 분기 YoY 평균에서 직전 2개 분기 YoY 평균을 뺀다', () => {
+    // 분기 8개, 최근순. q[i] vs q[i+4]가 YoY
+    const q = [160, 130, 110, 100, 100, 90, 85, 80].map((r, i) =>
+      p({ periodEnd: `2025-${String(8 - i).padStart(2, '0')}-30`, periodType: 'Q', revenue: r }),
+    )
+    // 최근 2분기 YoY: 160/100-1=0.60, 130/90-1=0.4444 → 평균 0.5222
+    // 직전 2분기 YoY: 110/85-1=0.2941, 100/80-1=0.25   → 평균 0.2721
+    expect(revenueAcceleration(q)).toBeCloseTo(0.2502, 3)
+  })
+  it('분기가 8개 미만이면 null', () => {
+    expect(revenueAcceleration([])).toBeNull()
+  })
+})
+
+describe('마진', () => {
+  const per = p({ periodEnd: '2025-12-31', revenue: 1000, grossProfit: 700, operatingIncome: 200, fcf: 150 })
+  it('매출총이익률', () => expect(grossMargin(per)).toBeCloseTo(0.7))
+  it('영업이익률', () => expect(operatingMargin(per)).toBeCloseTo(0.2))
+  it('FCF 마진', () => expect(fcfMargin(per)).toBeCloseTo(0.15))
+  it('매출이 0 이하면 null', () => {
+    expect(grossMargin(p({ periodEnd: 'x', revenue: 0, grossProfit: 5 }))).toBeNull()
+  })
+  it('기간이 없으면 null', () => expect(grossMargin(undefined)).toBeNull())
+})
+
+describe('grossMarginSeries / grossMarginTrendBps', () => {
+  const quarterly = [0.74, 0.72, 0.70, 0.68, 0.66, 0.64, 0.62, 0.60].map((gm, i) =>
+    p({
+      periodEnd: `2025-${String(8 - i).padStart(2, '0')}-30`, periodType: 'Q',
+      revenue: 100, grossProfit: gm * 100,
+    }),
+  )
+
+  it('오래된 순으로 반환한다', () => {
+    const s = grossMarginSeries(quarterly, 8)
+    expect(s[0]).toBeCloseTo(0.60)
+    expect(s[7]).toBeCloseTo(0.74)
+  })
+
+  it('개선 추세는 양수 bps', () => {
+    // 분기당 +0.02 → 연간 +0.08 → +800bps
+    expect(grossMarginTrendBps(quarterly, 8)).toBeCloseTo(800, 0)
+  })
+
+  it('분기가 부족하면 null', () => {
+    expect(grossMarginTrendBps(quarterly.slice(0, 2), 8)).toBeNull()
+  })
+})
+
+describe('roic', () => {
+  it('NOPAT을 투하자본으로 나눈다', () => {
+    const per = p({
+      periodEnd: '2025-12-31', operatingIncome: 1000,
+      totalDebt: 2000, equity: 6000, cash: 1000,
+    })
+    // NOPAT = 1000 * 0.79 = 790, 투하자본 = 2000 + 6000 - 1000 = 7000
+    expect(roic(per, 0.21)).toBeCloseTo(0.1129, 4)
+  })
+  it('투하자본이 0 이하면 null', () => {
+    const per = p({ periodEnd: 'x', operatingIncome: 100, totalDebt: 0, equity: 100, cash: 500 })
+    expect(roic(per, 0.21)).toBeNull()
+  })
+})
+
+describe('cashRunwayQuarters', () => {
+  it('현금을 분기 평균 소모액으로 나눈다', () => {
+    const s = [p({ periodEnd: '2025-12-31', fcf: -400, cash: 1000 })]
+    // 분기 평균 소모 = 400/4 = 100 → 런웨이 10분기
+    expect(cashRunwayQuarters(s)).toBeCloseTo(10)
+  })
+  it('FCF가 양수면 null — 런웨이 개념이 없다', () => {
+    expect(cashRunwayQuarters([p({ periodEnd: 'x', fcf: 100, cash: 1000 })])).toBeNull()
+  })
+  it('현금이 없으면 null', () => {
+    expect(cashRunwayQuarters([p({ periodEnd: 'x', fcf: -100, cash: null })])).toBeNull()
+  })
+})
+
+describe('netCashToMarketCap / debtToEbitda / opexGrowth', () => {
+  it('순현금 비율', () => {
+    const per = p({ periodEnd: 'x', cash: 1500, totalDebt: 500 })
+    expect(netCashToMarketCap(per, 10000)).toBeCloseTo(0.1)
+  })
+  it('시가총액이 없으면 null', () => {
+    expect(netCashToMarketCap(p({ periodEnd: 'x', cash: 1, totalDebt: 0 }), null)).toBeNull()
+  })
+  it('EBITDA 근사는 영업이익을 쓴다', () => {
+    expect(debtToEbitda(p({ periodEnd: 'x', totalDebt: 1000, operatingIncome: 250 }))).toBeCloseTo(4)
+  })
+  it('영업이익이 0 이하면 null', () => {
+    expect(debtToEbitda(p({ periodEnd: 'x', totalDebt: 1000, operatingIncome: -10 }))).toBeNull()
+  })
+  it('opex 증가율은 (매출총이익 - 영업이익) 기준', () => {
+    const s = [
+      p({ periodEnd: '2025-12-31', grossProfit: 700, operatingIncome: 200 }),
+      p({ periodEnd: '2025-09-30' }), p({ periodEnd: '2025-06-30' }), p({ periodEnd: '2025-03-31' }),
+      p({ periodEnd: '2024-12-31', grossProfit: 500, operatingIncome: 100 }),
+    ]
+    // opex: 500 vs 400 → +25%
+    expect(opexGrowth(s)).toBeCloseTo(0.25)
+  })
+})
+```
+
+- [ ] **Step 4: 테스트 실패 확인**
+
+Run: `npx vitest run tests/domain/metrics.test.ts`
+Expected: FAIL — `Cannot find module '@/domain/metrics'`
+
+- [ ] **Step 5: 구현**
+
+`src/domain/metrics.ts`:
+
+```ts
+import type { FinancialPeriod } from './types.js'
+import { yoy, cagr } from './growth.js'
+import { olsSlope } from './stats.js'
+
+const QUARTERS_PER_YEAR = 4
+
+function ratio(numerator: number | null, revenue: number | null): number | null {
+  if (numerator === null || revenue === null || revenue <= 0) return null
+  return numerator / revenue
+}
+
+export function ttmRevenueGrowth(ttm: FinancialPeriod[]): number | null {
+  return yoy(ttm[0]?.revenue ?? null, ttm[QUARTERS_PER_YEAR]?.revenue ?? null)
+}
+
+export function revenueCagr3y(ttm: FinancialPeriod[]): number | null {
+  return cagr(ttm[0]?.revenue ?? null, ttm[12]?.revenue ?? null, 3)
+}
+
+/** 최근 2개 분기 YoY 평균 − 직전 2개 분기 YoY 평균. 분기 8개가 필요하다. */
+export function revenueAcceleration(quarterly: FinancialPeriod[]): number | null {
+  if (quarterly.length < 8) return null
+  const q = (i: number) => quarterly[i]?.revenue ?? null
+  const growthAt = (i: number) => yoy(q(i), q(i + QUARTERS_PER_YEAR))
+
+  const recent = [growthAt(0), growthAt(1)]
+  const prior = [growthAt(2), growthAt(3)]
+  if (recent.some((v) => v === null) || prior.some((v) => v === null)) return null
+
+  const mean = (xs: (number | null)[]) => (xs as number[]).reduce((a, b) => a + b, 0) / xs.length
+  return mean(recent) - mean(prior)
+}
+
+export function grossMargin(p: FinancialPeriod | undefined): number | null {
+  return p ? ratio(p.grossProfit, p.revenue) : null
+}
+
+export function operatingMargin(p: FinancialPeriod | undefined): number | null {
+  return p ? ratio(p.operatingIncome, p.revenue) : null
+}
+
+export function fcfMargin(p: FinancialPeriod | undefined): number | null {
+  return p ? ratio(p.fcf, p.revenue) : null
+}
+
+/** 오래된 순으로 반환한다. 기울기가 양수면 마진이 개선되고 있다는 뜻. */
+export function grossMarginSeries(quarterly: FinancialPeriod[], n: number): number[] {
+  const out: number[] = []
+  for (const q of quarterly.slice(0, n)) {
+    const gm = grossMargin(q)
+    if (gm !== null) out.push(gm)
+  }
+  return out.reverse()
+}
+
+/** 분기당 기울기를 연율 bps로 환산한다. */
+export function grossMarginTrendBps(
+  quarterly: FinancialPeriod[],
+  n: number,
+): number | null {
+  const series = grossMarginSeries(quarterly, n)
+  if (series.length < n) return null
+  const slope = olsSlope(series)
+  return slope === null ? null : slope * QUARTERS_PER_YEAR * 10_000
+}
+
+export function roic(p: FinancialPeriod | undefined, taxRate: number): number | null {
+  if (!p || p.operatingIncome === null) return null
+  if (p.totalDebt === null || p.equity === null || p.cash === null) return null
+  const invested = p.totalDebt + p.equity - p.cash
+  if (invested <= 0) return null
+  return (p.operatingIncome * (1 - taxRate)) / invested
+}
+
+/** FCF가 음수인 기업만 의미가 있다. 분기 평균 소모액 기준 잔여 분기 수. */
+export function cashRunwayQuarters(ttm: FinancialPeriod[]): number | null {
+  const p = ttm[0]
+  if (!p || p.fcf === null || p.fcf >= 0 || p.cash === null) return null
+  const burnPerQuarter = -p.fcf / QUARTERS_PER_YEAR
+  if (burnPerQuarter <= 0) return null
+  return p.cash / burnPerQuarter
+}
+
+export function netCashToMarketCap(
+  p: FinancialPeriod | undefined,
+  marketCap: number | null,
+): number | null {
+  if (!p || marketCap === null || marketCap <= 0) return null
+  if (p.cash === null || p.totalDebt === null) return null
+  return (p.cash - p.totalDebt) / marketCap
+}
+
+/** EBITDA는 감가상각 태그를 안정적으로 얻기 어려워 영업이익으로 근사한다. */
+export function debtToEbitda(p: FinancialPeriod | undefined): number | null {
+  if (!p || p.totalDebt === null || p.operatingIncome === null) return null
+  if (p.operatingIncome <= 0) return null
+  return p.totalDebt / p.operatingIncome
+}
+
+function opexOf(p: FinancialPeriod | undefined): number | null {
+  if (!p || p.grossProfit === null || p.operatingIncome === null) return null
+  return p.grossProfit - p.operatingIncome
+}
+
+export function opexGrowth(ttm: FinancialPeriod[]): number | null {
+  return yoy(opexOf(ttm[0]), opexOf(ttm[QUARTERS_PER_YEAR]))
+}
+```
+
+- [ ] **Step 6: 테스트 통과 확인**
+
+Run: `npx vitest run tests/domain/metrics.test.ts tests/architecture.test.ts`
+Expected: PASS (metrics 22 + architecture 1 = 23 tests)
+
+- [ ] **Step 7: 커밋**
+
+```bash
+git add -A
+git commit -m "feat: 도메인 지표 함수 및 아키텍처 경계 테스트
+
+성장률·마진·ROIC·런웨이를 한 곳에 두어 스냅샷 통계와 팩터가
+서로 다른 값을 내는 일을 막는다.
+engines가 db나 providers를 import하면 테스트가 실패한다."
+```
+
+---
+
+### Task 14: CompanySnapshot 조립
+
+**Files:**
+- Create: `src/pipeline/snapshot.ts`
+- Test: `tests/pipeline/snapshot.test.ts`
+
+**Interfaces:**
+- Consumes: `getFinancialsFor` (Task 11), `getLatestMarketData` (Task 12), `loadTaxonomy` (Task 3), 지표 함수 (Task 13), `median`/`percentileOf` (Task 2)
+- Produces:
+  - `buildSnapshots(deps: SnapshotDeps): CompanySnapshot[]`
+  - `type SnapshotDeps = { raw: Database.Database; taxonomy: Taxonomy; cfg: AppConfig; asOf: string }`
+  - `DISTRIBUTION_KEYS = ['revenue_growth', 'revenue_acceleration', 'gross_margin', 'fcf_margin', 'market_cap', 'roic'] as const`
+
+**2단 구성이 필요한 이유:** `IndustryStats`(중앙값·백분위)는 같은 산업의 다른 기업 값이 있어야 계산된다. 1차로 기업별 기본 지표를 모으고, 2차로 산업별 통계를 붙인다.
+
+- [ ] **Step 1: 실패하는 테스트 작성**
+
+`tests/pipeline/snapshot.test.ts`:
+
+```ts
+import { describe, it, expect, beforeAll } from 'vitest'
+import { readFileSync, mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import type Database from 'better-sqlite3'
+import { getRawDb, runMigrations } from '@/db/client'
+import { parseConfig } from '@/config'
+import { loadTaxonomy } from '@/taxonomy'
+import { buildSnapshots } from '@/pipeline/snapshot'
+import type { CompanySnapshot } from '@/domain/types'
+
+const cfg = parseConfig(readFileSync('config.yaml', 'utf8'))
+const taxonomy = loadTaxonomy()
+
+let raw: Database.Database
+let snaps: CompanySnapshot[]
+
+function seedCompany(
+  db: Database.Database,
+  cik: number, ticker: string, industry: string,
+  revenue: number, grossProfit: number, marketCap: number | null,
+) {
+  db.prepare(
+    `INSERT INTO companies (cik, ticker, name, sic, is_active, first_seen, last_updated)
+     VALUES (?, ?, ?, '3674', 1, '2026-08-09', '2026-08-09')`,
+  ).run(cik, ticker, `${ticker} Inc`)
+  db.prepare(
+    `INSERT INTO company_industry (cik, industry_slug, theme_slug, is_primary, source)
+     VALUES (?, ?, 'ai-software-semi', 1, 'sic')`,
+  ).run(cik, industry)
+  // TTM 5개: 현재와 4분기 전이 있어야 성장률이 계산된다
+  const ins = db.prepare(
+    `INSERT INTO financials (cik, period_end, period_type, revenue, gross_profit, computed_at)
+     VALUES (?, ?, 'TTM', ?, ?, '2026-08-09')`,
+  )
+  const ends = ['2025-03-31', '2024-12-31', '2024-09-30', '2024-06-30', '2024-03-31']
+  ends.forEach((e, i) => ins.run(cik, e, i === 0 ? revenue : revenue / 1.25, grossProfit))
+  if (marketCap !== null) {
+    db.prepare(
+      `INSERT INTO market_data (cik, date, price, shares_outstanding, market_cap)
+       VALUES (?, '2026-08-08', 10, ?, ?)`,
+    ).run(cik, marketCap / 10, marketCap)
+  }
+}
+
+beforeAll(() => {
+  raw = getRawDb(join(mkdtempSync(join(tmpdir(), 'tb-snap-')), 's.db'))
+  runMigrations(raw)
+  seedCompany(raw, 1, 'AAA', 'semiconductors', 1000, 700, 5_000_000_000)
+  seedCompany(raw, 2, 'BBB', 'semiconductors', 2000, 1000, 20_000_000_000)
+  seedCompany(raw, 3, 'CCC', 'semiconductors', 500, 200, 400_000_000)
+  seedCompany(raw, 4, 'DDD', 'cybersecurity', 800, 600, null) // 시가총액 없음
+  snaps = buildSnapshots({ raw, taxonomy, cfg, asOf: '2026-08-09' })
+})
+
+describe('buildSnapshots', () => {
+  it('유니버스 기업마다 스냅샷을 만든다', () => {
+    expect(snaps.map((s) => s.ticker).sort()).toEqual(['AAA', 'BBB', 'CCC', 'DDD'])
+  })
+
+  it('산업 메타데이터를 붙인다', () => {
+    const a = snaps.find((s) => s.ticker === 'AAA')!
+    expect(a.industrySlug).toBe('semiconductors')
+    expect(a.themeSlug).toBe('ai-software-semi')
+    expect(a.industry.name).toBe('Semiconductors')
+  })
+
+  it('시가총액과 주가를 붙인다', () => {
+    const a = snaps.find((s) => s.ticker === 'AAA')!
+    expect(a.marketCap).toBe(5_000_000_000)
+    expect(a.price).toBe(10)
+    expect(a.priceDate).toBe('2026-08-08')
+  })
+
+  it('시가총액이 없어도 스냅샷을 만들고 null로 둔다', () => {
+    const d = snaps.find((s) => s.ticker === 'DDD')!
+    expect(d.marketCap).toBeNull()
+  })
+
+  it('TTM 계열을 최근순으로 붙인다', () => {
+    const a = snaps.find((s) => s.ticker === 'AAA')!
+    expect(a.ttm[0]!.periodEnd).toBe('2025-03-31')
+    expect(a.ttm[0]!.revenue).toBe(1000)
+    expect(a.ttm).toHaveLength(5)
+  })
+
+  it('산업별 후보 수를 센다', () => {
+    const a = snaps.find((s) => s.ticker === 'AAA')!
+    expect(a.industryStats.candidateCount).toBe(3)
+    const d = snaps.find((s) => s.ticker === 'DDD')!
+    expect(d.industryStats.candidateCount).toBe(1)
+  })
+
+  it('산업 GM 중앙값을 계산한다', () => {
+    // semiconductors GM: 0.70, 0.50, 0.40 → 중앙값 0.50
+    const a = snaps.find((s) => s.ticker === 'AAA')!
+    expect(a.industryStats.medianGrossMargin).toBeCloseTo(0.5)
+  })
+
+  it('산업 매출성장률 중앙값을 계산한다', () => {
+    // 세 기업 모두 1.25배 성장 → 0.25
+    const a = snaps.find((s) => s.ticker === 'AAA')!
+    expect(a.industryStats.medianRevenueGrowth).toBeCloseTo(0.25)
+  })
+
+  it('백분위 계산용 분포를 오름차순으로 담는다', () => {
+    const a = snaps.find((s) => s.ticker === 'AAA')!
+    const gm = a.industryStats.distributions.gross_margin!
+    expect(gm).toEqual([...gm].sort((x, y) => x - y))
+    expect(gm).toHaveLength(3)
+  })
+
+  it('asOf를 전파한다', () => {
+    expect(snaps[0]!.asOf).toBe('2026-08-09')
+  })
+})
+```
+
+- [ ] **Step 2: 테스트 실패 확인**
+
+Run: `npx vitest run tests/pipeline/snapshot.test.ts`
+Expected: FAIL — `Cannot find module '@/pipeline/snapshot'`
+
+- [ ] **Step 3: 구현**
+
+`src/pipeline/snapshot.ts`:
+
+```ts
+import type Database from 'better-sqlite3'
+import type { AppConfig } from '@/config'
+import type { Taxonomy } from '@/taxonomy'
+import type { CompanySnapshot, IndustryStats } from '@/domain/types'
+import { median } from '@/domain/stats'
+import {
+  ttmRevenueGrowth, revenueAcceleration, grossMargin, fcfMargin, roic,
+} from '@/domain/metrics'
+import { getFinancialsFor } from '@/db/repositories/financials'
+import { getLatestMarketData } from '@/db/repositories/market'
+
+export const DISTRIBUTION_KEYS = [
+  'revenue_growth', 'revenue_acceleration', 'gross_margin',
+  'fcf_margin', 'market_cap', 'roic',
+] as const
+
+export type SnapshotDeps = {
+  raw: Database.Database
+  taxonomy: Taxonomy
+  cfg: AppConfig
+  asOf: string
+}
+
+type CompanyRow = {
+  cik: number
+  ticker: string
+  name: string
+  industrySlug: string
+  themeSlug: string
+  source: 'sic' | 'override'
+}
+
+const EMPTY_STATS: IndustryStats = {
+  candidateCount: 0,
+  medianGrossMargin: null,
+  medianRevenueGrowth: null,
+  distributions: {},
+}
+
+export function buildSnapshots(deps: SnapshotDeps): CompanySnapshot[] {
+  const { raw, taxonomy, cfg, asOf } = deps
+
+  const rows = raw
+    .prepare(
+      `SELECT c.cik, c.ticker, c.name,
+              ci.industry_slug AS industrySlug, ci.theme_slug AS themeSlug, ci.source
+       FROM companies c
+       JOIN company_industry ci ON ci.cik = c.cik
+       WHERE c.is_active = 1
+       ORDER BY c.cik`,
+    )
+    .all() as CompanyRow[]
+
+  // 1차: 산업 통계 없이 스냅샷을 만든다
+  const partial: CompanySnapshot[] = []
+  for (const r of rows) {
+    const industry = taxonomy.industries.get(r.industrySlug)
+    if (!industry) continue // taxonomy 로더가 무결성을 검증하므로 정상 경로에서는 발생하지 않는다
+
+    const fin = getFinancialsFor(raw, r.cik)
+    const market = getLatestMarketData(raw, r.cik)
+
+    partial.push({
+      cik: r.cik,
+      ticker: r.ticker,
+      name: r.name,
+      themeSlug: r.themeSlug,
+      industrySlug: r.industrySlug,
+      industry,
+      classificationSource: r.source,
+      marketCap: market?.marketCap ?? null,
+      price: market?.price ?? null,
+      priceDate: market?.date ?? null,
+      sharesOutstanding: market?.sharesOutstanding ?? null,
+      ttm: fin.ttm,
+      annual: fin.annual,
+      quarterly: fin.quarterly,
+      industryStats: EMPTY_STATS,
+      asOf,
+    })
+  }
+
+  // 2차: 산업별 통계를 계산해 붙인다
+  const byIndustry = new Map<string, CompanySnapshot[]>()
+  for (const s of partial) {
+    const list = byIndustry.get(s.industrySlug)
+    if (list) list.push(s)
+    else byIndustry.set(s.industrySlug, [s])
+  }
+
+  const statsByIndustry = new Map<string, IndustryStats>()
+  for (const [slug, members] of byIndustry) {
+    const values: Record<string, number[]> = {}
+    for (const key of DISTRIBUTION_KEYS) values[key] = []
+
+    for (const s of members) {
+      const push = (key: string, v: number | null) => {
+        if (v !== null && Number.isFinite(v)) values[key]!.push(v)
+      }
+      push('revenue_growth', ttmRevenueGrowth(s.ttm))
+      push('revenue_acceleration', revenueAcceleration(s.quarterly))
+      push('gross_margin', grossMargin(s.ttm[0]))
+      push('fcf_margin', fcfMargin(s.ttm[0]))
+      push('market_cap', s.marketCap)
+      push('roic', roic(s.ttm[0], cfg.scoring.tax_rate))
+    }
+    for (const key of DISTRIBUTION_KEYS) values[key]!.sort((a, b) => a - b)
+
+    statsByIndustry.set(slug, {
+      candidateCount: members.length,
+      medianGrossMargin: median(values.gross_margin!),
+      medianRevenueGrowth: median(values.revenue_growth!),
+      distributions: values,
+    })
+  }
+
+  return partial.map((s) => ({
+    ...s,
+    industryStats: statsByIndustry.get(s.industrySlug) ?? EMPTY_STATS,
+  }))
+}
+```
+
+- [ ] **Step 4: 테스트 통과 확인**
+
+Run: `npx vitest run tests/pipeline/snapshot.test.ts`
+Expected: PASS (10 tests)
+
+- [ ] **Step 5: 커밋**
+
+```bash
+git add -A
+git commit -m "feat: CompanySnapshot 조립
+
+엔진이 받을 유일한 입력을 DB에서 만든다.
+산업 중앙값과 백분위 분포는 같은 산업의 다른 기업이 필요하므로
+1차로 기업 지표를 모으고 2차로 통계를 붙이는 2단 구성이다."
+```
+
+---
+
+### Task 15: Quality Gate 엔진 (Red Flag)
+
+**Files:**
+- Create: `src/engines/quality/index.ts`
+- Test: `tests/engines/quality.test.ts`
+- Modify: `tests/architecture.test.ts` (두 번째 테스트 추가)
+
+**Interfaces:**
+- Consumes: `CompanySnapshot`/`RedFlag` (Task 2), `AppConfig` (Task 1), 지표 함수 (Task 13)
+- Produces:
+  - `evaluateQuality(s: CompanySnapshot, cfg: AppConfig): RedFlag[]`
+  - `hasCritical(flags: RedFlag[]): boolean`
+  - `hasWarning(flags: RedFlag[]): boolean`
+  - Red Flag 코드: `REVENUE_DECLINE_2Y`, `NEGATIVE_EQUITY_BURN`, `RUNWAY_CRITICAL`, `EXTREME_DILUTION` (CRITICAL) / `GM_COLLAPSE`, `SBC_EXCESSIVE`, `DILUTION`, `LEVERAGE_HIGH`, `RUNWAY_LOW` (WARNING)
+
+**중복 방지 규칙:** 희석과 런웨이는 CRITICAL과 WARNING 임계값이 겹친다. 심각한 쪽이 발동하면 약한 쪽은 내지 않는다. 같은 사실을 두 번 세면 화면이 오해를 부른다.
+
+- [ ] **Step 1: 실패하는 테스트 작성**
+
+`tests/engines/quality.test.ts`:
+
+```ts
+import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { parseConfig } from '@/config'
+import { evaluateQuality, hasCritical, hasWarning } from '@/engines/quality'
+import type { CompanySnapshot, FinancialPeriod } from '@/domain/types'
+
+const cfg = parseConfig(readFileSync('config.yaml', 'utf8'))
+
+function fp(over: Partial<FinancialPeriod>): FinancialPeriod {
+  return {
+    periodEnd: '2025-03-31', periodType: 'TTM',
+    revenue: 1000, grossProfit: 700, operatingIncome: 200, netIncome: 150,
+    ocf: 250, capex: 50, fcf: 200, cash: 5000, totalDebt: 100, equity: 8000,
+    sharesDiluted: 1000, sharesOutstanding: 1000, sbc: 50, rdExpense: 200, ...over,
+  }
+}
+
+function snap(over: Partial<CompanySnapshot>): CompanySnapshot {
+  return {
+    cik: 1, ticker: 'TEST', name: 'Test Inc',
+    themeSlug: 'ai-software-semi', industrySlug: 'semiconductors',
+    industry: {
+      slug: 'semiconductors', name: 'Semiconductors', themeSlug: 'ai-software-semi',
+      tamUsd: null, tamCagr: null, tamSource: null, tamAsOf: null,
+    },
+    classificationSource: 'sic',
+    marketCap: 5_000_000_000, price: 10, priceDate: '2026-08-08', sharesOutstanding: 1000,
+    ttm: [fp({}), fp({ periodEnd: '2024-12-31' }), fp({ periodEnd: '2024-09-30' }),
+          fp({ periodEnd: '2024-06-30' }), fp({ periodEnd: '2024-03-31' })],
+    annual: [], quarterly: [],
+    industryStats: {
+      candidateCount: 5, medianGrossMargin: 0.6, medianRevenueGrowth: 0.2, distributions: {},
+    },
+    asOf: '2026-08-09', ...over,
+  }
+}
+
+const codes = (s: CompanySnapshot) => evaluateQuality(s, cfg).map((f) => f.code).sort()
+
+describe('evaluateQuality — 정상 기업', () => {
+  it('건전한 기업은 Red Flag가 없다', () => {
+    expect(evaluateQuality(snap({}), cfg)).toEqual([])
+  })
+})
+
+describe('CRITICAL', () => {
+  it('2년 연속 매출 감소', () => {
+    const annual = [
+      fp({ periodType: 'A', periodEnd: '2024-12-31', revenue: 800 }),
+      fp({ periodType: 'A', periodEnd: '2023-12-31', revenue: 900 }),
+      fp({ periodType: 'A', periodEnd: '2022-12-31', revenue: 1000 }),
+    ]
+    expect(codes(snap({ annual }))).toContain('REVENUE_DECLINE_2Y')
+  })
+
+  it('한 해만 감소하면 발동하지 않는다', () => {
+    const annual = [
+      fp({ periodType: 'A', periodEnd: '2024-12-31', revenue: 800 }),
+      fp({ periodType: 'A', periodEnd: '2023-12-31', revenue: 900 }),
+      fp({ periodType: 'A', periodEnd: '2022-12-31', revenue: 850 }),
+    ]
+    expect(codes(snap({ annual }))).not.toContain('REVENUE_DECLINE_2Y')
+  })
+
+  it('자본잠식 + 음의 FCF', () => {
+    const ttm = [fp({ equity: -500, fcf: -100 }), fp({ periodEnd: '2024-12-31' })]
+    expect(codes(snap({ ttm }))).toContain('NEGATIVE_EQUITY_BURN')
+  })
+
+  it('자본잠식이어도 FCF가 양수면 발동하지 않는다', () => {
+    const ttm = [fp({ equity: -500, fcf: 100 })]
+    expect(codes(snap({ ttm }))).not.toContain('NEGATIVE_EQUITY_BURN')
+  })
+
+  it('현금 런웨이 2분기 미만', () => {
+    // 현금 100, TTM FCF -400 → 분기 소모 100 → 런웨이 1분기
+    const ttm = [fp({ cash: 100, fcf: -400 })]
+    const c = codes(snap({ ttm }))
+    expect(c).toContain('RUNWAY_CRITICAL')
+    expect(c).not.toContain('RUNWAY_LOW')   // 중복 방지
+  })
+
+  it('주식수 1년 50% 초과 증가', () => {
+    const ttm = [fp({ sharesDiluted: 1600 }), fp({ periodEnd: '2024-12-31' }),
+                 fp({ periodEnd: '2024-09-30' }), fp({ periodEnd: '2024-06-30' }),
+                 fp({ periodEnd: '2024-03-31', sharesDiluted: 1000 })]
+    const c = codes(snap({ ttm }))
+    expect(c).toContain('EXTREME_DILUTION')
+    expect(c).not.toContain('DILUTION')     // 중복 방지
+  })
+})
+
+describe('WARNING', () => {
+  it('GM 500bp 초과 하락', () => {
+    const ttm = [fp({ revenue: 1000, grossProfit: 600 }), fp({ periodEnd: '2024-12-31' }),
+                 fp({ periodEnd: '2024-09-30' }), fp({ periodEnd: '2024-06-30' }),
+                 fp({ periodEnd: '2024-03-31', revenue: 1000, grossProfit: 700 })]
+    expect(codes(snap({ ttm }))).toContain('GM_COLLAPSE')
+  })
+
+  it('SBC가 매출의 25% 초과', () => {
+    expect(codes(snap({ ttm: [fp({ sbc: 300 })] }))).toContain('SBC_EXCESSIVE')
+  })
+
+  it('주식수 15% 초과 증가', () => {
+    const ttm = [fp({ sharesDiluted: 1200 }), fp({ periodEnd: '2024-12-31' }),
+                 fp({ periodEnd: '2024-09-30' }), fp({ periodEnd: '2024-06-30' }),
+                 fp({ periodEnd: '2024-03-31', sharesDiluted: 1000 })]
+    expect(codes(snap({ ttm }))).toContain('DILUTION')
+  })
+
+  it('Debt/EBITDA 5 초과', () => {
+    expect(codes(snap({ ttm: [fp({ totalDebt: 2000, operatingIncome: 200 })] })))
+      .toContain('LEVERAGE_HIGH')
+  })
+
+  it('런웨이 6분기 미만', () => {
+    // 현금 400, TTM FCF -400 → 분기 소모 100 → 런웨이 4분기
+    expect(codes(snap({ ttm: [fp({ cash: 400, fcf: -400 })] }))).toContain('RUNWAY_LOW')
+  })
+})
+
+describe('증거 및 헬퍼', () => {
+  it('Red Flag에 근거 수치를 담는다', () => {
+    const flags = evaluateQuality(snap({ ttm: [fp({ sbc: 300 })] }), cfg)
+    const sbc = flags.find((f) => f.code === 'SBC_EXCESSIVE')!
+    expect(sbc.evidence.ratio).toBeCloseTo(0.3)
+    expect(sbc.severity).toBe('WARNING')
+    expect(sbc.message.length).toBeGreaterThan(0)
+  })
+
+  it('데이터가 없으면 Red Flag를 만들지 않는다 — 결측은 위험 신호가 아니다', () => {
+    const empty = snap({ ttm: [], annual: [], quarterly: [] })
+    expect(evaluateQuality(empty, cfg)).toEqual([])
+  })
+
+  it('hasCritical / hasWarning', () => {
+    const critical = evaluateQuality(snap({ ttm: [fp({ cash: 100, fcf: -400 })] }), cfg)
+    expect(hasCritical(critical)).toBe(true)
+    const warning = evaluateQuality(snap({ ttm: [fp({ sbc: 300 })] }), cfg)
+    expect(hasCritical(warning)).toBe(false)
+    expect(hasWarning(warning)).toBe(true)
+  })
+})
+```
+
+- [ ] **Step 2: 테스트 실패 확인**
+
+Run: `npx vitest run tests/engines/quality.test.ts`
+Expected: FAIL — `Cannot find module '@/engines/quality'`
+
+- [ ] **Step 3: 구현**
+
+`src/engines/quality/index.ts`:
+
+```ts
+import type { AppConfig } from '@/config'
+import type { CompanySnapshot, RedFlag } from '@/domain/types'
+import { yoy } from '@/domain/growth'
+import { grossMargin, cashRunwayQuarters, debtToEbitda } from '@/domain/metrics'
+
+const QUARTERS_PER_YEAR = 4
+
+function flag(
+  code: string,
+  severity: 'CRITICAL' | 'WARNING',
+  message: string,
+  evidence: Record<string, number | string | null>,
+): RedFlag {
+  return { code, severity, message, evidence }
+}
+
+export function evaluateQuality(s: CompanySnapshot, cfg: AppConfig): RedFlag[] {
+  const g = cfg.quality_gate
+  const out: RedFlag[] = []
+  const ttm = s.ttm[0]
+  const ttmPrior = s.ttm[QUARTERS_PER_YEAR]
+
+  // 2년 연속 연간 매출 감소
+  const a = s.annual
+  if (a.length >= g.revenue_decline_years + 1) {
+    let declining = true
+    for (let i = 0; i < g.revenue_decline_years; i++) {
+      const cur = a[i]?.revenue
+      const prev = a[i + 1]?.revenue
+      if (typeof cur !== 'number' || typeof prev !== 'number' || cur >= prev) {
+        declining = false
+        break
+      }
+    }
+    if (declining) {
+      out.push(
+        flag('REVENUE_DECLINE_2Y', 'CRITICAL',
+          `${g.revenue_decline_years}년 연속 매출 감소`,
+          { latest: a[0]?.revenue ?? null, oldest: a[g.revenue_decline_years]?.revenue ?? null }),
+      )
+    }
+  }
+
+  // 자본잠식 + 음의 FCF
+  if (ttm && ttm.equity !== null && ttm.equity < 0 && ttm.fcf !== null && ttm.fcf < 0) {
+    out.push(
+      flag('NEGATIVE_EQUITY_BURN', 'CRITICAL', '자본잠식 상태에서 현금이 유출되고 있음',
+        { equity: ttm.equity, fcf: ttm.fcf }),
+    )
+  }
+
+  // 현금 런웨이 — CRITICAL이 발동하면 WARNING은 내지 않는다
+  const runway = cashRunwayQuarters(s.ttm)
+  if (runway !== null) {
+    if (runway < g.runway_critical_quarters) {
+      out.push(
+        flag('RUNWAY_CRITICAL', 'CRITICAL',
+          `현금 런웨이 ${runway.toFixed(1)}분기 — ${g.runway_critical_quarters}분기 미만`,
+          { quarters: runway }),
+      )
+    } else if (runway < g.runway_low_quarters) {
+      out.push(
+        flag('RUNWAY_LOW', 'WARNING',
+          `현금 런웨이 ${runway.toFixed(1)}분기 — ${g.runway_low_quarters}분기 미만`,
+          { quarters: runway }),
+      )
+    }
+  }
+
+  // 주식 희석 — 마찬가지로 심각한 쪽만
+  const dilution = yoy(ttm?.sharesDiluted ?? null, ttmPrior?.sharesDiluted ?? null)
+  if (dilution !== null) {
+    if (dilution > g.extreme_dilution) {
+      out.push(
+        flag('EXTREME_DILUTION', 'CRITICAL',
+          `희석주식수 1년 ${(dilution * 100).toFixed(0)}% 증가`, { ratio: dilution }),
+      )
+    } else if (dilution > g.dilution_warning) {
+      out.push(
+        flag('DILUTION', 'WARNING',
+          `희석주식수 1년 ${(dilution * 100).toFixed(0)}% 증가`, { ratio: dilution }),
+      )
+    }
+  }
+
+  // 매출총이익률 급락
+  const gmNow = grossMargin(ttm)
+  const gmPrior = grossMargin(ttmPrior)
+  if (gmNow !== null && gmPrior !== null) {
+    const dropBps = (gmPrior - gmNow) * 10_000
+    if (dropBps > g.gm_collapse_bps) {
+      out.push(
+        flag('GM_COLLAPSE', 'WARNING',
+          `매출총이익률 1년 ${dropBps.toFixed(0)}bp 하락`,
+          { now: gmNow, prior: gmPrior, dropBps }),
+      )
+    }
+  }
+
+  // 주식보상비용 과다
+  if (ttm && ttm.sbc !== null && ttm.revenue !== null && ttm.revenue > 0) {
+    const ratio = ttm.sbc / ttm.revenue
+    if (ratio > g.sbc_of_revenue) {
+      out.push(
+        flag('SBC_EXCESSIVE', 'WARNING',
+          `주식보상비용이 매출의 ${(ratio * 100).toFixed(0)}%`, { ratio }),
+      )
+    }
+  }
+
+  // 레버리지 과다
+  const leverage = debtToEbitda(ttm)
+  if (leverage !== null && leverage > g.debt_to_ebitda) {
+    out.push(
+      flag('LEVERAGE_HIGH', 'WARNING',
+        `부채/영업이익 ${leverage.toFixed(1)}배`, { ratio: leverage }),
+    )
+  }
+
+  return out
+}
+
+export function hasCritical(flags: RedFlag[]): boolean {
+  return flags.some((f) => f.severity === 'CRITICAL')
+}
+
+export function hasWarning(flags: RedFlag[]): boolean {
+  return flags.some((f) => f.severity === 'WARNING')
+}
+```
+
+- [ ] **Step 4: 아키텍처 테스트에 두 번째 케이스 추가**
+
+`tests/architecture.test.ts`에 append (이제 `src/engines/`에 파일이 존재한다):
+
+```ts
+  it('engines 파일이 실제로 존재한다 (테스트가 공허하지 않음을 보장)', () => {
+    expect(globSync('src/engines/**/*.ts').length).toBeGreaterThan(0)
+  })
+```
+
+- [ ] **Step 5: 테스트 통과 확인**
+
+Run: `npx vitest run tests/engines/quality.test.ts tests/architecture.test.ts`
+Expected: PASS (quality 15 + architecture 2 = 17 tests)
+
+- [ ] **Step 6: 커밋**
+
+```bash
+git add -A
+git commit -m "feat: Quality Gate 엔진 — Red Flag 9종
+
+희석과 런웨이는 CRITICAL이 발동하면 WARNING을 내지 않는다.
+데이터가 없으면 Red Flag를 만들지 않는다 — 결측은 위험 신호가 아니다.
+Going Concern과 고객 집중도는 10-K 본문 파싱이 필요해 Phase 4로 미룬다."
+```
+
+---
+
+### Task 16: Tenbagger 팩터 1-3 (성장 · 가속도 · TAM)
+
+**Files:**
+- Create: `src/engines/tenbagger/factor-utils.ts`
+- Create: `src/engines/tenbagger/factors/revenue-growth.ts`, `revenue-acceleration.ts`, `tam-industry-growth.ts`
+- Test: `tests/engines/factors-growth.test.ts`
+
+**Interfaces:**
+- Consumes: `CompanySnapshot`/`FactorResult`/`RedFlag` (Task 2), `AppConfig` (Task 1), `interpolate` (Task 2), 지표 함수 (Task 13)
+- Produces:
+  - `type FactorContext = { snapshot: CompanySnapshot; cfg: AppConfig; flags: RedFlag[] }`
+  - `type FactorFn = (ctx: FactorContext) => FactorResult`
+  - `scored(key, weight, raw, normalized, detail): FactorResult`
+  - `noData(key, weight, detail): FactorResult`
+  - `notImplemented(key, weight): FactorResult`
+  - `pct(v: number | null, digits?: number): string` — `0.384` → `"+38.4%"`
+  - `revenueGrowthFactor: FactorFn` (key `revenue_growth`)
+  - `revenueAccelerationFactor: FactorFn` (key `revenue_acceleration`)
+  - `tamIndustryGrowthFactor: FactorFn` (key `tam_industry_growth`)
+
+**설계 문서 개정 사항 — TAM 대체값.** `industries.yaml`의 `tam_cagr`는 출처 없이 채우지 않으므로 초기값이 전부 `null`이다. 이 경우 팩터가 `NO_DATA`로 빠지면 15점이 통째로 사라져 상대 순위가 왜곡된다. 대신 **해당 산업 구성기업의 매출 성장률 중앙값**(`industryStats.medianRevenueGrowth`)을 산업 성장률의 대체값으로 쓴다. 우리 데이터로 계산되므로 첫 실행부터 동작하고, TAM을 큐레이션하면 자동으로 그 값이 우선한다. `detail`에 어느 쪽을 썼는지 명시한다.
+
+- [ ] **Step 1: 실패하는 테스트 작성**
+
+`tests/engines/factors-growth.test.ts`:
+
+```ts
+import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { parseConfig } from '@/config'
+import { revenueGrowthFactor } from '@/engines/tenbagger/factors/revenue-growth'
+import { revenueAccelerationFactor } from '@/engines/tenbagger/factors/revenue-acceleration'
+import { tamIndustryGrowthFactor } from '@/engines/tenbagger/factors/tam-industry-growth'
+import type { FactorContext } from '@/engines/tenbagger/factor-utils'
+import type { CompanySnapshot, FinancialPeriod } from '@/domain/types'
+
+const cfg = parseConfig(readFileSync('config.yaml', 'utf8'))
+
+function fp(periodEnd: string, over: Partial<FinancialPeriod> = {}): FinancialPeriod {
+  return {
+    periodEnd, periodType: 'TTM', revenue: null, grossProfit: null,
+    operatingIncome: null, netIncome: null, ocf: null, capex: null, fcf: null,
+    cash: null, totalDebt: null, equity: null, sharesDiluted: null,
+    sharesOutstanding: null, sbc: null, rdExpense: null, ...over,
+  }
+}
+
+function ctx(over: Partial<CompanySnapshot>): FactorContext {
+  const snapshot: CompanySnapshot = {
+    cik: 1, ticker: 'T', name: 'T',
+    themeSlug: 'ai-software-semi', industrySlug: 'semiconductors',
+    industry: {
+      slug: 'semiconductors', name: 'Semiconductors', themeSlug: 'ai-software-semi',
+      tamUsd: null, tamCagr: null, tamSource: null, tamAsOf: null,
+    },
+    classificationSource: 'sic', marketCap: 1e9, price: 10,
+    priceDate: '2026-08-08', sharesOutstanding: 1e8,
+    ttm: [], annual: [], quarterly: [],
+    industryStats: {
+      candidateCount: 5, medianGrossMargin: 0.6, medianRevenueGrowth: 0.18, distributions: {},
+    },
+    asOf: '2026-08-09', ...over,
+  }
+  return { snapshot, cfg, flags: [] }
+}
+
+/** TTM 계열 — index 0이 현재, 4가 1년 전, 12가 3년 전 */
+function ttmOf(map: Record<number, number>): FinancialPeriod[] {
+  const out: FinancialPeriod[] = []
+  for (let i = 0; i <= 12; i++) {
+    out.push(fp(`2025-${String(i).padStart(2, '0')}`, { revenue: map[i] ?? 1000 }))
+  }
+  return out
+}
+
+describe('revenueGrowthFactor', () => {
+  it('TTM YoY와 3년 CAGR을 블렌드한다', () => {
+    const r = revenueGrowthFactor(ctx({ ttm: ttmOf({ 0: 1400, 4: 1000, 12: 700 }) }))
+    expect(r.key).toBe('revenue_growth')
+    expect(r.weight).toBe(20)
+    expect(r.status).toBe('SCORED')
+    expect(r.raw).toBeCloseTo(0.40)          // raw는 TTM YoY
+    expect(r.points!).toBeGreaterThan(14)     // 40% 성장은 곡선상 0.85 → 17점 부근
+    expect(r.detail).toContain('+40.0%')
+  })
+
+  it('3년 이력이 없으면 TTM YoY만으로 채점한다', () => {
+    const r = revenueGrowthFactor(ctx({ ttm: ttmOf({ 0: 1250, 4: 1000 }).slice(0, 5) }))
+    expect(r.status).toBe('SCORED')
+    expect(r.detail).toContain('3Y CAGR 없음')
+  })
+
+  it('성장률을 계산할 수 없으면 NO_DATA', () => {
+    const r = revenueGrowthFactor(ctx({ ttm: [] }))
+    expect(r.status).toBe('NO_DATA')
+    expect(r.points).toBeNull()
+  })
+
+  it('역성장은 최저점 부근', () => {
+    const r = revenueGrowthFactor(ctx({ ttm: ttmOf({ 0: 800, 4: 1000, 12: 1200 }) }))
+    expect(r.points!).toBeLessThan(2)
+  })
+})
+
+describe('revenueAccelerationFactor', () => {
+  function quarters(revs: number[]): FinancialPeriod[] {
+    return revs.map((r, i) =>
+      fp(`2025-${String(20 - i).padStart(2, '0')}`, { periodType: 'Q', revenue: r }),
+    )
+  }
+
+  it('가속 중이면 높은 점수', () => {
+    const r = revenueAccelerationFactor(
+      ctx({ quarterly: quarters([160, 130, 110, 100, 100, 90, 85, 80]) }),
+    )
+    expect(r.key).toBe('revenue_acceleration')
+    expect(r.weight).toBe(10)
+    expect(r.status).toBe('SCORED')
+    expect(r.raw!).toBeGreaterThan(0.2)
+    expect(r.points!).toBeGreaterThan(9)
+  })
+
+  it('분기가 8개 미만이면 NO_DATA', () => {
+    expect(revenueAccelerationFactor(ctx({ quarterly: quarters([100, 90]) })).status)
+      .toBe('NO_DATA')
+  })
+})
+
+describe('tamIndustryGrowthFactor', () => {
+  it('TAM이 큐레이션되어 있으면 그것을 쓴다', () => {
+    const r = tamIndustryGrowthFactor(
+      ctx({
+        industry: {
+          slug: 'cybersecurity', name: 'Cybersecurity', themeSlug: 'ai-software-semi',
+          tamUsd: 200_000_000_000, tamCagr: 0.15,
+          tamSource: 'Example Report 2025', tamAsOf: '2025-12-31',
+        },
+        ttm: ttmOf({ 0: 1_000_000_000 }),
+      }),
+    )
+    expect(r.status).toBe('SCORED')
+    expect(r.weight).toBe(15)
+    expect(r.raw).toBeCloseTo(0.15)
+    expect(r.detail).toContain('Example Report 2025')
+  })
+
+  it('TAM이 없으면 산업 매출성장률 중앙값으로 대체한다', () => {
+    const r = tamIndustryGrowthFactor(ctx({ ttm: ttmOf({ 0: 1000 }) }))
+    expect(r.status).toBe('SCORED')
+    expect(r.raw).toBeCloseTo(0.18)
+    expect(r.detail).toContain('산업 매출성장률 중앙값')
+  })
+
+  it('침투율이 높으면 감점된다', () => {
+    const industry = {
+      slug: 'x', name: 'X', themeSlug: 'ai-software-semi',
+      tamUsd: 1_000_000_000, tamCagr: 0.15, tamSource: 'src', tamAsOf: '2025-12-31',
+    }
+    const low = tamIndustryGrowthFactor(ctx({ industry, ttm: ttmOf({ 0: 10_000_000 }) }))
+    const high = tamIndustryGrowthFactor(ctx({ industry, ttm: ttmOf({ 0: 600_000_000 }) }))
+    expect(high.points!).toBeLessThan(low.points!)
+  })
+
+  it('TAM도 산업 중앙값도 없으면 NO_DATA', () => {
+    const r = tamIndustryGrowthFactor(
+      ctx({
+        industryStats: {
+          candidateCount: 1, medianGrossMargin: null,
+          medianRevenueGrowth: null, distributions: {},
+        },
+      }),
+    )
+    expect(r.status).toBe('NO_DATA')
+  })
+})
+```
+
+- [ ] **Step 2: 테스트 실패 확인**
+
+Run: `npx vitest run tests/engines/factors-growth.test.ts`
+Expected: FAIL — `Cannot find module '@/engines/tenbagger/factor-utils'`
+
+- [ ] **Step 3: factor-utils 구현**
+
+`src/engines/tenbagger/factor-utils.ts`:
+
+```ts
+import type { AppConfig } from '@/config'
+import type { CompanySnapshot, FactorResult, RedFlag } from '@/domain/types'
+
+export type FactorContext = {
+  snapshot: CompanySnapshot
+  cfg: AppConfig
+  flags: RedFlag[]
+}
+
+export type FactorFn = (ctx: FactorContext) => FactorResult
+
+/** normalized는 0~1. points = weight × normalized */
+export function scored(
+  key: string,
+  weight: number,
+  raw: number | null,
+  normalized: number,
+  detail: string,
+): FactorResult {
+  return { key, weight, points: weight * normalized, raw, status: 'SCORED', detail }
+}
+
+export function noData(key: string, weight: number, detail: string): FactorResult {
+  return { key, weight, points: null, raw: null, status: 'NO_DATA', detail }
+}
+
+export function notImplemented(key: string, weight: number): FactorResult {
+  return {
+    key, weight, points: null, raw: null, status: 'NOT_IMPLEMENTED',
+    detail: 'Phase 4에서 구현 예정 — 모든 기업에 동일 적용되어 상대 순위에 영향 없음',
+  }
+}
+
+export function pct(v: number | null, digits = 1): string {
+  if (v === null) return '—'
+  const sign = v > 0 ? '+' : ''
+  return `${sign}${(v * 100).toFixed(digits)}%`
+}
+```
+
+- [ ] **Step 4: 팩터 3개 구현**
+
+`src/engines/tenbagger/factors/revenue-growth.ts`:
+
+```ts
+import { interpolate } from '@/domain/curve'
+import { ttmRevenueGrowth, revenueCagr3y } from '@/domain/metrics'
+import { scored, noData, pct, type FactorFn } from '../factor-utils.js'
+
+const KEY = 'revenue_growth'
+
+export const revenueGrowthFactor: FactorFn = ({ snapshot, cfg }) => {
+  const f = cfg.scoring.factors.revenue_growth
+  const ttmYoy = ttmRevenueGrowth(snapshot.ttm)
+  const cagr3y = revenueCagr3y(snapshot.ttm)
+
+  if (ttmYoy === null && cagr3y === null) {
+    return noData(KEY, f.weight, 'TTM 매출 이력 부족')
+  }
+
+  // 한쪽만 있으면 그 값 단독으로 채점한다. 없는 쪽을 0으로 치지 않는다.
+  let normalized: number
+  let detail: string
+  if (ttmYoy !== null && cagr3y !== null) {
+    normalized =
+      f.blend.ttm_yoy * interpolate(f.curve, ttmYoy) +
+      f.blend.cagr_3y * interpolate(f.curve, cagr3y)
+    detail = `TTM 매출 ${pct(ttmYoy)} · 3Y CAGR ${pct(cagr3y)}`
+  } else if (ttmYoy !== null) {
+    normalized = interpolate(f.curve, ttmYoy)
+    detail = `TTM 매출 ${pct(ttmYoy)} · 3Y CAGR 없음`
+  } else {
+    normalized = interpolate(f.curve, cagr3y!)
+    detail = `3Y CAGR ${pct(cagr3y)} · TTM YoY 없음`
+  }
+
+  return scored(KEY, f.weight, ttmYoy ?? cagr3y, normalized, detail)
+}
+```
+
+`src/engines/tenbagger/factors/revenue-acceleration.ts`:
+
+```ts
+import { interpolate } from '@/domain/curve'
+import { revenueAcceleration } from '@/domain/metrics'
+import { scored, noData, pct, type FactorFn } from '../factor-utils.js'
+
+const KEY = 'revenue_acceleration'
+
+export const revenueAccelerationFactor: FactorFn = ({ snapshot, cfg }) => {
+  const f = cfg.scoring.factors.revenue_acceleration
+  const accel = revenueAcceleration(snapshot.quarterly)
+  if (accel === null) return noData(KEY, f.weight, '분기 매출 8개 분기가 필요함')
+
+  return scored(
+    KEY, f.weight, accel, interpolate(f.curve, accel),
+    `최근 2개 분기 성장률이 직전 2개 분기 대비 ${pct(accel)}p`,
+  )
+}
+```
+
+`src/engines/tenbagger/factors/tam-industry-growth.ts`:
+
+```ts
+import { interpolate } from '@/domain/curve'
+import { scored, noData, pct, type FactorFn } from '../factor-utils.js'
+
+const KEY = 'tam_industry_growth'
+
+export const tamIndustryGrowthFactor: FactorFn = ({ snapshot, cfg }) => {
+  const f = cfg.scoring.factors.tam_industry_growth
+  const { industry, industryStats } = snapshot
+
+  // TAM CAGR이 큐레이션되어 있으면 우선, 없으면 산업 구성기업 매출성장률 중앙값으로 대체
+  const curated = industry.tamCagr
+  const fallback = industryStats.medianRevenueGrowth
+  const growth = curated ?? fallback
+  if (growth === null) {
+    return noData(KEY, f.weight, 'TAM CAGR 미큐레이션 · 산업 성장률 대체값도 없음')
+  }
+  const growthSource =
+    curated !== null
+      ? `TAM CAGR ${pct(curated)} (출처: ${industry.tamSource ?? '미기재'})`
+      : `산업 매출성장률 중앙값 ${pct(fallback)}로 대체 — TAM 미큐레이션`
+
+  const cagrScore = interpolate(f.cagr_curve, growth)
+
+  // 침투율: TAM 대비 매출 비중이 높을수록 남은 성장 여지가 작다
+  const revenue = snapshot.ttm[0]?.revenue ?? null
+  if (industry.tamUsd === null || revenue === null || industry.tamUsd <= 0) {
+    return scored(KEY, f.weight, growth, cagrScore, `${growthSource} · 침투율 미산출`)
+  }
+  const penetration = revenue / industry.tamUsd
+  const normalized =
+    f.blend.tam_cagr * cagrScore +
+    f.blend.penetration * interpolate(f.penetration_curve, penetration)
+
+  return scored(
+    KEY, f.weight, growth, normalized,
+    `${growthSource} · TAM 침투율 ${pct(penetration)}`,
+  )
+}
+```
+
+- [ ] **Step 5: 테스트 통과 확인**
+
+Run: `npx vitest run tests/engines/factors-growth.test.ts`
+Expected: PASS (10 tests)
+
+`revenueGrowthFactor`의 첫 테스트에서 `points`가 14를 넘지 않으면 곡선을 확인한다. TTM YoY 0.40 → 0.85, 3Y CAGR `(1400/700)^(1/3)-1 = 0.26` → 약 0.617. 블렌드 = `0.6×0.85 + 0.4×0.617 = 0.757` → `20 × 0.757 = 15.1점`.
+
+- [ ] **Step 6: 커밋**
+
+```bash
+git add -A
+git commit -m "feat: Tenbagger 팩터 1-3 (매출성장·가속도·TAM)
+
+한쪽 지표만 있으면 그 값 단독으로 채점하고 없는 쪽을 0으로 치지 않는다.
+TAM CAGR이 미큐레이션이면 산업 구성기업 매출성장률 중앙값으로 대체해
+첫 실행부터 동작하게 하고, 어느 쪽을 썼는지 detail에 명시한다."
 ```
