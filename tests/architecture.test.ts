@@ -21,4 +21,8 @@ describe('아키텍처 경계', () => {
     }
     expect(violations).toEqual([])
   })
+
+  it('engines 파일이 실제로 존재한다 (테스트가 공허하지 않음을 보장)', () => {
+    expect(globSync('src/engines/**/*.ts').length).toBeGreaterThan(0)
+  })
 })
