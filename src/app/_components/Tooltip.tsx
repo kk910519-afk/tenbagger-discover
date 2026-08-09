@@ -7,8 +7,8 @@ const PANEL_WIDTH = 260
 
 /**
  * 헤더/라벨 옆에 붙는 설명 툴팁. 호버 전용 툴팁은 키보드·스크린리더 사용자에게는
- * 아예 보이지 않는다 — 이 패턴에서 가장 흔한 접근성 결함이라, 마우스 hover와
- * 키보드 focus 양쪽 모두에서 열리도록 만들었다(WAI-ARIA APG의 tooltip 패턴).
+ * 아예 보이지 않는다 — 이 패턴에서 가장 흔한 접근성 결함이라, 마우스 hover·키보드
+ * focus·모바일 터치 세 경로 모두에서 열리도록 만들었다(WAI-ARIA APG의 tooltip 패턴).
  *
  * - 트리거는 tabIndex=0으로 Tab 이동 가능하고, aria-describedby로 패널과 연결된다.
  * - Escape로 닫힌다.
@@ -16,10 +16,17 @@ const PANEL_WIDTH = 260
  *   absolute 배치를 쓰면 스크롤 컨테이너 안에서 잘리거나 가로 스크롤폭을
  *   넓혀버린다. fixed는 그 컨테이너 바깥으로 나가므로 둘 다 피한다.
  * - 우측 뷰포트 경계를 넘지 않도록 left 좌표를 클램프한다.
+ * - 터치: 터치 기기에는 hover가 없으므로 탭을 열기/닫기 토글로 쓴다. onTouchEnd에서
+ *   preventDefault()해 브라우저가 뒤이어 합성 mouseenter/click 이벤트를 쏘는 것을
+ *   막는다 — 안 그러면 탭 한 번에 (touchend 토글) → (합성 click/hover) 이중 토글이
+ *   일어나 열리자마자 닫힐 수 있다. 이미 열린 상태에서 패널 바깥을 탭하면 닫히도록
+ *   document의 touchstart를 듣는다. 이 추가는 기존 mouseEnter/focus 리스너를
+ *   건드리지 않으므로 CandidateTable의 기존 hover/focus 동작은 그대로다.
  */
 export function Tooltip({ text, children }: { text: string; children: React.ReactNode }) {
   const [open, setOpen] = useState(false)
   const [style, setStyle] = useState<CSSProperties>({})
+  const containerRef = useRef<HTMLSpanElement>(null)
   const triggerRef = useRef<HTMLSpanElement>(null)
   const id = useId()
 
@@ -42,8 +49,20 @@ export function Tooltip({ text, children }: { text: string; children: React.Reac
     return () => document.removeEventListener('keydown', onKeyDown)
   }, [open])
 
+  useEffect(() => {
+    if (!open) return
+    const onTouchStartOutside = (e: TouchEvent) => {
+      const container = containerRef.current
+      if (container && e.target instanceof Node && !container.contains(e.target)) {
+        setOpen(false)
+      }
+    }
+    document.addEventListener('touchstart', onTouchStartOutside)
+    return () => document.removeEventListener('touchstart', onTouchStartOutside)
+  }, [open])
+
   return (
-    <span className="relative inline-block">
+    <span ref={containerRef} className="relative inline-block">
       <span
         ref={triggerRef}
         tabIndex={0}
@@ -53,6 +72,10 @@ export function Tooltip({ text, children }: { text: string; children: React.Reac
         onMouseLeave={() => setOpen(false)}
         onFocus={() => setOpen(true)}
         onBlur={() => setOpen(false)}
+        onTouchEnd={(e) => {
+          e.preventDefault()
+          setOpen((o) => !o)
+        }}
       >
         {children}
       </span>

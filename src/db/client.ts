@@ -180,6 +180,14 @@ CREATE VIEW IF NOT EXISTS latest_scores AS
 SELECT s.* FROM scores s
 JOIN (SELECT cik, MAX(as_of) AS as_of FROM scores GROUP BY cik) m
   ON s.cik = m.cik AND s.as_of = m.as_of;
+
+-- valuations도 scores와 같은 (cik, as_of) append-only 모양이다 — 같은 "최신 1건" 패턴을
+-- 그대로 복제한다. UI는 이 뷰를 LEFT JOIN해서 읽어야 한다(INNER JOIN하면 아직 밸류에이션이
+-- 없는 회사가 종목 상세에서 통째로 사라진다).
+CREATE VIEW IF NOT EXISTS latest_valuations AS
+SELECT v.* FROM valuations v
+JOIN (SELECT cik, MAX(as_of) AS as_of FROM valuations GROUP BY cik) m
+  ON v.cik = m.cik AND v.as_of = m.as_of;
 `
 
 /**

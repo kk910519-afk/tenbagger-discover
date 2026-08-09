@@ -88,3 +88,33 @@ describe('Tooltip — 헤더가 정보 존재를 시각적으로 알린다', () 
     expect(getTrigger(container).className).toMatch(/border-dotted/)
   })
 })
+
+describe('Tooltip — 모바일 터치로도 열고 닫는다', () => {
+  it('touchEnd 한 번으로 열리고, 다시 touchEnd하면 닫힌다 (hover 없이)', () => {
+    const { container } = render(<Tooltip text={HELP}>Label</Tooltip>)
+    const trigger = getTrigger(container)
+    expect(getPanel(container)).toBeNull()
+
+    fireEvent.touchEnd(trigger)
+    expect(getPanel(container)?.textContent).toBe(HELP)
+
+    fireEvent.touchEnd(trigger)
+    expect(getPanel(container)).toBeNull()
+  })
+
+  it('열린 상태에서 패널 바깥을 탭하면 닫힌다', () => {
+    const { container } = render(
+      <div>
+        <Tooltip text={HELP}>Label</Tooltip>
+        <button>다른 곳</button>
+      </div>,
+    )
+    const trigger = getTrigger(container)
+    fireEvent.touchEnd(trigger)
+    expect(getPanel(container)).not.toBeNull()
+
+    const outside = container.querySelector('button')!
+    fireEvent.touchStart(outside)
+    expect(getPanel(container)).toBeNull()
+  })
+})

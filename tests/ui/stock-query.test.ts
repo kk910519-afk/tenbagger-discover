@@ -61,6 +61,23 @@ beforeAll(() => {
      VALUES (99, '2025-03-31', 'TTM', 4000, 3120, 200, 1200, 4000, 700,
              '2026-08-09T00:00:00.000Z')`,
   ).run()
+  raw.prepare(
+    `INSERT INTO valuations (
+       cik, as_of,
+       fair_value_status, fair_value_per_share, fair_value_assumptions, fair_value_detail,
+       price_to_fair_value_status, price_to_fair_value_ratio, margin_of_safety, valuation_status,
+       moat_signal, moat_periods_evaluated, moat_periods_clearing, moat_evidence,
+       uncertainty_level, uncertainty_score, uncertainty_drivers,
+       engine_version
+     ) VALUES (
+       99, '2026-08-09',
+       'OK', 500.0, '{}', '5년 예측 + 터미널가치',
+       'OK', 0.825, 0.175, 'UNDERVALUED',
+       'WIDE', 8, 7, '["최근 연간 8개 기간 중 7개에서 ROIC가 자본비용을 상회"]',
+       'MEDIUM', 0.4, '[{"key":"revenue_predictability","status":"MEASURED","risk":0.4,"detail":"d"}]',
+       'valuation-1.0.0'
+     )`,
+  ).run()
 })
 
 const detail = () => getStockDetail(raw, 'CRWD', '2026-08-09')!
@@ -126,5 +143,24 @@ describe('getStockDetail', () => {
     expect(labels).toContain('Price')
     expect(labels).toContain('Financials')
     expect(labels).toContain('Tenbagger Score')
+  })
+
+  it('밸류에이션이 계산된 회사는 4개 지표를 모두 담는다', () => {
+    const v = detail().valuation!
+    expect(v).not.toBeNull()
+    expect(v.moatSignal).toBe('WIDE')
+    expect(v.moatPeriodsEvaluated).toBe(8)
+    expect(v.moatPeriodsClearing).toBe(7)
+    expect(v.moatEvidence).toEqual(['최근 연간 8개 기간 중 7개에서 ROIC가 자본비용을 상회'])
+    expect(v.fairValueStatus).toBe('OK')
+    expect(v.fairValuePerShare).toBeCloseTo(500.0)
+    expect(v.priceToFairValueStatus).toBe('OK')
+    expect(v.priceToFairValueRatio).toBeCloseTo(0.825)
+    expect(v.marginOfSafety).toBeCloseTo(0.175)
+    expect(v.valuationStatus).toBe('UNDERVALUED')
+    expect(v.uncertaintyLevel).toBe('MEDIUM')
+    expect(v.uncertaintyScore).toBeCloseTo(0.4)
+    expect(v.uncertaintyDrivers).toHaveLength(1)
+    expect(v.uncertaintyDrivers[0]!.key).toBe('revenue_predictability')
   })
 })

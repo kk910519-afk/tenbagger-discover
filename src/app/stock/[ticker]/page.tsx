@@ -7,6 +7,7 @@ import { Badge, CategoryBadge } from '@/app/_components/Badge'
 import { MetricGrid } from '@/app/_components/MetricGrid'
 import { FactorBreakdown, StrengthWeakness } from '@/app/_components/FactorBreakdown'
 import { CompanyFacts } from '@/app/_components/CompanyFacts'
+import { ValuationSection } from '@/app/_components/Valuation'
 
 export const dynamic = 'force-dynamic'
 
@@ -53,7 +54,19 @@ export default async function StockPage({
         <MetricGrid
           emphasize
           items={[
-            { label: 'Tenbagger Score', value: <Value>{formatScore(d.tenbagger)}</Value> },
+            {
+              label: 'Tenbagger Score',
+              value: (
+                <span className="block">
+                  <Value>{formatScore(d.tenbagger)}</Value>
+                  {/* 브리프 §Tenbagger Score 면책 문구 — 문장을 그대로 넣는다, 다듬지 않는다. */}
+                  <span className="mt-1 block text-[10px] font-normal normal-case leading-snug text-[var(--color-text-faint)]">
+                    Tenbagger Score는 성장 잠재력을 평가하며, 현재 주가의 저평가 여부나 매수 추천을
+                    의미하지 않습니다.
+                  </span>
+                </span>
+              ),
+            },
             { label: 'Market Cap', value: <Value>{formatUsd(d.marketCap)}</Value> },
             {
               label: 'Price',
@@ -142,6 +155,8 @@ export default async function StockPage({
           </p>
         )}
       </section>
+
+      <ValuationSection valuation={d.valuation} price={d.price} />
 
       <section>
         <h2 className="mb-2 text-sm">Risks</h2>

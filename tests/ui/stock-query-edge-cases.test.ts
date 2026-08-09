@@ -68,6 +68,9 @@ describe('getStockDetail 스코어링 파이프라인 실행 전', () => {
     expect(d!.stateOfIncorporation).toBeNull()
     expect(d!.stateOfIncorporationDescription).toBeNull()
 
+    // valuations 행도 없다 — INNER JOIN이었다면 이 회사 자체가 사라졌을 것이다.
+    expect(d!.valuation).toBeNull()
+
     // Tenbagger Score 신선도 항목은 날짜가 없어 UNKNOWN으로 이어져야 한다(null 비교 강제형변환 금지).
     const scoreFreshness = d!.freshness.find((f) => f.label === 'Tenbagger Score')!
     expect(scoreFreshness.date).toBeNull()
@@ -110,5 +113,65 @@ describe('getStockDetail 스코어링 파이프라인 실행 전', () => {
     db.close()
 
     expect(d).toBeNull()
+  })
+})
+
+/**
+ * fair_value_status가 INSUFFICIENT_DATA면 price_to_fair_value_status/margin_of_safety도
+ * 함께 없어야 하는 연쇄가 실제로 그렇게 저장·조회되는지 확인한다. 스코어링은 이미
+ * 끝난 회사(점수 섹션은 정상)라도 밸류에이션은 독립적으로 INSUFFICIENT_DATA일 수 있다 —
+ * 두 파이프라인 스텝이 서로 다른 데이터 요건을 갖기 때문이다.
+ */
+describe('getStockDetail 밸류에이션이 INSUFFICIENT_DATA인 회사', () => {
+  it('fair value가 없으면 price-to-fair-value/margin-of-safety도 null로 연쇄된다', () => {
+    const db = getRawDb(join(mkdtempSync(join(tmpdir(), 'tb-stock-valedge-')), 's.db'))
+    runMigrations(db)
+    db.prepare(
+      `INSERT INTO themes (slug, name, display_order) VALUES ('ai-software-semi', 'AI', 1)`,
+    ).run()
+    db.prepare(
+      `INSERT INTO industries (slug, theme_slug, name)
+       VALUES ('biotech', 'ai-software-semi', 'Biotech')`,
+    ).run()
+    db.prepare(
+      `INSERT INTO companies (cik, ticker, name, is_active, first_seen, last_updated)
+       VALUES (501, 'PRECL', 'Preclinical Inc', 1, '2026-08-09', '2026-08-09')`,
+    ).run()
+    db.prepare(
+      `INSERT INTO company_industry (cik, industry_slug, theme_slug, is_primary, source)
+       VALUES (501, 'biotech', 'ai-software-semi', 1, 'sic')`,
+    ).run()
+    db.prepare(
+      `INSERT INTO valuations (
+         cik, as_of,
+         fair_value_status, fair_value_reason, fair_value_detail,
+         price_to_fair_value_status,
+         moat_signal, moat_periods_evaluated, moat_periods_clearing, moat_evidence,
+         uncertainty_level, uncertainty_score, uncertainty_drivers,
+         engine_version
+       ) VALUES (
+         501, '2026-08-09',
+         'INSUFFICIENT_DATA', 'NOT_CASH_GENERATIVE', '잉여현금흐름과 영업이익이 모두 0 이하',
+         'UNAVAILABLE',
+         'INSUFFICIENT_DATA', 2, 0, '["ROIC를 산출할 수 있는 연간 기간이 2개뿐 — 최소 4개 필요"]',
+         'VERY_HIGH', 0.9, '[]',
+         'valuation-1.0.0'
+       )`,
+    ).run()
+
+    const d = getStockDetail(db, 'PRECL', '2026-08-09')
+    db.close()
+
+    expect(d).not.toBeNull()
+    const v = d!.valuation!
+    expect(v).not.toBeNull()
+    expect(v.fairValueStatus).toBe('INSUFFICIENT_DATA')
+    expect(v.fairValueReason).toBe('NOT_CASH_GENERATIVE')
+    expect(v.fairValuePerShare).toBeNull()
+    expect(v.priceToFairValueStatus).toBe('UNAVAILABLE')
+    expect(v.priceToFairValueRatio).toBeNull()
+    expect(v.marginOfSafety).toBeNull()
+    expect(v.valuationStatus).toBeNull()
+    expect(v.moatSignal).toBe('INSUFFICIENT_DATA')
   })
 })

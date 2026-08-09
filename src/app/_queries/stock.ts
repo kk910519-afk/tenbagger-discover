@@ -2,6 +2,13 @@ import type Database from 'better-sqlite3'
 import type { Category, FactorStatus, FinancialPeriod } from '@/domain/types'
 import { grossMargin, operatingMargin, fcfMargin } from '@/domain/metrics'
 import { loadConfig } from '@/config'
+import type {
+  FairValueReason,
+  MoatSignal,
+  UncertaintyDriverKey,
+  UncertaintyLevel,
+  ValuationStatus,
+} from '@/engines/valuation'
 
 export type FactorView = {
   key: string
@@ -23,6 +30,39 @@ export type FlagView = {
 export type FreshnessItem = { label: string; date: string | null; thresholdDays: number }
 
 export type ClassificationSource = 'sic' | 'override'
+
+export type UncertaintyDriverView = {
+  key: UncertaintyDriverKey
+  status: 'MEASURED' | 'UNAVAILABLE'
+  risk: number | null
+  detail: string
+}
+
+/**
+ * valuations 행 전체를 하나로 묶는다 — (cik, as_of) 행 자체가 없으면(스코어링과 마찬가지로
+ * compute-scores가 아직 이 회사를 처리하지 않은 경우) 네 지표 모두 함께 없는 것이지
+ * 일부만 있을 수 없다. fair_value가 INSUFFICIENT_DATA면 price_to_fair_value와
+ * margin_of_safety도 연쇄적으로 없다 — 그 상태는 필드 단위가 아니라 status로 표현한다.
+ */
+export type ValuationView = {
+  asOf: string
+  engineVersion: string
+  moatSignal: MoatSignal
+  moatPeriodsEvaluated: number
+  moatPeriodsClearing: number
+  moatEvidence: string[]
+  fairValueStatus: 'OK' | 'INSUFFICIENT_DATA'
+  fairValueReason: FairValueReason | null
+  fairValuePerShare: number | null
+  fairValueDetail: string
+  priceToFairValueStatus: 'OK' | 'UNAVAILABLE'
+  priceToFairValueRatio: number | null
+  marginOfSafety: number | null
+  valuationStatus: ValuationStatus | null
+  uncertaintyLevel: UncertaintyLevel
+  uncertaintyScore: number
+  uncertaintyDrivers: UncertaintyDriverView[]
+}
 
 export type StockDetail = {
   cik: number
@@ -64,6 +104,8 @@ export type StockDetail = {
   factors: FactorView[]
   flags: FlagView[]
   freshness: FreshnessItem[]
+  /** compute-scores가 아직 이 회사의 밸류에이션을 계산하지 않았으면 null이다. */
+  valuation: ValuationView | null
 }
 
 type HeadRow = {
@@ -85,6 +127,23 @@ type HeadRow = {
   category: Category | null
   asOf: string | null
   engineVersion: string | null
+  valAsOf: string | null
+  valEngineVersion: string | null
+  valMoatSignal: MoatSignal | null
+  valMoatPeriodsEvaluated: number | null
+  valMoatPeriodsClearing: number | null
+  valMoatEvidence: string | null
+  valFairValueStatus: 'OK' | 'INSUFFICIENT_DATA' | null
+  valFairValueReason: FairValueReason | null
+  valFairValuePerShare: number | null
+  valFairValueDetail: string | null
+  valPriceToFairValueStatus: 'OK' | 'UNAVAILABLE' | null
+  valPriceToFairValueRatio: number | null
+  valMarginOfSafety: number | null
+  valValuationStatus: ValuationStatus | null
+  valUncertaintyLevel: UncertaintyLevel | null
+  valUncertaintyScore: number | null
+  valUncertaintyDrivers: string | null
 }
 
 export function getStockDetail(
@@ -95,9 +154,11 @@ export function getStockDetail(
   const cfg = loadConfig()
 
   // company_industry/industries/themes는 회사가 존재하면 항상 있다(분류 파이프라인이
-  // 스코어링보다 먼저 돈다). scores는 LEFT JOIN한다 — INNER JOIN하면 파이프라인이
-  // 아직 채점하지 않은 회사가 통째로 404가 된다. industry.ts/map.ts에서 이미
-  // 한 번씩 걸렸던 문제와 같은 모양이다.
+  // 스코어링보다 먼저 돈다). scores와 valuations는 둘 다 LEFT JOIN한다 — INNER JOIN하면
+  // 파이프라인이 아직 채점/평가하지 않은 회사가 통째로 404가 된다. industry.ts/map.ts에서
+  // 이미 한 번씩 걸렸던 문제와 같은 모양이다. valuations는 scores와 별개 파이프라인
+  // 스텝의 산출물이라 asOf가 서로 다를 수 있으므로(같은 compute-scores 잡 안에서 함께
+  // 쓰이지만 각자 자기 latest_* 뷰로 독립적으로 조회한다) 별도 컬럼 세트로 둔다.
   const head = raw
     .prepare(
       `SELECT c.cik, c.ticker, c.name, c.sic, c.sic_description AS sicDescription,
@@ -107,12 +168,29 @@ export function getStockDetail(
               ci.industry_slug AS industrySlug, ci.source AS classificationSource,
               i.name AS industryName, t.name AS themeName,
               s.tenbagger, s.completeness, s.category, s.as_of AS asOf,
-              s.engine_version AS engineVersion
+              s.engine_version AS engineVersion,
+              v.as_of AS valAsOf, v.engine_version AS valEngineVersion,
+              v.moat_signal AS valMoatSignal,
+              v.moat_periods_evaluated AS valMoatPeriodsEvaluated,
+              v.moat_periods_clearing AS valMoatPeriodsClearing,
+              v.moat_evidence AS valMoatEvidence,
+              v.fair_value_status AS valFairValueStatus,
+              v.fair_value_reason AS valFairValueReason,
+              v.fair_value_per_share AS valFairValuePerShare,
+              v.fair_value_detail AS valFairValueDetail,
+              v.price_to_fair_value_status AS valPriceToFairValueStatus,
+              v.price_to_fair_value_ratio AS valPriceToFairValueRatio,
+              v.margin_of_safety AS valMarginOfSafety,
+              v.valuation_status AS valValuationStatus,
+              v.uncertainty_level AS valUncertaintyLevel,
+              v.uncertainty_score AS valUncertaintyScore,
+              v.uncertainty_drivers AS valUncertaintyDrivers
        FROM companies c
        JOIN company_industry ci ON ci.cik = c.cik
        JOIN industries i ON i.slug = ci.industry_slug
        JOIN themes t ON t.slug = i.theme_slug
        LEFT JOIN latest_scores s ON s.cik = c.cik
+       LEFT JOIN latest_valuations v ON v.cik = c.cik
        WHERE UPPER(c.ticker) = UPPER(?)`,
     )
     .get(ticker) as HeadRow | undefined
@@ -161,6 +239,42 @@ export function getStockDetail(
 
   const factorRaw = (key: string) => factors.find((f) => f.key === key)?.raw ?? null
 
+  // valuations 행이 없으면(파이프라인이 아직 이 회사를 평가하지 않음) 네 지표 모두
+  // 함께 없는 것으로 취급한다 — 일부 필드만 채워진 어중간한 상태를 만들지 않는다.
+  const valuation: ValuationView | null =
+    head.valAsOf !== null &&
+    head.valEngineVersion !== null &&
+    head.valMoatSignal !== null &&
+    head.valMoatPeriodsEvaluated !== null &&
+    head.valMoatPeriodsClearing !== null &&
+    head.valMoatEvidence !== null &&
+    head.valFairValueStatus !== null &&
+    head.valFairValueDetail !== null &&
+    head.valPriceToFairValueStatus !== null &&
+    head.valUncertaintyLevel !== null &&
+    head.valUncertaintyScore !== null &&
+    head.valUncertaintyDrivers !== null
+      ? {
+          asOf: head.valAsOf,
+          engineVersion: head.valEngineVersion,
+          moatSignal: head.valMoatSignal,
+          moatPeriodsEvaluated: head.valMoatPeriodsEvaluated,
+          moatPeriodsClearing: head.valMoatPeriodsClearing,
+          moatEvidence: JSON.parse(head.valMoatEvidence) as string[],
+          fairValueStatus: head.valFairValueStatus,
+          fairValueReason: head.valFairValueReason,
+          fairValuePerShare: head.valFairValuePerShare,
+          fairValueDetail: head.valFairValueDetail,
+          priceToFairValueStatus: head.valPriceToFairValueStatus,
+          priceToFairValueRatio: head.valPriceToFairValueRatio,
+          marginOfSafety: head.valMarginOfSafety,
+          valuationStatus: head.valValuationStatus,
+          uncertaintyLevel: head.valUncertaintyLevel,
+          uncertaintyScore: head.valUncertaintyScore,
+          uncertaintyDrivers: JSON.parse(head.valUncertaintyDrivers) as UncertaintyDriverView[],
+        }
+      : null
+
   return {
     cik: head.cik,
     ticker: head.ticker,
@@ -207,5 +321,6 @@ export function getStockDetail(
       { label: 'Financials', date: fin?.computedAt ?? null, thresholdDays: cfg.staleness.financials_days },
       { label: 'Tenbagger Score', date: scoreAsOf, thresholdDays: cfg.staleness.scores_days },
     ],
+    valuation,
   }
 }

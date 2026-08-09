@@ -5,6 +5,8 @@ const TONES = {
   risk: 'border-[var(--color-risk)] text-[var(--color-risk)]',
   watch: 'border-[var(--color-watch)] text-[var(--color-watch)]',
   neutral: 'border-[var(--color-border)] text-[var(--color-text-faint)]',
+  /** Value의 positive 톤과 같은 색(--color-positive) — 밸류에이션 섹션에서 "양호"를 표시할 때 쓴다. */
+  positive: 'border-[var(--color-positive)] text-[var(--color-positive)]',
 } as const
 
 export function Badge({

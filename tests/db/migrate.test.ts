@@ -35,6 +35,13 @@ describe('마이그레이션', () => {
     expect(rows.map((r) => r.name)).toContain('latest_scores')
   })
 
+  it('latest_valuations 뷰를 생성한다', () => {
+    const rows = raw
+      .prepare("SELECT name FROM sqlite_master WHERE type='view'")
+      .all() as { name: string }[]
+    expect(rows.map((r) => r.name)).toContain('latest_valuations')
+  })
+
   it('두 번 실행해도 실패하지 않는다', () => {
     expect(() => runMigrations(raw)).not.toThrow()
   })
@@ -59,6 +66,33 @@ describe('마이그레이션', () => {
     expect(rows).toHaveLength(1)
     expect(rows[0]!.as_of).toBe('2026-08-08')
     expect(rows[0]!.tenbagger).toBe(78)
+  })
+
+  it('valuations는 (cik, as_of) 복합키로 이력을 누적한다', () => {
+    const ins = raw.prepare(
+      `INSERT INTO valuations (
+         cik, as_of,
+         fair_value_status, fair_value_detail,
+         price_to_fair_value_status,
+         moat_signal, moat_periods_evaluated, moat_periods_clearing, moat_evidence,
+         uncertainty_level, uncertainty_score, uncertainty_drivers,
+         engine_version
+       ) VALUES (?, ?, 'INSUFFICIENT_DATA', 'd', 'UNAVAILABLE', 'INSUFFICIENT_DATA', 0, 0, '[]', 'HIGH', 0.6, '[]', 'v1')`,
+    )
+    ins.run(2, '2026-08-01')
+    ins.run(2, '2026-08-08')
+    const n = raw
+      .prepare('SELECT COUNT(*) c FROM valuations WHERE cik = 2')
+      .get() as { c: number }
+    expect(n.c).toBe(2)
+  })
+
+  it('latest_valuations는 CIK당 최신 1건만 반환한다', () => {
+    const rows = raw
+      .prepare('SELECT * FROM latest_valuations WHERE cik = 2')
+      .all() as { as_of: string }[]
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.as_of).toBe('2026-08-08')
   })
 
   it('financial_facts는 중복 사실을 거부한다', () => {
