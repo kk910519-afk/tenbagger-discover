@@ -11,7 +11,7 @@ Tenbagger Score` 경로로 탐색한다.
 npm install
 cp .env.example .env     # Finnhub 무료 키를 넣는다 (https://finnhub.io)
 npm run db:migrate
-npm run pipeline:all     # 최초 실행은 1시간 내외, 1GB 내려받는다
+npm run pipeline:all     # 최초 실행은 추정치로 1시간 내외(미측정), 약 1GB 다운로드
 npm run dev
 ```
 
@@ -46,5 +46,6 @@ npm run dev
 - Going Concern·고객 집중도 Red Flag 미구현 — 10-K 본문 파싱 필요, Phase 4
 - TAM은 수동 큐레이션. 미입력 산업은 구성기업 매출성장률 중앙값으로 대체
 - Industry 분류는 오버라이드가 없으면 SIC 기본 버킷 (화면에 표시됨)
-- 최초 파이프라인 실행(`npm run pipeline:all`)은 약 1시간이 걸리고 약 1GB를
-  내려받는다. 이 사실을 모르고 실행하면 오래 걸리는 이유를 알 수 없으니 미리 인지할 것.
+- 최초 파이프라인 실행(`npm run pipeline:all`)은 브리프의 단계별 소요시간과 다운로드
+  용량을 근거로 한 추정치로 약 1시간이 걸리고 약 1GB를 내려받는다 — 실측치가 아니다.
+  이 사실을 모르고 실행하면 오래 걸리는 이유를 알 수 없으니 미리 인지할 것.
