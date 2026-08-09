@@ -29,3 +29,15 @@ RGTI: { industry: quantum-computing }
 QBTS: { industry: quantum-computing }
 RKLB: { industry: space }
 ASTS: { industry: satellite }
+
+# 시가총액 상위 50개 기업 재분류 — SIC 코드가 지나치게 넓어 실제 사업과 다른 Industry에
+# 배정된 대형주를 수정한다. 근거는 top50-overrides-report.md 참고.
+"AAPL": { industry: advanced-computing }
+"AMAT": { industry: semiconductor-equipment }
+"QCOM": { industry: semiconductors }
+"ADP":  { industry: software-application }
+"MELI": { industry: online-marketplace }
+"EBAY": { industry: online-marketplace }
+"PYPL": { industry: digital-payments }
+"MPWR": { industry: power-semiconductor }
+"REGN": { industry: biotechnology }
