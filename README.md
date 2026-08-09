@@ -15,8 +15,17 @@ npm run pipeline:all     # 최초 실행은 추정치로 1시간 내외(미측�
 npm run dev
 ```
 
-키가 없으면 `.env`에 `PRICE_PROVIDER=fixture`로 두고 실행할 수 있다.
-이 경우 시가총액이 없어 일부 팩터가 채점되지 않는다.
+파이프라인(`tsx`로 직접 실행)은 `.env`를 시작 시점에 직접 읽는다 — 웹 앱(`next dev`)과
+달리 Next.js의 자동 로딩을 타지 않기 때문이다. `.env`가 아예 없어도 실행은 되며(선택
+사항), 이미 export된 실제 환경변수가 있으면 `.env`보다 우선한다.
+
+**Finnhub 키 없이 할 수 있는 것.** 키는 시세(`prices`) 단계에서만 필요하다.
+`npm run pipeline:universe`, `pipeline:fundamentals`, `pipeline:scores`는 키가 없어도
+정상적으로 끝까지 실행된다. 키가 없다면 이 세 단계를 따로 돌리거나, `.env`에
+`PRICE_PROVIDER=fixture`를 두고 `npm run pipeline:all`을 실행한다 — 이 경우 실제
+시가총액이 없어 일부 팩터가 채점되지 않는다. 키가 없는 채로 `pipeline:all`을 그대로
+실행하면 universe/fundamentals까지는 끝나고 `prices` 단계에서 멈춘다(그 뒤의 `scores`는
+실행되지 않는다).
 
 ## 데이터 소스
 

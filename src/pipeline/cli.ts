@@ -1,4 +1,5 @@
 import { loadConfig } from '@/config'
+import { loadEnvFile } from '@/config/env'
 import { loadTaxonomy } from '@/taxonomy'
 import { getRawDb, runMigrations } from '@/db/client'
 import { createHttpClient } from '@/providers/http/client'
@@ -43,7 +44,12 @@ export function buildDeps(env: Partial<NodeJS.ProcessEnv>, asOf: string) {
     reference: createSecReferenceProvider(secHttp),
     bulk: createSecBulkProvider(secHttp),
     companyFacts: createCompanyFactsProvider(secHttp),
-    prices: getPriceProvider(priceHttp, env),
+    // universe/fundamentals/scores는 시세를 쓰지 않는다. 여기서 즉시 생성하면
+    // 그 세 명령이 Finnhub 키 없이는 아예 실행되지 못한다 — getter로 미뤄서
+    // prices 잡을 실제로 실행할 때만 (그리고 그때만) 키를 요구하게 한다.
+    get prices() {
+      return getPriceProvider(priceHttp, env)
+    },
   }
 }
 
@@ -96,6 +102,10 @@ export async function runPipeline(
 
 // tsx로 직접 실행될 때만 동작한다
 if (process.argv[1]?.endsWith('cli.ts')) {
+  // Next.js는 웹 앱을 위해 .env를 자동으로 읽지만, 이 CLI는 tsx로 직접 실행되어
+  // 그 메커니즘을 타지 않는다 — 여기서 직접 읽어야 한다. buildDeps가 env를
+  // 읽기 전에 실행되어야 하므로 가장 먼저 호출한다.
+  loadEnvFile()
   const command = process.argv[2] ?? 'all'
   const asOf = process.argv[3] ?? new Date().toISOString().slice(0, 10)
   runPipeline(command, process.env, asOf).catch((e) => {

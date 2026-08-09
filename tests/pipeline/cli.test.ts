@@ -39,6 +39,25 @@ describe('buildDeps', () => {
   })
 })
 
+describe('buildDeps — 시세 Provider는 지연 생성된다', () => {
+  it('FINNHUB_API_KEY가 없어도 buildDeps 자체는 성공한다 — universe/fundamentals/scores는 시세를 쓰지 않는다', () => {
+    const dbPath = join(mkdtempSync(join(tmpdir(), 'tb-cli-')), 'c.db')
+    // PRICE_PROVIDER를 명시하지 않으면 기본값 finnhub인데, 키도 주지 않는다.
+    // buildDeps가 즉시 getPriceProvider를 호출한다면 여기서 던져야 정상이었다.
+    const env = { DATABASE_PATH: dbPath }
+    const d = buildDeps(env, '2026-08-09')
+    d.raw.close()
+  })
+
+  it('하지만 prices 잡을 실제로 실행하면 키가 없다는 에러가 명확히 난다', async () => {
+    const dbPath = join(mkdtempSync(join(tmpdir(), 'tb-cli-')), 'c.db')
+    const env = { DATABASE_PATH: dbPath }
+    await expect(runPipeline('prices', env, '2026-08-09')).rejects.toThrow(
+      /FINNHUB_API_KEY/,
+    )
+  })
+})
+
 describe('runPipeline', () => {
   it('알 수 없는 명령은 buildDeps를 호출하기 전에 거부한다', async () => {
     // DATABASE_PATH를 일부러 주지 않는다 — buildDeps가 호출된다면
