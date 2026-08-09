@@ -2,15 +2,11 @@ import { getRawDb } from '@/db/client'
 import { loadConfig } from '@/config'
 import { getOpportunityMap, type IndustryRow, type ThemeBlock } from './_queries/map'
 import { getTopCandidates, type TopCandidate } from './_queries/top-candidates'
-import { getThemeMomentum, type ThemeMomentum } from './_queries/theme-momentum'
-import { getOpportunityScatter, type OpportunityMark } from './_queries/opportunity-scatter'
 import { formatUsd, formatPct, formatScore } from './_lib/format'
 import { Value, SignedValue } from './_components/Value'
 import { Badge } from './_components/Badge'
 import { ScoreBar } from './_components/ScoreBar'
 import { TopCandidates } from './_components/TopCandidates'
-import { ThemeMomentumStrip } from './_components/ThemeMomentumStrip'
-import { OpportunityScatter } from './_components/OpportunityScatter'
 import { Card } from './_components/Card'
 
 export const dynamic = 'force-dynamic'
@@ -20,13 +16,9 @@ export default function Home() {
   const raw = getRawDb()
   let themes: ThemeBlock[]
   let topCandidates: TopCandidate[]
-  let themeMomentum: ThemeMomentum[]
-  let opportunityMarks: OpportunityMark[]
   try {
     themes = getOpportunityMap(raw, cfg.scoring.min_completeness)
     topCandidates = getTopCandidates(raw, cfg.scoring.min_completeness, 5)
-    themeMomentum = getThemeMomentum(raw, cfg.scoring.min_completeness)
-    opportunityMarks = getOpportunityScatter(raw, cfg.scoring.min_completeness, 10)
   } finally {
     raw.close()
   }
@@ -55,13 +47,6 @@ export default function Home() {
   return (
     <div className="space-y-5">
       <Card
-        title="Theme Momentum"
-        subtitle="테마별 적격 후보 수 · 매출성장·매출가속 중앙값 · 최고 점수 후보 (가격 히스토리가 없어 3개월 상대 성과는 아직 제공하지 않습니다)"
-      >
-        <ThemeMomentumStrip themes={themeMomentum} />
-      </Card>
-
-      <Card
         title="Top 5 · Universe-Wide"
         subtitle="Theme·Industry 경계와 무관하게 점수가 가장 높은 후보 5곳"
       >
@@ -72,13 +57,6 @@ export default function Home() {
         ) : (
           <TopCandidates candidates={topCandidates} />
         )}
-      </Card>
-
-      <Card
-        title="Opportunity Map"
-        subtitle="후보 수 상위 산업 · x=매출성장 중앙값 · y=Tenbagger 중앙값 · 크기=시가총액 중앙값 · 색=테마"
-      >
-        <OpportunityScatter marks={opportunityMarks} />
       </Card>
 
       <div className="pt-2">
