@@ -1,0 +1,9 @@
+Nasdaq Traded|Symbol|Security Name|Listing Exchange|Market Category|ETF|Round Lot Size|Test Issue|Financial Status|CQS Symbol|NASDAQ Symbol|NextShares
+Y|NVDA|NVIDIA Corporation - Common Stock|Q|Q|N|100|N|N|NVDA|NVDA|N
+Y|CRWD|CrowdStrike Holdings, Inc. - Class A Common Stock|Q|Q|N|100|N|N|CRWD|CRWD|N
+Y|SPY|SPDR S&P 500 ETF Trust|P| |Y|100|N||SPY|SPY|N
+Y|ZTEST|Nasdaq Test Issue|Q|G|N|100|Y|N|ZTEST|ZTEST|N
+Y|BADCO|Deficient Corp - Common Stock|Q|Q|N|100|N|D|BADCO|BADCO|N
+Y|PFDX|Some Bank - 7.5% Preferred Series A|N| |N|100|N||PFDX|PFDX|N
+Y|WRNTW|Some Co - Warrant|Q|S|N|100|N|N|WRNTW|WRNTW|N
+File Creation Time: 0809202606:00|||||||||||
