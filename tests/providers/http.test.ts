@@ -44,6 +44,31 @@ describe('createHttpClient', () => {
     expect(sleeps.some((s) => s > 0 && s <= 100)).toBe(true)
   })
 
+  it('concurrent requests는 rate limit을 지킨다 (nextSlotAt 예약)', async () => {
+    const sleeps: number[] = []
+    const client = createHttpClient({
+      userAgent: 'x',
+      rateLimitPerSec: 10, // 100ms 간격
+      cacheDir: tmpCache(),
+      fetchImpl: async () => okResponse('ok'),
+      sleepImpl: async (ms) => { sleeps.push(ms) },
+    })
+    // 5개의 요청을 동시에 시작
+    await Promise.all([
+      client.getText('https://example.com/1'),
+      client.getText('https://example.com/2'),
+      client.getText('https://example.com/3'),
+      client.getText('https://example.com/4'),
+      client.getText('https://example.com/5'),
+    ])
+    // 5번 요청했으므로, 4개의 slot 예약이 필요 (첫 번째는 wait=0)
+    // sleep은 대략 [0 또는 없음, ~100, ~100, ~100]이어야 한다
+    expect(sleeps.length).toBeGreaterThanOrEqual(3)
+    // 모든 sleep이 같은 값이면 안 됨 (concurrent bug의 증상)
+    const uniqueSleeps = new Set(sleeps)
+    expect(uniqueSleeps.size).toBeGreaterThan(1) // 다양한 대기 시간이 있어야 함
+  })
+
   it('429를 만나면 재시도하고 성공하면 값을 반환한다', async () => {
     let calls = 0
     const client = createHttpClient({
@@ -109,5 +134,36 @@ describe('createHttpClient', () => {
       fetchImpl: async () => okResponse('{"a":1}'),
     })
     expect(await client.getJson<{ a: number }>('https://example.com/j')).toEqual({ a: 1 })
+  })
+
+  it('getJson은 파싱 실패 시 URL을 포함한 에러를 던진다', async () => {
+    const client = createHttpClient({
+      userAgent: 'x',
+      rateLimitPerSec: 1000,
+      cacheDir: tmpCache(),
+      fetchImpl: async () => okResponse('<html>error</html>'),
+    })
+    await expect(client.getJson('https://example.com/bad')).rejects.toThrow(/example\.com\/bad/)
+    await expect(client.getJson('https://example.com/bad')).rejects.toThrow(/body:/)
+  })
+
+  it('cache 파일은 원자적으로 기록된다 (tmp → rename)', async () => {
+    const cacheDir = tmpCache()
+    const client = createHttpClient({
+      userAgent: 'x',
+      rateLimitPerSec: 1000,
+      cacheDir,
+      fetchImpl: async () => okResponse('cached'),
+    })
+    const url = 'https://example.com/atomic'
+    await client.getText(url, { cache: true })
+
+    // 캐시 디렉토리에는 .bin 파일만 있고 .tmp 파일은 없어야 한다
+    const fs = require('node:fs')
+    const files = fs.readdirSync(cacheDir)
+    const tmpFiles = files.filter((f: string) => f.endsWith('.tmp'))
+    const binFiles = files.filter((f: string) => f.endsWith('.bin'))
+    expect(tmpFiles).toHaveLength(0)
+    expect(binFiles.length).toBeGreaterThan(0)
   })
 })
