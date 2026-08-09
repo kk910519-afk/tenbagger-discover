@@ -247,6 +247,65 @@ describe('normalizeFacts — 시점 값 조회 기간 제한 (staleness bound)',
   })
 })
 
+describe('normalizeFacts — API/bulk 중복 기간 정합 (Apple 실사례 회귀)', () => {
+  // 실측 재현: 같은 분기가 API(정확한 날짜, 올바른 연결 총계)와 bulk(달력월
+  // 말일로 반올림한 날짜, 세그먼트 오염으로 추정되는 엉뚱한 값)에서 각각
+  // 따로 들어온다. 정합 전에는 quarterly에 분기당 2개 기간이 생겨 TTM 창이
+  // 진짜 분기와 중복 분기를 섞어 합산했다.
+  function apiFact(tag: string, periodEnd: string, value: number): RawFact {
+    return {
+      cik: 320193, tag, unit: 'USD', periodStart: null, periodEnd, qtrs: 1, value,
+      form: '10-Q', filedDate: '2026-01-30', accession: `api-${periodEnd}`, source: 'api',
+    }
+  }
+  function bulkFact(tag: string, periodEnd: string, value: number): RawFact {
+    return {
+      cik: 320193, tag, unit: 'USD', periodStart: null, periodEnd, qtrs: 1, value,
+      form: '10-Q', filedDate: '2026-01-30', accession: `bulk-${periodEnd}`, source: 'bulk',
+    }
+  }
+
+  const REV = 'RevenueFromContractWithCustomerExcludingAssessedTax'
+  // [apiEnd, bulkEnd(month-end 반올림), apiRevenue, bulkRevenue(오염된 값)]
+  const QUARTERS: [string, string, number, number][] = [
+    ['2024-12-28', '2024-12-31', 124_300_000_000, 124_300_000_000], // 값은 일치하는 케이스도 섞는다
+    ['2025-03-29', '2025-03-31', 95_359_000_000, 24_454_000_000],
+    ['2025-06-27', '2025-06-30', 94_036_000_000, 7_404_000_000],
+    ['2025-09-28', '2025-09-30', 102_466_000_000, 21_000_000_000],
+    ['2025-12-27', '2025-12-31', 143_756_000_000, 9_413_000_000], // 실측 Apple 값
+  ]
+
+  const facts: RawFact[] = QUARTERS.flatMap(([apiEnd, bulkEnd, apiRev, bulkRev]) => [
+    apiFact(REV, apiEnd, apiRev),
+    bulkFact(REV, bulkEnd, bulkRev),
+    apiFact('OperatingIncomeLoss', apiEnd, Math.round(apiRev * 0.3)),
+    bulkFact('OperatingIncomeLoss', bulkEnd, Math.round(bulkRev * 0.3)),
+  ])
+  const r = normalizeFacts(facts)
+
+  it('분기마다 API/bulk가 하나의 기간으로 합쳐진다 — 분기 수가 두 배가 되지 않는다', () => {
+    expect(r.quarterly).toHaveLength(QUARTERS.length)
+    expect(r.quarterly.map((q) => q.periodEnd)).toEqual(
+      [...QUARTERS.map(([apiEnd]) => apiEnd)].sort().reverse(),
+    )
+  })
+
+  it('canonical 기간은 API의 정확한 날짜를 쓰고 값도 API 값이다 (bulk의 오염된 값이 아니다)', () => {
+    const latest = r.quarterly.find((q) => q.periodEnd === '2025-12-27')!
+    expect(latest.revenue).toBe(143_756_000_000)
+    expect(latest.periodEnd).not.toBe('2025-12-31')
+  })
+
+  it('TTM은 진짜 4개 분기만 합산한다 — 중복 기간이 창에 끼어들지 않는다', () => {
+    const ttm = r.ttm.find((t) => t.periodEnd === '2025-12-27')!
+    const expectedRevenue = QUARTERS.slice(1).reduce((s, [, , apiRev]) => s + apiRev, 0)
+    expect(ttm.revenue).toBe(expectedRevenue)
+    // 오염된 bulk 매출(24.4B + 7.4B + 21B + 9.4B 등)의 합이 아님을 확인한다.
+    const bulkSum = QUARTERS.slice(1).reduce((s, [, , , bulkRev]) => s + bulkRev, 0)
+    expect(ttm.revenue).not.toBe(bulkSum)
+  })
+})
+
 describe('normalizeFacts — 연간 및 출처 기록', () => {
   it('연간 기간을 최근순으로 만든다', () => {
     const r = normalizeFacts([

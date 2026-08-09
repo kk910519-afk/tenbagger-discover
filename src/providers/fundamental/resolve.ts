@@ -7,34 +7,125 @@ export type FactIndex = {
   instant: Map<string, Map<string, number>>
 }
 
+const DAY_MS = 86_400_000
+
+// SEC 대량 데이터셋(financial-statement-data-sets, num.txt)은 회계기간
+// 종료일을 달력월 말일로 반올림해 저장하는 반면, 기업별 XBRL API
+// (companyfacts)는 신고자가 실제로 보고한 정확한 날짜를 준다. 같은 회계
+// 분기가 두 소스에서 서로 다른 period_end로 들어오면 DB의 UNIQUE(cik, tag,
+// period_end, qtrs, form) 제약을 피해가며 별개의 기간으로 중복 저장된다.
+//
+// 실측(2026-08, 1,200개사 financial_facts): 같은 (cik, tag, qtrs)로 가장
+// 가까운 API/bulk 쌍을 매칭했을 때 날짜 차이는 —
+//   duration(분기/연간) 태그: 최대 14일 (p50=2, p90=4, p95=6, p99=7)
+//   instant(시점) 태그:       최대 19일 (p50=0, p90=3, p95=4, p99=6)
+// 였다. 반대로 서로 다른 회계기간이 우연히 최근접으로 매칭된 오탐 사례는
+// 29일부터 나타난다(분기 간격 ~90일의 일부이며, 회계월 중순에 마감하는
+// 소형주에서 발생). 20일은 실측 최댓값(19일)보다 약간 크면서 오탐 구간
+// (29일+)과는 충분히 떨어져 있어 안전한 상한이다 — 이 값을 넓히면 서로
+// 다른 분기를 병합할 위험이, 좁히면 일부 신고자의 버그가 그대로 남는다.
+const CROSS_SOURCE_TOLERANCE_DAYS = 20
+
+function daysBetween(a: string, b: string): number {
+  return Math.abs(Date.parse(a) - Date.parse(b)) / DAY_MS
+}
+
+type FactEntry = { value: number; filedDate: string }
+
+/**
+ * 같은 (qtrs) 버킷 안에서 API와 bulk가 같은 회계기간을 서로 다른 period_end로
+ * 보고하는 문제를 해소해 canonical `periodEnd → tag → value` 맵을 만든다.
+ *
+ * 1) 소스별로 (periodEnd, tag) 키의 정정 공시를 먼저 반영한다 — 늦게 신고된
+ *    값이 이기고, filedDate가 같으면 먼저 만난 값을 쓴다(기존 동작 유지).
+ * 2) API가 보고한 period_end를 canonical 날짜로 삼는다. bulk의 period_end가
+ *    그 중 하나와 CROSS_SOURCE_TOLERANCE_DAYS 이내면 같은 회계기간으로 보고
+ *    그 API 날짜에 합친다. 대응하는 API 데이터가 전혀 없는 기간의 bulk
+ *    사실은 자기 자신의 period_end를 그대로 canonical로 쓴다 — 대응 기간이
+ *    없다고 그 기간 자체를 버리지 않는다.
+ * 3) 같은 canonical 날짜·같은 태그에 API와 bulk 값이 모두 있으면 API를
+ *    쓴다. bulk 쪽 날짜가 반올림된 근사치라는 점 외에도, 실측 검증(Apple
+ *    CIK 320193, accession 0000320193-26-000006)에서 bulk가 세그먼트별
+ *    매출 분해값(제품 축 디멘션)을 연결 재무제표 총계인 것처럼 흘려보낸
+ *    사례가 확인됐다 — SEC의 num.txt coreg 필드는 "법인(자회사)" 디멘션만
+ *    표시하고 제품/서비스 축 같은 다른 디멘션은 표시하지 않기 때문에,
+ *    소스 코드의 `coreg !== ''` 필터를 통과해도 총계가 아닐 수 있다.
+ *    같은 회계기간에 API 값이 있다면 그쪽이 항상 더 신뢰할 수 있다.
+ */
+function reconcilePeriods(facts: RawFact[]): Map<string, Map<string, number>> {
+  const bySource: Record<'api' | 'bulk', Map<string, Map<string, FactEntry>>> = {
+    api: new Map(),
+    bulk: new Map(),
+  }
+
+  for (const f of facts) {
+    const byPeriod = bySource[f.source]
+    let byTag = byPeriod.get(f.periodEnd)
+    if (!byTag) { byTag = new Map(); byPeriod.set(f.periodEnd, byTag) }
+    const prev = byTag.get(f.tag)
+    // 동률(같은 filedDate)이면 먼저 만난 값을 쓴다 — 원래 chosenAt 로직과 동일.
+    if (prev !== undefined && prev.filedDate >= f.filedDate) continue
+    byTag.set(f.tag, { value: f.value, filedDate: f.filedDate })
+  }
+
+  const apiPeriods = bySource.api
+  const apiEnds = [...apiPeriods.keys()].sort()
+
+  const canonicalOf = (periodEnd: string): string => {
+    if (apiPeriods.has(periodEnd)) return periodEnd
+    let best: string | null = null
+    let bestDiff = Infinity
+    for (const apiEnd of apiEnds) {
+      const diff = daysBetween(periodEnd, apiEnd)
+      if (diff <= CROSS_SOURCE_TOLERANCE_DAYS && diff < bestDiff) {
+        best = apiEnd
+        bestDiff = diff
+      }
+    }
+    return best ?? periodEnd
+  }
+
+  const result = new Map<string, Map<string, number>>()
+
+  for (const [periodEnd, tags] of apiPeriods) {
+    let out = result.get(periodEnd)
+    if (!out) { out = new Map(); result.set(periodEnd, out) }
+    for (const [tag, entry] of tags) out.set(tag, entry.value)
+  }
+
+  for (const [periodEnd, tags] of bySource.bulk) {
+    const canonical = canonicalOf(periodEnd)
+    let out = result.get(canonical)
+    if (!out) { out = new Map(); result.set(canonical, out) }
+    for (const [tag, entry] of tags) {
+      if (out.has(tag)) continue // 같은 canonical 기간에 API 값이 이미 있으면 그쪽을 우선한다
+      out.set(tag, entry.value)
+    }
+  }
+
+  return result
+}
+
 export function indexFacts(facts: RawFact[]): FactIndex {
   const duration: FactIndex['duration'] = new Map()
   const instant: FactIndex['instant'] = new Map()
-  // 같은 키에 값이 여럿일 때 어떤 filedDate를 채택했는지 추적
-  const chosenAt = new Map<string, string>()
 
+  const byQtrs = new Map<number, RawFact[]>()
   for (const f of facts) {
-    const key = `${f.qtrs}|${f.periodEnd}|${f.tag}`
-    const prev = chosenAt.get(key)
-    // When two facts have identical filedDate, the first encountered wins.
-    // This is deterministic only if upstream RawFact[] ordering is stable.
-    // On a tie, preferring first-encountered is acceptable because both report
-    // the same value on the same filing date (no new information).
-    if (prev !== undefined && prev >= f.filedDate) continue
-    chosenAt.set(key, f.filedDate)
+    let list = byQtrs.get(f.qtrs)
+    if (!list) { list = []; byQtrs.set(f.qtrs, list) }
+    list.push(f)
+  }
 
-    if (f.qtrs === 0) {
-      let byTag = instant.get(f.periodEnd)
-      if (!byTag) { byTag = new Map(); instant.set(f.periodEnd, byTag) }
-      byTag.set(f.tag, f.value)
+  for (const [qtrs, list] of byQtrs) {
+    const reconciled = reconcilePeriods(list)
+    if (qtrs === 0) {
+      for (const [periodEnd, tags] of reconciled) instant.set(periodEnd, tags)
     } else {
-      let byPeriod = duration.get(f.qtrs)
-      if (!byPeriod) { byPeriod = new Map(); duration.set(f.qtrs, byPeriod) }
-      let byTag = byPeriod.get(f.periodEnd)
-      if (!byTag) { byTag = new Map(); byPeriod.set(f.periodEnd, byTag) }
-      byTag.set(f.tag, f.value)
+      duration.set(qtrs, reconciled)
     }
   }
+
   return { duration, instant }
 }
 
