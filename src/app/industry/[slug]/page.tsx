@@ -10,12 +10,14 @@ const GROUP_LABEL: Record<string, string> = {
   LEADER: 'Leader',
   CHALLENGER: 'Challenger',
   EMERGING: 'Emerging',
+  INSUFFICIENT: 'Insufficient Data',
 }
 
 const GROUP_NOTE: Record<string, string> = {
   LEADER: '산업 벤치마크 — Tenbagger 후보가 아님',
   CHALLENGER: '비즈니스 모델이 검증된 중형 성장주',
   EMERGING: '초기 성장 단계 — 수익성 미확보 포함',
+  INSUFFICIENT: '완결성 기준 미달 — 기본 랭킹에서 제외, 참고용으로만 표시',
 }
 
 export default async function IndustryPage({
@@ -30,7 +32,7 @@ export default async function IndustryPage({
   const raw = getRawDb()
   let view: IndustryView
   try {
-    view = getIndustryView(raw, slug)
+    view = getIndustryView(raw, slug, cfg.scoring.min_completeness)
   } finally {
     raw.close()
   }

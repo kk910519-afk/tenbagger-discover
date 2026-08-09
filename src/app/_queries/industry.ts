@@ -20,10 +20,16 @@ export type CandidateRow = {
 
 /**
  * category별 그룹. Leader/Challenger/Emerging은 항상 고정 순서로 나온다.
- * category가 null인 행(=아직 스코어링되지 않은 회사)은 별도 그룹으로 묶이며,
+ *
+ * 'INSUFFICIENT'는 category는 배정됐지만 completeness가 cfg.scoring.min_completeness
+ * 미만인 회사들이다 (설계 문서 §8.1). 기본 랭킹(위 세 그룹)에는 섞이지 않지만 화면에서
+ * 사라지지도 않는다 — 별도 그룹으로 항상 렌더링되어 도달 가능하다. 그런 회사가 하나도
+ * 없으면 이 그룹 자체가 생략된다.
+ *
+ * category가 null인 행(=아직 스코어링되지 않은 회사)도 마찬가지로 별도 그룹으로 묶이며,
  * 그런 회사가 하나도 없으면 이 그룹 자체가 생략된다.
  */
-export type CandidateGroup = { category: Category | null; rows: CandidateRow[] }
+export type CandidateGroup = { category: Category | 'INSUFFICIENT' | null; rows: CandidateRow[] }
 
 export type IndustryView = {
   slug: string
@@ -35,7 +41,15 @@ export type IndustryView = {
 
 const GROUP_ORDER: Category[] = ['LEADER', 'CHALLENGER', 'EMERGING']
 
-export function getIndustryView(raw: Database.Database, slug: string): IndustryView {
+/**
+ * @param minCompleteness cfg.scoring.min_completeness. 이 값 미만인 completeness를 가진
+ *   회사는 LEADER/CHALLENGER/EMERGING 랭킹에서 빠지고 'INSUFFICIENT' 그룹으로 옮겨진다.
+ */
+export function getIndustryView(
+  raw: Database.Database,
+  slug: string,
+  minCompleteness: number,
+): IndustryView {
   const meta = raw
     .prepare(
       `SELECT i.slug, i.name, i.theme_slug AS themeSlug, t.name AS themeName
@@ -95,12 +109,24 @@ export function getIndustryView(raw: Database.Database, slug: string): IndustryV
     criticalCount: r.criticalCount, warningCount: r.warningCount,
   }))
 
+  // completeness가 기준 미만인 회사는 category가 배정돼 있어도 랭킹 그룹에서 뺀다
+  // (설계 문서 §8.1: "기본 랭킹에서 제외, 필터로 표시 가능"). completeness가 null인
+  // 행은 애초에 category도 null이라 여기 해당하지 않는다 — 안전하게 통과시킨다.
+  const sufficient = (c: CandidateRow) => c.completeness === null || c.completeness >= minCompleteness
+
   const groups: CandidateGroup[] = GROUP_ORDER.map((category) => ({
     category,
     rows: candidates
-      .filter((c) => c.category === category)
+      .filter((c) => c.category === category && sufficient(c))
       .sort((a, b) => (b.tenbagger ?? -1) - (a.tenbagger ?? -1)),
   }))
+
+  const insufficient = candidates
+    .filter((c) => c.category !== null && !sufficient(c))
+    .sort((a, b) => (b.tenbagger ?? -1) - (a.tenbagger ?? -1))
+  if (insufficient.length > 0) {
+    groups.push({ category: 'INSUFFICIENT', rows: insufficient })
+  }
 
   const unscored = candidates
     .filter((c) => c.category === null)

@@ -4,7 +4,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type Database from 'better-sqlite3'
 import { getRawDb, runMigrations } from '@/db/client'
+import { loadConfig } from '@/config'
 import { getOpportunityMap } from '@/app/_queries/map'
+
+const MIN_COMPLETENESS = loadConfig().scoring.min_completeness
 
 /**
  * map-query.test.ts는 task-24-brief.md의 시나리오를 그대로 검증한다.
@@ -93,7 +96,7 @@ beforeAll(() => {
 
 describe('getOpportunityMap 갈라진 분기', () => {
   it('LEADER만 있는 Industry는 제외되지 않지만 topCandidate는 null이다', () => {
-    const map = getOpportunityMap(raw)
+    const map = getOpportunityMap(raw, MIN_COMPLETENESS)
     const ai = map.find((t) => t.slug === 'ai-software-semi')!
     const quantum = ai.industries.find((i) => i.slug === 'quantum')
     expect(quantum).toBeDefined()
@@ -104,7 +107,7 @@ describe('getOpportunityMap 갈라진 분기', () => {
   })
 
   it('scores 행은 있지만 tenbagger가 NULL인 회사만 있는 Industry는 제외되지 않지만 avgTenbagger/topCandidate는 null이다', () => {
-    const map = getOpportunityMap(raw)
+    const map = getOpportunityMap(raw, MIN_COMPLETENESS)
     const ai = map.find((t) => t.slug === 'ai-software-semi')!
     const robotics = ai.industries.find((i) => i.slug === 'robotics')
     expect(robotics).toBeDefined()
@@ -116,7 +119,7 @@ describe('getOpportunityMap 갈라진 분기', () => {
   })
 
   it('scores 행이 아예 없는 회사만 있는 Industry도 제외되지 않는다 (Finding 1)', () => {
-    const map = getOpportunityMap(raw)
+    const map = getOpportunityMap(raw, MIN_COMPLETENESS)
     const ai = map.find((t) => t.slug === 'ai-software-semi')!
     const sensors = ai.industries.find((i) => i.slug === 'sensors')
     expect(sensors).toBeDefined()
@@ -129,7 +132,7 @@ describe('getOpportunityMap 갈라진 분기', () => {
   })
 
   it('WARNING 레드플래그는 riskRatio에 반영되지 않는다 (Finding 3)', () => {
-    const map = getOpportunityMap(raw)
+    const map = getOpportunityMap(raw, MIN_COMPLETENESS)
     const ai = map.find((t) => t.slug === 'ai-software-semi')!
     const optics = ai.industries.find((i) => i.slug === 'optics')!
     expect(optics.riskRatio).toBe(0)
@@ -158,7 +161,7 @@ describe('getOpportunityMap 스코어링 파이프라인 실행 전(pipeline:uni
     ).run()
     // scores 행 없음 — pipeline:scores가 아직 실행되지 않은 첫 실행 시점을 재현한다.
 
-    const map = getOpportunityMap(db)
+    const map = getOpportunityMap(db, MIN_COMPLETENESS)
     db.close()
 
     const fresh = map.find((t) => t.slug === 'unscored-verse')!.industries.find((i) => i.slug === 'fresh-industry')
@@ -171,11 +174,49 @@ describe('getOpportunityMap 스코어링 파이프라인 실행 전(pipeline:uni
   })
 })
 
+describe('getOpportunityMap 모든 회사가 completeness 기준 미달인 Industry', () => {
+  it('Industry 자체는 사라지지 않지만 avgTenbagger/topCandidate는 null이다', () => {
+    const db = getRawDb(join(mkdtempSync(join(tmpdir(), 'tb-map-allbelow-')), 'm.db'))
+    runMigrations(db)
+    db.prepare(
+      `INSERT INTO themes (slug, name, display_order) VALUES ('ai-software-semi', 'AI', 1)`,
+    ).run()
+    db.prepare(
+      `INSERT INTO industries (slug, theme_slug, name)
+       VALUES ('murky', 'ai-software-semi', 'Murky Industry')`,
+    ).run()
+    db.prepare(
+      `INSERT INTO companies (cik, ticker, name, is_active, first_seen, last_updated)
+       VALUES (401, 'MRK1', 'MRK1 Inc', 1, '2026-08-09', '2026-08-09'),
+              (402, 'MRK2', 'MRK2 Inc', 1, '2026-08-09', '2026-08-09')`,
+    ).run()
+    db.prepare(
+      `INSERT INTO company_industry (cik, industry_slug, theme_slug, is_primary, source)
+       VALUES (401, 'murky', 'ai-software-semi', 1, 'sic'),
+              (402, 'murky', 'ai-software-semi', 1, 'sic')`,
+    ).run()
+    db.prepare(
+      `INSERT INTO scores (cik, as_of, tenbagger, completeness, category, engine_version)
+       VALUES (401, '2026-08-09', 91, ?, 'EMERGING', 'v1'),
+              (402, '2026-08-09', 84, ?, 'CHALLENGER', 'v1')`,
+    ).run(MIN_COMPLETENESS - 0.01, MIN_COMPLETENESS - 0.05)
+
+    const map = getOpportunityMap(db, MIN_COMPLETENESS)
+    db.close()
+
+    const murky = map.find((t) => t.slug === 'ai-software-semi')!.industries.find((i) => i.slug === 'murky')
+    expect(murky).toBeDefined()
+    expect(murky!.candidateCount).toBe(2)
+    expect(murky!.avgTenbagger).toBeNull()
+    expect(murky!.topCandidate).toBeNull()
+  })
+})
+
 describe('getOpportunityMap 빈 데이터베이스', () => {
   it('Theme과 Company가 전혀 없으면 빈 배열을 반환한다', () => {
     const empty = getRawDb(join(mkdtempSync(join(tmpdir(), 'tb-map-empty-')), 'm.db'))
     runMigrations(empty)
-    expect(getOpportunityMap(empty)).toEqual([])
+    expect(getOpportunityMap(empty, MIN_COMPLETENESS)).toEqual([])
     empty.close()
   })
 
@@ -185,7 +226,7 @@ describe('getOpportunityMap 빈 데이터베이스', () => {
     empty.prepare(
       `INSERT INTO themes (slug, name, display_order) VALUES ('lonely', 'Lonely', 1)`,
     ).run()
-    const map = getOpportunityMap(empty)
+    const map = getOpportunityMap(empty, MIN_COMPLETENESS)
     expect(map).toEqual([{ slug: 'lonely', name: 'Lonely', displayOrder: 1, industries: [] }])
     empty.close()
   })

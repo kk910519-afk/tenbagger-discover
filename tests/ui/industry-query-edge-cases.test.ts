@@ -3,7 +3,10 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { getRawDb, runMigrations } from '@/db/client'
+import { loadConfig } from '@/config'
 import { getIndustryView } from '@/app/_queries/industry'
+
+const MIN_COMPLETENESS = loadConfig().scoring.min_completeness
 
 /**
  * industry-query.test.ts는 task-25-brief.md의 시나리오를 그대로 검증한다.
@@ -34,7 +37,7 @@ describe('getIndustryView 스코어링 파이프라인 실행 전', () => {
     ).run()
     // scores/financials/market_data 행 없음 — pipeline:universe 직후를 재현한다.
 
-    const view = getIndustryView(db, 'sensors')
+    const view = getIndustryView(db, 'sensors', MIN_COMPLETENESS)
     db.close()
 
     expect(view).not.toBeNull()
@@ -81,7 +84,7 @@ describe('getIndustryView 스코어링 파이프라인 실행 전', () => {
        VALUES (302, '2026-08-09', 55, 1.0, 'CHALLENGER', 'v1')`,
     ).run()
 
-    const view = getIndustryView(db, 'optics')
+    const view = getIndustryView(db, 'optics', MIN_COMPLETENESS)
     db.close()
 
     expect(view!.groups.map((g) => g.category)).toEqual(['LEADER', 'CHALLENGER', 'EMERGING'])
@@ -98,7 +101,7 @@ describe('getIndustryView 스코어링 파이프라인 실행 전', () => {
        VALUES ('empty-industry', 'ai-software-semi', 'Empty Industry')`,
     ).run()
 
-    const view = getIndustryView(db, 'empty-industry')
+    const view = getIndustryView(db, 'empty-industry', MIN_COMPLETENESS)
     db.close()
 
     expect(view!.groups).toEqual([

@@ -100,12 +100,17 @@ describe('파이프라인 스모크 — ingest → score → 화면 쿼리', () 
     expect(sc.scored).toBe(2)
 
     // 세 화면 쿼리가 모두 값을 낸다
-    const map = getOpportunityMap(raw)
+    const map = getOpportunityMap(raw, cfg.scoring.min_completeness)
     const withCandidates = map.flatMap((t) => t.industries)
     expect(withCandidates.length).toBeGreaterThan(0)
-    expect(withCandidates[0]!.avgTenbagger).not.toBeNull()
+    // 이 스모크 픽스처는 4분기치 최소 팩트만 채워서 completeness 기준(min_completeness)을
+    // 넘지 못한다 (GM 변동성 등 8분기 이력이 필요한 신호가 NO_DATA로 빠진다). 즉 두 회사
+    // 모두 completeness < min_completeness라 avgTenbagger/topCandidate는 null이 맞다 —
+    // 화면 쿼리 배선 자체가 동작하는지는 candidateCount와 아래 종목 상세 쿼리로 확인한다.
+    expect(withCandidates[0]!.candidateCount).toBeGreaterThan(0)
+    expect(withCandidates[0]!.avgTenbagger).toBeNull()
 
-    const industry = getIndustryView(raw, 'ai-infrastructure')
+    const industry = getIndustryView(raw, 'ai-infrastructure', cfg.scoring.min_completeness)
     expect(industry).not.toBeNull()
 
     const stock = getStockDetail(raw, 'CRWD', '2026-08-09')!

@@ -4,13 +4,16 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type Database from 'better-sqlite3'
 import { getRawDb, runMigrations } from '@/db/client'
+import { loadConfig } from '@/config'
 import { getIndustryView } from '@/app/_queries/industry'
+
+const MIN_COMPLETENESS = loadConfig().scoring.min_completeness
 
 let raw: Database.Database
 
 function seed(
   db: Database.Database, cik: number, ticker: string,
-  category: string, tenbagger: number, warning = false,
+  category: string, tenbagger: number, warning = false, completeness = 0.95,
 ) {
   db.prepare(
     `INSERT INTO companies (cik, ticker, name, is_active, first_seen, last_updated)
@@ -22,8 +25,8 @@ function seed(
   ).run(cik)
   db.prepare(
     `INSERT INTO scores (cik, as_of, tenbagger, completeness, category, engine_version)
-     VALUES (?, '2026-08-09', ?, 0.95, ?, 'v1')`,
-  ).run(cik, tenbagger, category)
+     VALUES (?, '2026-08-09', ?, ?, ?, 'v1')`,
+  ).run(cik, tenbagger, completeness, category)
   db.prepare(
     `INSERT INTO financials
        (cik, period_end, period_type, revenue, gross_profit, fcf, total_debt, computed_at)
@@ -61,28 +64,43 @@ beforeAll(() => {
   seed(raw, 3, 'CHAL1', 'CHALLENGER', 70, true)
   seed(raw, 4, 'CHAL2', 'CHALLENGER', 82)
   seed(raw, 5, 'EMER1', 'EMERGING', 88)
+  // completeness가 기준 미달인 회사 — 소수 팩터만으로 99점을 받아 다른 CHALLENGER보다
+  // 높지만, 랭킹 그룹이 아니라 INSUFFICIENT 그룹에 들어가야 한다.
+  seed(raw, 6, 'CHAL3', 'CHALLENGER', 99, false, 0.1)
 })
 
 describe('getIndustryView', () => {
-  const view = () => getIndustryView(raw, 'semiconductors')!
+  const view = () => getIndustryView(raw, 'semiconductors', MIN_COMPLETENESS)!
 
   it('없는 산업은 null', () => {
-    expect(getIndustryView(raw, 'nope')).toBeNull()
+    expect(getIndustryView(raw, 'nope', MIN_COMPLETENESS)).toBeNull()
   })
 
   it('Theme 이름을 함께 준다', () => {
     expect(view().themeName).toBe('AI / Software / Semiconductor')
   })
 
-  it('그룹을 Leader → Challenger → Emerging 순으로 준다', () => {
+  it('그룹을 Leader → Challenger → Emerging → Insufficient 순으로 준다', () => {
     expect(view().groups.map((g) => g.category)).toEqual(
-      ['LEADER', 'CHALLENGER', 'EMERGING'],
+      ['LEADER', 'CHALLENGER', 'EMERGING', 'INSUFFICIENT'],
     )
   })
 
   it('그룹 내에서 Tenbagger Score 내림차순으로 정렬한다', () => {
     const chal = view().groups.find((g) => g.category === 'CHALLENGER')!
     expect(chal.rows.map((r) => r.ticker)).toEqual(['CHAL2', 'CHAL1'])
+  })
+
+  it('completeness가 기준 미달인 회사는 점수가 더 높아도 랭킹 그룹(CHALLENGER)에서 빠진다', () => {
+    const chal = view().groups.find((g) => g.category === 'CHALLENGER')!
+    expect(chal.rows.map((r) => r.ticker)).not.toContain('CHAL3')
+  })
+
+  it('completeness가 기준 미달인 회사는 별도 INSUFFICIENT 그룹으로 여전히 조회 가능하다', () => {
+    const insufficient = view().groups.find((g) => g.category === 'INSUFFICIENT')!
+    expect(insufficient.rows.map((r) => r.ticker)).toEqual(['CHAL3'])
+    expect(insufficient.rows[0]!.completeness).toBeCloseTo(0.1)
+    expect(insufficient.rows[0]!.tenbagger).toBe(99)
   })
 
   it('재무 지표를 계산해 붙인다', () => {

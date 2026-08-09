@@ -1,4 +1,5 @@
 import { getRawDb } from '@/db/client'
+import { loadConfig } from '@/config'
 import { getOpportunityMap, type IndustryRow, type ThemeBlock } from './_queries/map'
 import { formatUsd, formatPct, formatScore } from './_lib/format'
 import { Value, SignedValue } from './_components/Value'
@@ -8,10 +9,11 @@ import { ScoreBar } from './_components/ScoreBar'
 export const dynamic = 'force-dynamic'
 
 export default function Home() {
+  const cfg = loadConfig()
   const raw = getRawDb()
   let themes: ThemeBlock[]
   try {
-    themes = getOpportunityMap(raw)
+    themes = getOpportunityMap(raw, cfg.scoring.min_completeness)
   } finally {
     raw.close()
   }
