@@ -5,15 +5,14 @@ export function median(values: number[]): number | null {
   return s.length % 2 === 0 ? (s[mid - 1]! + s[mid]!) / 2 : s[mid]!
 }
 
-/** 오름차순 정렬된 배열에서 value보다 작은 값의 비율 */
-export function percentileOf(sorted: number[], value: number): number | null {
-  if (sorted.length === 0) return null
+/** value보다 작은 값의 비율. 입력 배열 순서와 무관하게 올바른 백분위를 반환한다. */
+export function percentileOf(values: number[], value: number): number | null {
+  if (values.length === 0) return null
   let below = 0
-  for (const v of sorted) {
+  for (const v of values) {
     if (v < value) below++
-    else break
   }
-  return below / sorted.length
+  return below / values.length
 }
 
 /** 등간격 시계열(x = 0,1,2,...)의 최소자승 기울기 */

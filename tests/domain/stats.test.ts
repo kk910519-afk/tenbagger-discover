@@ -14,6 +14,11 @@ describe('percentileOf', () => {
     expect(percentileOf(sorted, 10)).toBeCloseTo(0)
     expect(percentileOf(sorted, 50)).toBeCloseTo(0.8)
   })
+  it('정렬되지 않은 배열에서도 올바른 백분위를 반환한다', () => {
+    const unsorted = [50, 10, 40, 20, 30]
+    expect(percentileOf(unsorted, 30)).toBeCloseTo(0.4)   // 자기보다 작은 값: 10, 20 = 2/5
+    expect(percentileOf(unsorted, 25)).toBeCloseTo(0.4)   // 자기보다 작은 값: 10, 20 = 2/5
+  })
   it('빈 배열은 null', () => expect(percentileOf([], 1)).toBeNull())
 })
 

@@ -37,7 +37,7 @@ export type IndustryStats = {
   medianGrossMargin: number | null
   /** TAM CAGR이 큐레이션되지 않은 산업의 성장률 대체값 */
   medianRevenueGrowth: number | null
-  /** 지표 키 → 오름차순 정렬된 값 배열. 백분위 표시용 */
+  /** 지표 키 → 값 배열. percentileOf()로 백분위 표시용 (입력 순서 무관) */
   distributions: Record<string, number[]>
 }
 
