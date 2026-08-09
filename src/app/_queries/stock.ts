@@ -31,6 +31,9 @@ export type StockDetail = {
   sic: string | null
   sicDescription: string | null
   exchange: string | null
+  fiscalYearEnd: string | null
+  stateOfIncorporation: string | null
+  stateOfIncorporationDescription: string | null
   industrySlug: string
   industryName: string
   themeName: string
@@ -70,6 +73,9 @@ type HeadRow = {
   sic: string | null
   sicDescription: string | null
   exchange: string | null
+  fiscalYearEnd: string | null
+  stateOfIncorporation: string | null
+  stateOfIncorporationDescription: string | null
   industrySlug: string
   classificationSource: ClassificationSource
   industryName: string
@@ -95,7 +101,10 @@ export function getStockDetail(
   const head = raw
     .prepare(
       `SELECT c.cik, c.ticker, c.name, c.sic, c.sic_description AS sicDescription,
-              c.exchange, ci.industry_slug AS industrySlug, ci.source AS classificationSource,
+              c.exchange, c.fiscal_year_end AS fiscalYearEnd,
+              c.state_of_incorporation AS stateOfIncorporation,
+              c.state_of_incorporation_description AS stateOfIncorporationDescription,
+              ci.industry_slug AS industrySlug, ci.source AS classificationSource,
               i.name AS industryName, t.name AS themeName,
               s.tenbagger, s.completeness, s.category, s.as_of AS asOf,
               s.engine_version AS engineVersion
@@ -159,6 +168,9 @@ export function getStockDetail(
     sic: head.sic,
     sicDescription: head.sicDescription,
     exchange: head.exchange,
+    fiscalYearEnd: head.fiscalYearEnd,
+    stateOfIncorporation: head.stateOfIncorporation,
+    stateOfIncorporationDescription: head.stateOfIncorporationDescription,
     industrySlug: head.industrySlug,
     industryName: head.industryName,
     themeName: head.themeName,

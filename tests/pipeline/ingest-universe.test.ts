@@ -22,21 +22,25 @@ const REFS: Record<number, CompanyReference> = {
     cik: 1045810, name: 'NVIDIA CORP', sic: '3674',
     sicDescription: 'Semiconductors', exchanges: ['Nasdaq'],
     entityType: 'operating', fiscalYearEnd: '0131', filerCategory: 'Large accelerated filer',
+    stateOfIncorporation: 'DE', stateOfIncorporationDescription: 'DE',
   },
   1535527: {
     cik: 1535527, name: 'CrowdStrike Holdings, Inc.', sic: '7372',
     sicDescription: 'Prepackaged Software', exchanges: ['Nasdaq'],
     entityType: 'operating', fiscalYearEnd: '0131', filerCategory: 'Large accelerated filer',
+    stateOfIncorporation: 'DE', stateOfIncorporationDescription: 'DE',
   },
   99: {
     cik: 99, name: 'Deficient Corp', sic: '6022',
     sicDescription: 'Banks', exchanges: ['Nasdaq'],
     entityType: 'operating', fiscalYearEnd: '1231', filerCategory: null,
+    stateOfIncorporation: null, stateOfIncorporationDescription: null,
   },
   100: {
     cik: 100, name: 'Shell Trust', sic: '3674',
     sicDescription: 'Semiconductors', exchanges: ['Nasdaq'],
     entityType: 'investment-company', fiscalYearEnd: '1231', filerCategory: null,
+    stateOfIncorporation: null, stateOfIncorporationDescription: null,
   },
 }
 
@@ -226,12 +230,14 @@ describe('unmappedSicsSeen', () => {
       cik: 9001, name: 'Unknown Sic Corp', sic: '9999',
       sicDescription: 'Nonexistent SIC', exchanges: ['Nasdaq'],
       entityType: 'operating', fiscalYearEnd: '1231', filerCategory: null,
+      stateOfIncorporation: null, stateOfIncorporationDescription: null,
     },
     9002: {
       // sic-map.yaml의 unmapped 목록에 있는 SIC(은행) — 의도적 제외이므로 리포팅되면 안 된다.
       cik: 9002, name: 'Bank Holding Corp', sic: '6022',
       sicDescription: 'State Commercial Banks', exchanges: ['Nasdaq'],
       entityType: 'operating', fiscalYearEnd: '1231', filerCategory: null,
+      stateOfIncorporation: null, stateOfIncorporationDescription: null,
     },
   }
   const sicReference: ReferenceProvider = {

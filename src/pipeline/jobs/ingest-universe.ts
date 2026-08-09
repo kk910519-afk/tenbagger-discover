@@ -117,6 +117,8 @@ export async function ingestUniverse(deps: UniverseDeps): Promise<JobStats> {
             entityType: ref!.entityType,
             fiscalYearEnd: ref!.fiscalYearEnd,
             filerCategory: ref!.filerCategory,
+            stateOfIncorporation: ref!.stateOfIncorporation,
+            stateOfIncorporationDescription: ref!.stateOfIncorporationDescription,
           },
           now,
         )

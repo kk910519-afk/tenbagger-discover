@@ -85,3 +85,60 @@ describe('마이그레이션', () => {
     ).toThrow(/CHECK/i)
   })
 })
+
+describe('마이그레이션 — state_of_incorporation 컬럼의 사후 추가(ALTER TABLE)', () => {
+  /**
+   * CREATE TABLE IF NOT EXISTS는 companies 테이블이 이미 존재하는(phase1 이전에
+   * 만들어진) DB에서는 아무 것도 하지 않는다 — 이 컬럼을 갖기 전의 DB를 직접
+   * 만들어서 runMigrations가 ALTER TABLE로 채워 넣는지, 그리고 두 번 실행해도
+   * (컬럼이 이미 있는 상태에서) 실패하지 않는지 확인한다.
+   */
+  function makeLegacyDb(): Database.Database {
+    const dbPath = join(mkdtempSync(join(tmpdir(), 'tb-legacy-')), 'legacy.db')
+    const db = getRawDb(dbPath)
+    db.exec(`
+      CREATE TABLE companies (
+        cik INTEGER PRIMARY KEY,
+        ticker TEXT NOT NULL,
+        name TEXT NOT NULL,
+        sic TEXT,
+        sic_description TEXT,
+        exchange TEXT,
+        entity_type TEXT,
+        fiscal_year_end TEXT,
+        filer_category TEXT,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        first_seen TEXT NOT NULL,
+        last_updated TEXT NOT NULL
+      );
+    `)
+    return db
+  }
+
+  it('컬럼이 없는 기존 DB에 ALTER TABLE로 두 컬럼을 추가한다', () => {
+    const legacy = makeLegacyDb()
+    runMigrations(legacy)
+    const cols = (legacy.prepare('PRAGMA table_info(companies)').all() as { name: string }[]).map(
+      (c) => c.name,
+    )
+    expect(cols).toContain('state_of_incorporation')
+    expect(cols).toContain('state_of_incorporation_description')
+  })
+
+  it('ALTER TABLE은 멱등이다 — 두 번 실행해도 실패하지 않는다', () => {
+    const legacy = makeLegacyDb()
+    expect(() => runMigrations(legacy)).not.toThrow()
+    expect(() => runMigrations(legacy)).not.toThrow()
+  })
+
+  it('신규 DB는 CREATE TABLE 시점부터 두 컬럼을 이미 갖고 있다(ALTER가 필요 없다)', () => {
+    const dbPath = join(mkdtempSync(join(tmpdir(), 'tb-fresh-')), 'fresh.db')
+    const fresh = getRawDb(dbPath)
+    runMigrations(fresh)
+    const cols = (fresh.prepare('PRAGMA table_info(companies)').all() as { name: string }[]).map(
+      (c) => c.name,
+    )
+    expect(cols).toContain('state_of_incorporation')
+    expect(cols).toContain('state_of_incorporation_description')
+  })
+})

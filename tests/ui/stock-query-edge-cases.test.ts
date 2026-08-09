@@ -63,6 +63,11 @@ describe('getStockDetail 스코어링 파이프라인 실행 전', () => {
     expect(d!.quality.grossMargin).toBeCloseTo(0.6)
     expect(d!.quality.cash).toBe(200)
 
+    // 설립 주 정보를 캡처하기 전에 만들어진 회사 행이라도(NULL) 죽지 않는다.
+    expect(d!.fiscalYearEnd).toBeNull()
+    expect(d!.stateOfIncorporation).toBeNull()
+    expect(d!.stateOfIncorporationDescription).toBeNull()
+
     // Tenbagger Score 신선도 항목은 날짜가 없어 UNKNOWN으로 이어져야 한다(null 비교 강제형변환 금지).
     const scoreFreshness = d!.freshness.find((f) => f.label === 'Tenbagger Score')!
     expect(scoreFreshness.date).toBeNull()

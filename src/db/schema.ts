@@ -10,6 +10,8 @@ export const companies = sqliteTable('companies', {
   entityType: text('entity_type'),
   fiscalYearEnd: text('fiscal_year_end'),
   filerCategory: text('filer_category'),
+  stateOfIncorporation: text('state_of_incorporation'),
+  stateOfIncorporationDescription: text('state_of_incorporation_description'),
   isActive: integer('is_active').notNull().default(1),
   firstSeen: text('first_seen').notNull(),
   lastUpdated: text('last_updated').notNull(),

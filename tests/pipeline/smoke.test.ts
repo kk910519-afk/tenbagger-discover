@@ -37,6 +37,7 @@ const reference: ReferenceProvider = {
     sic: cik === 1045810 ? '3674' : '7372',
     sicDescription: 'x', exchanges: ['Nasdaq'], entityType: 'operating',
     fiscalYearEnd: '0131', filerCategory: 'Large accelerated filer',
+    stateOfIncorporation: 'DE', stateOfIncorporationDescription: 'DE',
   }),
 }
 

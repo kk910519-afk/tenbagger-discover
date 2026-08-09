@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach } from 'vitest'
-import { cleanup, render } from '@testing-library/react'
+import { cleanup, render, fireEvent } from '@testing-library/react'
 import { CandidateTable } from '@/app/_components/CandidateTable'
 import type { CandidateRow } from '@/app/_queries/industry'
 
@@ -65,5 +65,45 @@ describe('CandidateTable — 미리보기/View All', () => {
     )
     expect(container.querySelector('a[href$="?all=1"]')).toBeNull()
     expect(container.textContent).not.toContain('View All')
+  })
+})
+
+describe('CandidateTable — 헤더 툴팁', () => {
+  it('Ticker 헤더에는 툴팁 트리거(점선 밑줄)가 없다', () => {
+    const rows = [makeRow({ cik: 1, ticker: 'AAA' })]
+    const { container } = render(
+      <CandidateTable rows={rows} showAll={false} industrySlug="semiconductors" insufficientBelow={0.6} />,
+    )
+    const tickerTh = Array.from(container.querySelectorAll('th')).find(
+      (th) => th.textContent === 'Ticker',
+    )!
+    expect(tickerTh.querySelector('[tabindex="0"]')).toBeNull()
+  })
+
+  it('Ticker를 제외한 나머지 8개 헤더 전부에 툴팁 트리거가 붙는다', () => {
+    const rows = [makeRow({ cik: 1, ticker: 'AAA' })]
+    const { container } = render(
+      <CandidateTable rows={rows} showAll={false} industrySlug="semiconductors" insufficientBelow={0.6} />,
+    )
+    const headers = Array.from(container.querySelectorAll('thead th'))
+    expect(headers).toHaveLength(9)
+    const withTooltip = headers.filter((th) => th.querySelector('[tabindex="0"]') !== null)
+    expect(withTooltip).toHaveLength(8)
+  })
+
+  it('Company 헤더에 focus하면 승인된 문구가 그대로 뜬다', () => {
+    const rows = [makeRow({ cik: 1, ticker: 'AAA' })]
+    const { container } = render(
+      <CandidateTable rows={rows} showAll={false} industrySlug="semiconductors" insufficientBelow={0.6} />,
+    )
+    const companyTh = Array.from(container.querySelectorAll('th')).find(
+      (th) => th.textContent === 'Company',
+    )!
+    const trigger = companyTh.querySelector('[tabindex="0"]') as HTMLElement
+    fireEvent.focus(trigger)
+    const panel = container.querySelector('[role="tooltip"]')
+    expect(panel?.textContent).toBe(
+      '산업 분류가 SIC 기본값인지 수동 교정인지 표시합니다. 기본값이면 같은 산업 내 비교가 거칠 수 있습니다.',
+    )
   })
 })

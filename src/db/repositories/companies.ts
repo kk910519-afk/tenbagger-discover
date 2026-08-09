@@ -11,6 +11,8 @@ export type CompanyRow = {
   entityType: string | null
   fiscalYearEnd: string | null
   filerCategory: string | null
+  stateOfIncorporation: string | null
+  stateOfIncorporationDescription: string | null
 }
 
 export function upsertCompany(raw: Database.Database, c: CompanyRow, now: string): void {
@@ -18,14 +20,19 @@ export function upsertCompany(raw: Database.Database, c: CompanyRow, now: string
     .prepare(
       `INSERT INTO companies
          (cik, ticker, name, sic, sic_description, exchange, entity_type,
-          fiscal_year_end, filer_category, is_active, first_seen, last_updated)
+          fiscal_year_end, filer_category, state_of_incorporation,
+          state_of_incorporation_description, is_active, first_seen, last_updated)
        VALUES (@cik, @ticker, @name, @sic, @sicDescription, @exchange, @entityType,
-               @fiscalYearEnd, @filerCategory, 1, @now, @now)
+               @fiscalYearEnd, @filerCategory, @stateOfIncorporation,
+               @stateOfIncorporationDescription, 1, @now, @now)
        ON CONFLICT(cik) DO UPDATE SET
          ticker = excluded.ticker, name = excluded.name, sic = excluded.sic,
          sic_description = excluded.sic_description, exchange = excluded.exchange,
          entity_type = excluded.entity_type, fiscal_year_end = excluded.fiscal_year_end,
-         filer_category = excluded.filer_category, is_active = 1,
+         filer_category = excluded.filer_category,
+         state_of_incorporation = excluded.state_of_incorporation,
+         state_of_incorporation_description = excluded.state_of_incorporation_description,
+         is_active = 1,
          last_updated = excluded.last_updated`,
     )
     .run({ ...c, now })

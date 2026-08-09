@@ -104,3 +104,28 @@ describe('StockPage — SIC 기본 분류 안내는 SIC 출처일 때만 뜬다'
     expect(container.textContent).not.toContain('SIC 기본 분류')
   })
 })
+
+describe('StockPage — Overview에 회사 정보(CompanyFacts) 블록이 있다', () => {
+  it('Overview 영역에 공식 업종/거래소/회계연도 말/설립 주/EDGAR 링크가 렌더링된다', async () => {
+    const jsx = await StockPage({ params: paramsFor('CLEANCO') })
+    const { container } = render(jsx)
+    expect(container.textContent).toContain('공식 업종')
+    expect(container.textContent).toContain('거래소')
+    expect(container.textContent).toContain('회계연도 말')
+    expect(container.textContent).toContain('설립 주(州)')
+    const link = container.querySelector('a[href*="browse-edgar"]') as HTMLAnchorElement
+    expect(link).not.toBeNull()
+    expect(link.getAttribute('href')).toContain('CIK=0000000501') // cik=501, 10자리 0-padding
+    expect(link.getAttribute('target')).toBe('_blank')
+  })
+
+  it('설립 주 정보가 없는 회사는 em dash를 보여준다(0이나 빈칸이 아니다)', async () => {
+    const jsx = await StockPage({ params: paramsFor('CLEANCO') })
+    const { container } = render(jsx)
+    const dt = Array.from(container.querySelectorAll('dt')).find(
+      (el) => el.textContent === '설립 주(州)',
+    )!
+    const dd = dt.nextElementSibling as HTMLElement
+    expect(dd.textContent).toBe('—')
+  })
+})

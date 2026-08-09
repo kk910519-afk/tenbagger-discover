@@ -6,6 +6,7 @@ import { Value, SignedValue } from '@/app/_components/Value'
 import { Badge, CategoryBadge } from '@/app/_components/Badge'
 import { MetricGrid } from '@/app/_components/MetricGrid'
 import { FactorBreakdown, StrengthWeakness } from '@/app/_components/FactorBreakdown'
+import { CompanyFacts } from '@/app/_components/CompanyFacts'
 
 export const dynamic = 'force-dynamic'
 
@@ -67,6 +68,18 @@ export default async function StockPage({
             },
           ]}
         />
+        <div className="mt-4 border-t border-[var(--color-border)] pt-4">
+          <CompanyFacts
+            d={{
+              cik: d.cik,
+              sic: d.sic,
+              sicDescription: d.sicDescription,
+              exchange: d.exchange,
+              fiscalYearEnd: d.fiscalYearEnd,
+              stateOfIncorporationDescription: d.stateOfIncorporationDescription,
+            }}
+          />
+        </div>
       </section>
 
       <section>

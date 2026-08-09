@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS companies (
   entity_type TEXT,
   fiscal_year_end TEXT,
   filer_category TEXT,
+  state_of_incorporation TEXT,
+  state_of_incorporation_description TEXT,
   is_active INTEGER NOT NULL DEFAULT 1,
   first_seen TEXT NOT NULL,
   last_updated TEXT NOT NULL
@@ -157,6 +159,32 @@ JOIN (SELECT cik, MAX(as_of) AS as_of FROM scores GROUP BY cik) m
   ON s.cik = m.cik AND s.as_of = m.as_of;
 `
 
+/**
+ * companies.state_of_incorporation(_description)은 phase1 이후에 추가된 컬럼이다.
+ * 위 DDL의 CREATE TABLE IF NOT EXISTS는 신규 DB에는 반영되지만, 이미 companies
+ * 테이블이 존재하는 기존 DB에서는 아무 일도 하지 않는다 — 그런 DB를 위해 컬럼
+ * 존재 여부를 확인하고 없을 때만 ALTER TABLE로 추가한다. PRAGMA table_info로
+ * 먼저 확인하므로 여러 번 호출해도 안전하다(멱등).
+ */
+function ensureColumn(
+  raw: Database.Database,
+  table: string,
+  column: string,
+  columnDdl: string,
+): void {
+  const cols = raw.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]
+  if (!cols.some((c) => c.name === column)) {
+    raw.exec(`ALTER TABLE ${table} ADD COLUMN ${columnDdl}`)
+  }
+}
+
 export function runMigrations(raw: Database.Database): void {
   raw.exec(DDL)
+  ensureColumn(raw, 'companies', 'state_of_incorporation', 'state_of_incorporation TEXT')
+  ensureColumn(
+    raw,
+    'companies',
+    'state_of_incorporation_description',
+    'state_of_incorporation_description TEXT',
+  )
 }

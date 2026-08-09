@@ -23,6 +23,8 @@ export type CompanyReference = {
   entityType: string | null
   fiscalYearEnd: string | null
   filerCategory: string | null
+  stateOfIncorporation: string | null
+  stateOfIncorporationDescription: string | null
 }
 
 export type ReferenceProvider = {

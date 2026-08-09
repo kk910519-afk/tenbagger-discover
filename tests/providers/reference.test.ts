@@ -29,6 +29,20 @@ describe('parseSubmissions', () => {
     expect(c.exchanges).toEqual(['Nasdaq'])
     expect(c.fiscalYearEnd).toBe('0131')
     expect(c.filerCategory).toBe('Large accelerated filer')
+    expect(c.stateOfIncorporation).toBe('DE')
+    expect(c.stateOfIncorporationDescription).toBe('DE')
+  })
+
+  it('설립 주 정보가 빈 문자열이면(신고서에 미기재) null로 정규화한다', () => {
+    const { stateOfIncorporation, stateOfIncorporationDescription, ...rest } = raw
+    expect(
+      parseSubmissions({ ...rest, stateOfIncorporation: '', stateOfIncorporationDescription: '' })!
+        .stateOfIncorporation,
+    ).toBeNull()
+    expect(
+      parseSubmissions({ ...rest, stateOfIncorporation: '', stateOfIncorporationDescription: '' })!
+        .stateOfIncorporationDescription,
+    ).toBeNull()
   })
 
   it('CIK 문자열의 앞자리 0을 제거한다', () => {

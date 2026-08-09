@@ -21,8 +21,11 @@ beforeAll(() => {
   ).run()
   raw.prepare(
     `INSERT INTO companies (cik, ticker, name, sic, sic_description, exchange,
+                            fiscal_year_end, state_of_incorporation,
+                            state_of_incorporation_description,
                             is_active, first_seen, last_updated)
      VALUES (99, 'CRWD', 'CrowdStrike Holdings', '7372', 'Prepackaged Software', 'Q',
+             '0131', 'DE', 'DE',
              1, '2026-08-09', '2026-08-09')`,
   ).run()
   raw.prepare(
@@ -80,6 +83,13 @@ describe('getStockDetail', () => {
     expect(d.category).toBe('CHALLENGER')
     expect(d.marketCap).toBe(103_125_000_000)
     expect(d.price).toBe(412.5)
+  })
+
+  it('회사 정보 필드(회계연도 말/설립 주)를 담는다', () => {
+    const d = detail()
+    expect(d.fiscalYearEnd).toBe('0131')
+    expect(d.stateOfIncorporation).toBe('DE')
+    expect(d.stateOfIncorporationDescription).toBe('DE')
   })
 
   it('Quality 지표를 계산한다', () => {

@@ -41,6 +41,8 @@ export function parseSubmissions(raw: unknown): CompanyReference | null {
     entityType: str('entityType'),
     fiscalYearEnd: str('fiscalYearEnd'),
     filerCategory: str('category'),
+    stateOfIncorporation: str('stateOfIncorporation'),
+    stateOfIncorporationDescription: str('stateOfIncorporationDescription'),
   }
 }
 
