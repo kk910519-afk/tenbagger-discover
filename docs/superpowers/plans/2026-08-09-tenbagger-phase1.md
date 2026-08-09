@@ -2552,3 +2552,1369 @@ nasdaqtraded.txt로 ETF/Test Issue/상장부적격/비보통주를 걸러내고
 SEC submissions에서 SIC와 entityType을 가져온다.
 404 CIK는 null을 반환해 잡 전체를 중단시키지 않는다."
 ```
+
+---
+
+### Task 7: ingest-universe 잡 & job runner
+
+**Files:**
+- Create: `src/db/repositories/jobs.ts`, `src/db/repositories/companies.ts`
+- Create: `src/pipeline/runner.ts`, `src/pipeline/jobs/ingest-universe.ts`
+- Test: `tests/pipeline/ingest-universe.test.ts`
+
+**Interfaces:**
+- Consumes: `ListingProvider`, `ReferenceProvider` (Task 6), `passesListingFilter` (Task 6), `loadTaxonomy` (Task 3), `AppConfig` (Task 1), `getRawDb`/`runMigrations` (Task 4)
+- Produces:
+  - `type JobStats = Record<string, number | string[]>`
+  - `runJob(raw: Database.Database, name: string, fn: () => Promise<JobStats>): Promise<JobStats>` — `job_runs`에 시작·종료·통계를 기록하고 예외 시 `status='failed'`로 남긴 뒤 다시 던진다
+  - `ingestUniverse(deps: UniverseDeps): Promise<JobStats>`
+  - `type UniverseDeps = { raw: Database.Database; cfg: AppConfig; taxonomy: Taxonomy; listings: ListingProvider; reference: ReferenceProvider }`
+  - `seedTaxonomy(raw, taxonomy): void` — `themes`/`industries` 테이블 채우기
+  - 반환 통계 키: `listed`, `afterListingFilter`, `matchedCik`, `classified`, `skippedUnmappedSic`, `skippedNotOperating`, `failedLookups`, `unmappedSicsSeen`(문자열 배열), `overrideCount`, `sicBucketCount`
+
+- [ ] **Step 1: 실패하는 테스트 작성**
+
+`tests/pipeline/ingest-universe.test.ts`:
+
+```ts
+import { describe, it, expect, beforeAll } from 'vitest'
+import { readFileSync, mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import type Database from 'better-sqlite3'
+import { getRawDb, runMigrations } from '@/db/client'
+import { parseConfig } from '@/config'
+import { loadTaxonomy } from '@/taxonomy'
+import { parseNasdaqTraded } from '@/providers/listing/nasdaq-trader'
+import { ingestUniverse, seedTaxonomy } from '@/pipeline/jobs/ingest-universe'
+import type { CompanyReference, ListingProvider, ReferenceProvider } from '@/providers/types'
+
+const cfg = parseConfig(readFileSync('config.yaml', 'utf8'))
+const taxonomy = loadTaxonomy()
+const listingRows = parseNasdaqTraded(readFileSync('tests/fixtures/nasdaqtraded.txt', 'utf8'))
+
+const listings: ListingProvider = { fetchListings: async () => listingRows }
+
+const REFS: Record<number, CompanyReference> = {
+  1045810: {
+    cik: 1045810, name: 'NVIDIA CORP', sic: '3674',
+    sicDescription: 'Semiconductors', exchanges: ['Nasdaq'],
+    entityType: 'operating', fiscalYearEnd: '0131', filerCategory: 'Large accelerated filer',
+  },
+  1535527: {
+    cik: 1535527, name: 'CrowdStrike Holdings, Inc.', sic: '7372',
+    sicDescription: 'Prepackaged Software', exchanges: ['Nasdaq'],
+    entityType: 'operating', fiscalYearEnd: '0131', filerCategory: 'Large accelerated filer',
+  },
+  99: {
+    cik: 99, name: 'Deficient Corp', sic: '6022',
+    sicDescription: 'Banks', exchanges: ['Nasdaq'],
+    entityType: 'operating', fiscalYearEnd: '1231', filerCategory: null,
+  },
+  100: {
+    cik: 100, name: 'Shell Trust', sic: '3674',
+    sicDescription: 'Semiconductors', exchanges: ['Nasdaq'],
+    entityType: 'investment-company', fiscalYearEnd: '1231', filerCategory: null,
+  },
+}
+
+const reference: ReferenceProvider = {
+  fetchTickerMap: async () => [
+    { cik: 1045810, ticker: 'NVDA', title: 'NVIDIA CORP' },
+    { cik: 1535527, ticker: 'CRWD', title: 'CrowdStrike Holdings, Inc.' },
+    { cik: 99, ticker: 'BADCO', title: 'Deficient Corp' },
+    { cik: 100, ticker: 'SPY', title: 'Shell Trust' },
+  ],
+  fetchCompany: async (cik) => REFS[cik] ?? null,
+}
+
+let raw: Database.Database
+let stats: Record<string, unknown>
+
+beforeAll(async () => {
+  raw = getRawDb(join(mkdtempSync(join(tmpdir(), 'tb-uni-')), 'u.db'))
+  runMigrations(raw)
+  seedTaxonomy(raw, taxonomy)
+  stats = await ingestUniverse({ raw, cfg, taxonomy, listings, reference })
+})
+
+describe('seedTaxonomy', () => {
+  it('themes와 industries 테이블을 채운다', () => {
+    const t = raw.prepare('SELECT COUNT(*) c FROM themes').get() as { c: number }
+    const i = raw.prepare('SELECT COUNT(*) c FROM industries').get() as { c: number }
+    expect(t.c).toBe(6)
+    expect(i.c).toBe(49)
+  })
+})
+
+describe('ingestUniverse', () => {
+  it('상장 필터를 통과한 보통주만 남긴다', () => {
+    // 픽스처 7개 중 NVDA, CRWD, BADCO가 보통주 형태.
+    // BADCO는 financial_status=D로 상장 필터에서 제외된다.
+    expect(stats.afterListingFilter).toBe(2)
+  })
+
+  it('분류에 성공한 기업만 companies에 저장한다', () => {
+    const rows = raw.prepare('SELECT ticker FROM companies ORDER BY ticker').all() as
+      { ticker: string }[]
+    expect(rows.map((r) => r.ticker)).toEqual(['CRWD', 'NVDA'])
+  })
+
+  it('오버라이드 분류를 company_industry에 기록한다', () => {
+    const r = raw
+      .prepare('SELECT industry_slug, theme_slug, source FROM company_industry WHERE cik = 1535527')
+      .get() as { industry_slug: string; theme_slug: string; source: string }
+    expect(r.industry_slug).toBe('cybersecurity')
+    expect(r.theme_slug).toBe('ai-software-semi')
+    expect(r.source).toBe('override')
+  })
+
+  it('listings 원본을 그대로 보존한다', () => {
+    const n = raw.prepare('SELECT COUNT(*) c FROM listings').get() as { c: number }
+    expect(n.c).toBe(listingRows.length)
+  })
+
+  it('분류 출처별 개수를 통계로 낸다', () => {
+    expect(stats.overrideCount).toBe(2) // NVDA→ai-infrastructure, CRWD→cybersecurity
+    expect(stats.sicBucketCount).toBe(0)
+  })
+
+  it('job_runs에 성공 기록을 남긴다', () => {
+    const r = raw
+      .prepare("SELECT job, status FROM job_runs WHERE job='universe' ORDER BY id DESC")
+      .get() as { job: string; status: string } | undefined
+    expect(r?.status).toBe('succeeded')
+  })
+
+  it('두 번 실행해도 중복 행이 생기지 않는다', async () => {
+    await ingestUniverse({ raw, cfg, taxonomy, listings, reference })
+    const n = raw.prepare('SELECT COUNT(*) c FROM companies').get() as { c: number }
+    expect(n.c).toBe(2)
+  })
+})
+```
+
+- [ ] **Step 2: 테스트 실패 확인**
+
+Run: `npx vitest run tests/pipeline/ingest-universe.test.ts`
+Expected: FAIL — `Cannot find module '@/pipeline/jobs/ingest-universe'`
+
+- [ ] **Step 3: job runner 구현**
+
+`src/db/repositories/jobs.ts`:
+
+```ts
+import type Database from 'better-sqlite3'
+
+export type JobStats = Record<string, number | string[]>
+
+export function startJob(raw: Database.Database, job: string): number {
+  const info = raw
+    .prepare("INSERT INTO job_runs (job, started_at, status) VALUES (?, ?, 'running')")
+    .run(job, new Date().toISOString())
+  return Number(info.lastInsertRowid)
+}
+
+export function finishJob(
+  raw: Database.Database,
+  id: number,
+  status: 'succeeded' | 'failed',
+  stats: JobStats | null,
+  error: string | null,
+): void {
+  raw
+    .prepare('UPDATE job_runs SET finished_at = ?, status = ?, stats = ?, error = ? WHERE id = ?')
+    .run(new Date().toISOString(), status, stats ? JSON.stringify(stats) : null, error, id)
+}
+```
+
+`src/pipeline/runner.ts` (CLI 진입점은 Task 11에서 잡이 모두 갖춰진 뒤 채운다. 지금은 `runJob`만 export):
+
+```ts
+import type Database from 'better-sqlite3'
+import { startJob, finishJob, type JobStats } from '@/db/repositories/jobs'
+
+export type { JobStats }
+
+/** 잡 실행을 job_runs에 기록한다. 예외는 기록 후 다시 던진다. */
+export async function runJob(
+  raw: Database.Database,
+  name: string,
+  fn: () => Promise<JobStats>,
+): Promise<JobStats> {
+  const id = startJob(raw, name)
+  try {
+    const stats = await fn()
+    finishJob(raw, id, 'succeeded', stats, null)
+    return stats
+  } catch (e) {
+    finishJob(raw, id, 'failed', null, e instanceof Error ? e.stack ?? e.message : String(e))
+    throw e
+  }
+}
+```
+
+- [ ] **Step 4: companies 리포지토리 구현**
+
+`src/db/repositories/companies.ts`:
+
+```ts
+import type Database from 'better-sqlite3'
+import type { Listing } from '@/providers/types'
+
+export type CompanyRow = {
+  cik: number
+  ticker: string
+  name: string
+  sic: string | null
+  sicDescription: string | null
+  exchange: string | null
+  entityType: string | null
+  fiscalYearEnd: string | null
+  filerCategory: string | null
+}
+
+export function upsertCompany(raw: Database.Database, c: CompanyRow, now: string): void {
+  raw
+    .prepare(
+      `INSERT INTO companies
+         (cik, ticker, name, sic, sic_description, exchange, entity_type,
+          fiscal_year_end, filer_category, is_active, first_seen, last_updated)
+       VALUES (@cik, @ticker, @name, @sic, @sicDescription, @exchange, @entityType,
+               @fiscalYearEnd, @filerCategory, 1, @now, @now)
+       ON CONFLICT(cik) DO UPDATE SET
+         ticker = excluded.ticker, name = excluded.name, sic = excluded.sic,
+         sic_description = excluded.sic_description, exchange = excluded.exchange,
+         entity_type = excluded.entity_type, fiscal_year_end = excluded.fiscal_year_end,
+         filer_category = excluded.filer_category, is_active = 1,
+         last_updated = excluded.last_updated`,
+    )
+    .run({ ...c, now })
+}
+
+export function upsertListing(raw: Database.Database, l: Listing, now: string): void {
+  raw
+    .prepare(
+      `INSERT INTO listings
+         (ticker, exchange, security_name, is_etf, is_test_issue,
+          financial_status, round_lot, last_updated)
+       VALUES (@ticker, @exchange, @securityName, @isEtf, @isTestIssue,
+               @financialStatus, @roundLot, @now)
+       ON CONFLICT(ticker) DO UPDATE SET
+         exchange = excluded.exchange, security_name = excluded.security_name,
+         is_etf = excluded.is_etf, is_test_issue = excluded.is_test_issue,
+         financial_status = excluded.financial_status, round_lot = excluded.round_lot,
+         last_updated = excluded.last_updated`,
+    )
+    .run({
+      ...l,
+      isEtf: l.isEtf ? 1 : 0,
+      isTestIssue: l.isTestIssue ? 1 : 0,
+      now,
+    })
+}
+
+export function setCompanyIndustry(
+  raw: Database.Database,
+  cik: number,
+  industrySlug: string,
+  themeSlug: string,
+  source: 'sic' | 'override',
+): void {
+  raw.prepare('DELETE FROM company_industry WHERE cik = ?').run(cik)
+  raw
+    .prepare(
+      `INSERT INTO company_industry (cik, industry_slug, theme_slug, is_primary, source)
+       VALUES (?, ?, ?, 1, ?)`,
+    )
+    .run(cik, industrySlug, themeSlug, source)
+}
+
+export function listUniverseCiks(raw: Database.Database): number[] {
+  const rows = raw
+    .prepare(
+      `SELECT c.cik FROM companies c
+       JOIN company_industry ci ON ci.cik = c.cik
+       WHERE c.is_active = 1 ORDER BY c.cik`,
+    )
+    .all() as { cik: number }[]
+  return rows.map((r) => r.cik)
+}
+```
+
+- [ ] **Step 5: ingest-universe 잡 구현**
+
+`src/pipeline/jobs/ingest-universe.ts`:
+
+```ts
+import type Database from 'better-sqlite3'
+import type { AppConfig } from '@/config'
+import type { Taxonomy } from '@/taxonomy'
+import type { ListingProvider, ReferenceProvider } from '@/providers/types'
+import { passesListingFilter } from '@/pipeline/universe-filter'
+import { runJob, type JobStats } from '@/pipeline/runner'
+import {
+  upsertCompany,
+  upsertListing,
+  setCompanyIndustry,
+} from '@/db/repositories/companies'
+
+export type UniverseDeps = {
+  raw: Database.Database
+  cfg: AppConfig
+  taxonomy: Taxonomy
+  listings: ListingProvider
+  reference: ReferenceProvider
+}
+
+export function seedTaxonomy(raw: Database.Database, taxonomy: Taxonomy): void {
+  const insTheme = raw.prepare(
+    `INSERT INTO themes (slug, name, display_order) VALUES (?, ?, ?)
+     ON CONFLICT(slug) DO UPDATE SET name = excluded.name, display_order = excluded.display_order`,
+  )
+  const insInd = raw.prepare(
+    `INSERT INTO industries (slug, theme_slug, name, tam_usd, tam_cagr, tam_source, tam_as_of)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(slug) DO UPDATE SET
+       theme_slug = excluded.theme_slug, name = excluded.name,
+       tam_usd = excluded.tam_usd, tam_cagr = excluded.tam_cagr,
+       tam_source = excluded.tam_source, tam_as_of = excluded.tam_as_of`,
+  )
+  raw.transaction(() => {
+    for (const t of taxonomy.themes) insTheme.run(t.slug, t.name, t.displayOrder)
+    for (const i of taxonomy.industries.values()) {
+      insInd.run(i.slug, i.themeSlug, i.name, i.tamUsd, i.tamCagr, i.tamSource, i.tamAsOf)
+    }
+  })()
+}
+
+export async function ingestUniverse(deps: UniverseDeps): Promise<JobStats> {
+  const { raw, cfg, taxonomy, listings, reference } = deps
+
+  return runJob(raw, 'universe', async () => {
+    const now = new Date().toISOString()
+
+    const allListings = await listings.fetchListings()
+    raw.transaction(() => {
+      for (const l of allListings) upsertListing(raw, l, now)
+    })()
+
+    const eligible = new Map<string, (typeof allListings)[number]>()
+    for (const l of allListings) {
+      if (passesListingFilter(l, cfg).pass) eligible.set(l.ticker.toUpperCase(), l)
+    }
+
+    const tickerMap = await reference.fetchTickerMap()
+    const candidates = tickerMap.filter((t) => eligible.has(t.ticker.toUpperCase()))
+
+    let classified = 0
+    let skippedUnmappedSic = 0
+    let skippedNotOperating = 0
+    let failedLookups = 0
+    let overrideCount = 0
+    let sicBucketCount = 0
+    const unmappedSicsSeen = new Set<string>()
+
+    for (const t of candidates) {
+      let ref
+      try {
+        ref = await reference.fetchCompany(t.cik)
+      } catch {
+        failedLookups++
+        continue
+      }
+      if (!ref) {
+        failedLookups++
+        continue
+      }
+      if (ref.entityType !== null && ref.entityType !== 'operating') {
+        skippedNotOperating++
+        continue
+      }
+      if (ref.sic && cfg.universe.exclude_sic.includes(ref.sic)) {
+        skippedUnmappedSic++
+        continue
+      }
+
+      const cls = taxonomy.classify(ref.sic ?? '', t.ticker)
+      if (!cls) {
+        skippedUnmappedSic++
+        if (ref.sic && !taxonomy.unmappedSics.has(ref.sic)) unmappedSicsSeen.add(ref.sic)
+        continue
+      }
+
+      const listing = eligible.get(t.ticker.toUpperCase())!
+      raw.transaction(() => {
+        upsertCompany(
+          raw,
+          {
+            cik: ref!.cik,
+            ticker: t.ticker.toUpperCase(),
+            name: ref!.name || t.title,
+            sic: ref!.sic,
+            sicDescription: ref!.sicDescription,
+            exchange: listing.exchange,
+            entityType: ref!.entityType,
+            fiscalYearEnd: ref!.fiscalYearEnd,
+            filerCategory: ref!.filerCategory,
+          },
+          now,
+        )
+        setCompanyIndustry(raw, ref!.cik, cls.industrySlug, cls.themeSlug, cls.source)
+      })()
+
+      classified++
+      if (cls.source === 'override') overrideCount++
+      else sicBucketCount++
+    }
+
+    return {
+      listed: allListings.length,
+      afterListingFilter: eligible.size,
+      matchedCik: candidates.length,
+      classified,
+      skippedUnmappedSic,
+      skippedNotOperating,
+      failedLookups,
+      overrideCount,
+      sicBucketCount,
+      unmappedSicsSeen: [...unmappedSicsSeen].sort(),
+    }
+  })
+}
+```
+
+- [ ] **Step 6: 테스트 통과 확인**
+
+Run: `npx vitest run tests/pipeline/ingest-universe.test.ts`
+Expected: PASS (8 tests)
+
+`SPY`는 상장 필터에서 ETF로 제외되므로 `entityType='investment-company'` 분기까지 가지 않는다. `BADCO`는 `financial_status='D'`로 제외된다.
+
+- [ ] **Step 7: 커밋**
+
+```bash
+git add -A
+git commit -m "feat: 유니버스 수집 잡 및 job runner
+
+nasdaqtrader 상장 필터 통과 종목만 SEC submissions를 조회해 분류한다.
+분류 실패 SIC를 통계로 수집해 커버리지 테스트가 쓸 수 있게 한다.
+모든 upsert는 멱등이라 재실행해도 중복 행이 생기지 않는다."
+```
+
+---
+
+### Task 8: SEC 재무 Provider (벌크 ZIP + companyfacts)
+
+**Files:**
+- Create: `src/providers/fundamental/tags.ts`, `src/providers/fundamental/sec-bulk.ts`, `src/providers/fundamental/sec-companyfacts.ts`
+- Modify: `src/providers/types.ts` (RawFact · Provider 타입 추가)
+- Test: `tests/providers/sec-bulk.test.ts`, `tests/providers/sec-companyfacts.test.ts`
+- Create: `tests/fixtures/companyfacts-mini.json`
+
+**Interfaces:**
+- Consumes: `HttpClient` (Task 5)
+- Produces:
+  - `TRACKED_TAGS: Set<string>` — 수집 대상 XBRL 태그 전체 (폴백 체인 후보 포함)
+  - `type RawFact = { cik: number; tag: string; unit: string; periodStart: string | null; periodEnd: string; qtrs: number; value: number; form: string; filedDate: string; accession: string; source: 'bulk' | 'api' }`
+  - `parseSubLine(line: string, header: string[]): { adsh: string; cik: number; form: string; filed: string } | null`
+  - `parseNumLine(line: string, header: string[]): { adsh: string; tag: string; ddate: string; qtrs: number; uom: string; value: number; coreg: string } | null`
+  - `createSecBulkProvider(http: HttpClient): { fetchQuarter(year: number, q: number, ciks: Set<number>): Promise<RawFact[]> }`
+  - `parseCompanyFacts(raw: unknown, tags: Set<string>): RawFact[]`
+  - `createCompanyFactsProvider(http: HttpClient): { fetchCompany(cik: number): Promise<RawFact[]> }`
+
+- [ ] **Step 1: 의존성 추가**
+
+```bash
+npm i yauzl
+npm i -D @types/yauzl fflate
+```
+
+`yauzl`은 ZIP 엔트리를 스트리밍으로 읽는다. `num.txt`는 압축 해제 시 수백 MB이므로 전체를 메모리에 올리지 않고 줄 단위로 처리해야 한다. `fflate`는 테스트에서 ZIP 픽스처를 만드는 용도로만 쓴다.
+
+- [ ] **Step 2: 추적 태그 목록 작성**
+
+`src/providers/fundamental/tags.ts`:
+
+```ts
+/**
+ * 수집 대상 XBRL 태그. 폴백 체인의 모든 후보를 포함한다.
+ * 정규화(Task 9)가 이 중 어떤 태그를 실제로 쓸지 결정한다.
+ */
+export const TRACKED_TAGS = new Set<string>([
+  // 매출
+  'RevenueFromContractWithCustomerExcludingAssessedTax',
+  'RevenueFromContractWithCustomerIncludingAssessedTax',
+  'Revenues',
+  'SalesRevenueNet',
+  // 매출총이익 / 매출원가
+  'GrossProfit',
+  'CostOfRevenue',
+  'CostOfGoodsAndServicesSold',
+  // 손익
+  'OperatingIncomeLoss',
+  'NetIncomeLoss',
+  'ResearchAndDevelopmentExpense',
+  'ShareBasedCompensation',
+  // 현금흐름
+  'NetCashProvidedByUsedInOperatingActivities',
+  'NetCashProvidedByUsedInOperatingActivitiesContinuingOperations',
+  'PaymentsToAcquirePropertyPlantAndEquipment',
+  'PaymentsToAcquireProductiveAssets',
+  // 재무상태
+  'CashAndCashEquivalentsAtCarryingValue',
+  'ShortTermInvestments',
+  'LongTermDebtNoncurrent',
+  'LongTermDebtCurrent',
+  'DebtCurrent',
+  'StockholdersEquity',
+  // 주식수
+  'WeightedAverageNumberOfDilutedSharesOutstanding',
+  'EntityCommonStockSharesOutstanding',
+])
+```
+
+- [ ] **Step 3: types.ts에 RawFact 추가**
+
+`src/providers/types.ts`에 append:
+
+```ts
+export type RawFact = {
+  cik: number
+  tag: string
+  unit: string
+  periodStart: string | null
+  periodEnd: string
+  qtrs: number
+  value: number
+  form: string
+  filedDate: string
+  accession: string
+  source: 'bulk' | 'api'
+}
+
+export type BulkFundamentalProvider = {
+  fetchQuarter(year: number, quarter: number, ciks: Set<number>): Promise<RawFact[]>
+}
+
+export type CompanyFactsProvider = {
+  fetchCompany(cik: number): Promise<RawFact[]>
+}
+```
+
+- [ ] **Step 4: 벌크 파서 실패 테스트 작성**
+
+`tests/providers/sec-bulk.test.ts`:
+
+```ts
+import { describe, it, expect } from 'vitest'
+import { zipSync, strToU8 } from 'fflate'
+import {
+  parseSubLine,
+  parseNumLine,
+  extractFactsFromZip,
+} from '@/providers/fundamental/sec-bulk'
+
+const SUB_HEADER = ['adsh', 'cik', 'name', 'sic', 'form', 'period', 'fy', 'fp', 'filed']
+const NUM_HEADER = ['adsh', 'tag', 'version', 'coreg', 'ddate', 'qtrs', 'uom', 'value', 'footnote']
+
+describe('parseSubLine', () => {
+  it('adsh·cik·form·filed를 뽑는다', () => {
+    const line = '0001045810-25-000123\t1045810\tNVIDIA CORP\t3674\t10-Q\t20250430\t2026\tQ1\t20250528'
+    expect(parseSubLine(line, SUB_HEADER)).toEqual({
+      adsh: '0001045810-25-000123',
+      cik: 1045810,
+      form: '10-Q',
+      filed: '2025-05-28',
+    })
+  })
+
+  it('cik이 숫자가 아니면 null', () => {
+    expect(parseSubLine('a\tzz\tn\t1\t10-K\t1\t1\tFY\t20250101', SUB_HEADER)).toBeNull()
+  })
+})
+
+describe('parseNumLine', () => {
+  it('수치 행을 파싱한다', () => {
+    const line = '0001045810-25-000123\tRevenues\tus-gaap/2024\t\t20250430\t1\tUSD\t44060000000\t'
+    expect(parseNumLine(line, NUM_HEADER)).toEqual({
+      adsh: '0001045810-25-000123',
+      tag: 'Revenues',
+      ddate: '20250430',
+      qtrs: 1,
+      uom: 'USD',
+      value: 44060000000,
+      coreg: '',
+    })
+  })
+
+  it('value가 비어 있으면 null', () => {
+    const line = '0001045810-25-000123\tRevenues\tus-gaap/2024\t\t20250430\t1\tUSD\t\t'
+    expect(parseNumLine(line, NUM_HEADER)).toBeNull()
+  })
+})
+
+describe('extractFactsFromZip', () => {
+  const sub = [
+    SUB_HEADER.join('\t'),
+    '0001045810-25-000123\t1045810\tNVIDIA CORP\t3674\t10-Q\t20250430\t2026\tQ1\t20250528',
+    '0000000099-25-000001\t99\tOTHER CORP\t6022\t10-Q\t20250331\t2025\tQ1\t20250501',
+  ].join('\n')
+
+  const num = [
+    NUM_HEADER.join('\t'),
+    // 대상 CIK · 추적 태그 · 연결기준 → 채택
+    '0001045810-25-000123\tRevenues\tus-gaap/2024\t\t20250430\t1\tUSD\t44060000000\t',
+    // coreg가 있으면 자회사 단위이므로 제외
+    '0001045810-25-000123\tRevenues\tus-gaap/2024\tSUBSID\t20250430\t1\tUSD\t1000\t',
+    // 추적 대상이 아닌 태그는 제외
+    '0001045810-25-000123\tSomeOtherTag\tus-gaap/2024\t\t20250430\t1\tUSD\t5\t',
+    // USD가 아닌 단위(주식수 제외)는 제외
+    '0001045810-25-000123\tGrossProfit\tus-gaap/2024\t\t20250430\t1\tEUR\t9\t',
+    // 유니버스 밖 CIK는 제외
+    '0000000099-25-000001\tRevenues\tus-gaap/2024\t\t20250331\t1\tUSD\t777\t',
+    // 주식수는 shares 단위 허용
+    '0001045810-25-000123\tWeightedAverageNumberOfDilutedSharesOutstanding\tus-gaap/2024\t\t20250430\t1\tshares\t24600000000\t',
+  ].join('\n')
+
+  const zip = Buffer.from(
+    zipSync({ 'sub.txt': strToU8(sub), 'num.txt': strToU8(num) }),
+  )
+
+  it('유니버스 CIK와 추적 태그만 남긴다', async () => {
+    const facts = await extractFactsFromZip(zip, new Set([1045810]))
+    const keys = facts.map((f) => `${f.tag}:${f.unit}`)
+    expect(keys).toContain('Revenues:USD')
+    expect(keys).toContain('WeightedAverageNumberOfDilutedSharesOutstanding:shares')
+    expect(keys).not.toContain('SomeOtherTag:USD')
+    expect(keys).not.toContain('GrossProfit:EUR')
+    expect(facts).toHaveLength(2)
+  })
+
+  it('sub.txt에서 form과 filed를 결합한다', async () => {
+    const facts = await extractFactsFromZip(zip, new Set([1045810]))
+    const rev = facts.find((f) => f.tag === 'Revenues')!
+    expect(rev.cik).toBe(1045810)
+    expect(rev.form).toBe('10-Q')
+    expect(rev.filedDate).toBe('2025-05-28')
+    expect(rev.periodEnd).toBe('2025-04-30')
+    expect(rev.qtrs).toBe(1)
+    expect(rev.value).toBe(44060000000)
+    expect(rev.source).toBe('bulk')
+    expect(rev.periodStart).toBeNull()
+  })
+})
+```
+
+- [ ] **Step 5: 테스트 실패 확인**
+
+Run: `npx vitest run tests/providers/sec-bulk.test.ts`
+Expected: FAIL — `Cannot find module '@/providers/fundamental/sec-bulk'`
+
+- [ ] **Step 6: 벌크 provider 구현**
+
+`src/providers/fundamental/sec-bulk.ts`:
+
+```ts
+import { createInterface } from 'node:readline'
+import { Readable } from 'node:stream'
+import yauzl from 'yauzl'
+import type { BulkFundamentalProvider, RawFact } from '../types.js'
+import type { HttpClient } from '../http/client.js'
+import { TRACKED_TAGS } from './tags.js'
+
+const SHARE_UNITS = new Set(['shares', 'pure'])
+
+function bulkUrl(year: number, quarter: number): string {
+  return `https://www.sec.gov/files/dera/data/financial-statement-data-sets/${year}q${quarter}.zip`
+}
+
+function isoDate(yyyymmdd: string): string | null {
+  if (!/^\d{8}$/.test(yyyymmdd)) return null
+  return `${yyyymmdd.slice(0, 4)}-${yyyymmdd.slice(4, 6)}-${yyyymmdd.slice(6, 8)}`
+}
+
+function col(fields: string[], header: string[], name: string): string {
+  const i = header.indexOf(name)
+  return i === -1 ? '' : (fields[i] ?? '')
+}
+
+export function parseSubLine(
+  line: string,
+  header: string[],
+): { adsh: string; cik: number; form: string; filed: string } | null {
+  const f = line.split('\t')
+  const cik = Number(col(f, header, 'cik'))
+  const filed = isoDate(col(f, header, 'filed'))
+  const adsh = col(f, header, 'adsh')
+  if (!Number.isFinite(cik) || !filed || !adsh) return null
+  return { adsh, cik, form: col(f, header, 'form'), filed }
+}
+
+export function parseNumLine(
+  line: string,
+  header: string[],
+): {
+  adsh: string; tag: string; ddate: string; qtrs: number; uom: string
+  value: number; coreg: string
+} | null {
+  const f = line.split('\t')
+  const valueRaw = col(f, header, 'value')
+  if (valueRaw === '') return null
+  const value = Number(valueRaw)
+  const qtrs = Number(col(f, header, 'qtrs'))
+  if (!Number.isFinite(value) || !Number.isFinite(qtrs)) return null
+  return {
+    adsh: col(f, header, 'adsh'),
+    tag: col(f, header, 'tag'),
+    ddate: col(f, header, 'ddate'),
+    qtrs,
+    uom: col(f, header, 'uom'),
+    value,
+    coreg: col(f, header, 'coreg'),
+  }
+}
+
+function openEntry(zip: Buffer, name: string): Promise<Readable> {
+  return new Promise((resolve, reject) => {
+    yauzl.fromBuffer(zip, { lazyEntries: true }, (err, zipfile) => {
+      if (err || !zipfile) return reject(err ?? new Error('ZIP 열기 실패'))
+      zipfile.on('entry', (entry) => {
+        if (entry.fileName !== name) return zipfile.readEntry()
+        zipfile.openReadStream(entry, (e2, stream) => {
+          if (e2 || !stream) return reject(e2 ?? new Error(`${name} 스트림 실패`))
+          resolve(stream)
+        })
+      })
+      zipfile.on('end', () => reject(new Error(`ZIP에 ${name}이 없습니다`)))
+      zipfile.readEntry()
+    })
+  })
+}
+
+async function* lines(stream: Readable): AsyncGenerator<string> {
+  const rl = createInterface({ input: stream, crlfDelay: Infinity })
+  for await (const line of rl) yield line
+}
+
+/**
+ * sub.txt로 adsh→(cik, form, filed)를 만든 뒤 num.txt를 줄 단위로 흘려보내며
+ * 유니버스 CIK와 추적 태그에 해당하는 행만 남긴다.
+ * num.txt는 압축 해제 시 수백 MB이므로 전체를 메모리에 올리지 않는다.
+ */
+export async function extractFactsFromZip(
+  zip: Buffer,
+  ciks: Set<number>,
+): Promise<RawFact[]> {
+  const subs = new Map<string, { cik: number; form: string; filed: string }>()
+  {
+    let header: string[] | null = null
+    for await (const line of lines(await openEntry(zip, 'sub.txt'))) {
+      if (!header) { header = line.split('\t'); continue }
+      const s = parseSubLine(line, header)
+      if (s && ciks.has(s.cik)) subs.set(s.adsh, { cik: s.cik, form: s.form, filed: s.filed })
+    }
+  }
+  if (subs.size === 0) return []
+
+  const out: RawFact[] = []
+  let header: string[] | null = null
+  for await (const line of lines(await openEntry(zip, 'num.txt'))) {
+    if (!header) { header = line.split('\t'); continue }
+    const n = parseNumLine(line, header)
+    if (!n) continue
+    if (n.coreg !== '') continue              // 자회사 단위 제외, 연결기준만
+    if (!TRACKED_TAGS.has(n.tag)) continue
+    const sub = subs.get(n.adsh)
+    if (!sub) continue
+    if (n.uom !== 'USD' && !SHARE_UNITS.has(n.uom)) continue
+    const periodEnd = isoDate(n.ddate)
+    if (!periodEnd) continue
+
+    out.push({
+      cik: sub.cik,
+      tag: n.tag,
+      unit: n.uom,
+      periodStart: null,      // num.txt는 시작일을 제공하지 않는다. qtrs가 기간 길이를 나타낸다.
+      periodEnd,
+      qtrs: n.qtrs,
+      value: n.value,
+      form: sub.form,
+      filedDate: sub.filed,
+      accession: n.adsh,
+      source: 'bulk',
+    })
+  }
+  return out
+}
+
+export function createSecBulkProvider(http: HttpClient): BulkFundamentalProvider {
+  return {
+    async fetchQuarter(year, quarter, ciks) {
+      const zip = await http.getBuffer(bulkUrl(year, quarter), { cache: true })
+      return extractFactsFromZip(zip, ciks)
+    },
+  }
+}
+```
+
+- [ ] **Step 7: 벌크 테스트 통과 확인**
+
+Run: `npx vitest run tests/providers/sec-bulk.test.ts`
+Expected: PASS (6 tests)
+
+- [ ] **Step 8: companyfacts 픽스처 작성**
+
+`tests/fixtures/companyfacts-mini.json`:
+
+```json
+{
+  "cik": 1045810,
+  "entityName": "NVIDIA CORP",
+  "facts": {
+    "us-gaap": {
+      "Revenues": {
+        "units": {
+          "USD": [
+            { "start": "2025-02-01", "end": "2025-04-30", "val": 44060000000,
+              "fy": 2026, "fp": "Q1", "form": "10-Q", "filed": "2025-05-28",
+              "accn": "0001045810-25-000123", "frame": "CY2025Q1" },
+            { "start": "2024-01-29", "end": "2025-01-26", "val": 130497000000,
+              "fy": 2025, "fp": "FY", "form": "10-K", "filed": "2025-02-26",
+              "accn": "0001045810-25-000023" }
+          ]
+        }
+      },
+      "SomeUntrackedTag": {
+        "units": { "USD": [
+          { "end": "2025-04-30", "val": 1, "fy": 2026, "fp": "Q1",
+            "form": "10-Q", "filed": "2025-05-28", "accn": "x" } ] }
+      }
+    },
+    "dei": {
+      "EntityCommonStockSharesOutstanding": {
+        "units": { "shares": [
+          { "end": "2025-05-21", "val": 24390000000, "fy": 2026, "fp": "Q1",
+            "form": "10-Q", "filed": "2025-05-28", "accn": "0001045810-25-000123" } ] }
+      }
+    }
+  }
+}
+```
+
+- [ ] **Step 9: companyfacts 실패 테스트 작성**
+
+`tests/providers/sec-companyfacts.test.ts`:
+
+```ts
+import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { parseCompanyFacts } from '@/providers/fundamental/sec-companyfacts'
+import { TRACKED_TAGS } from '@/providers/fundamental/tags'
+
+const raw = JSON.parse(readFileSync('tests/fixtures/companyfacts-mini.json', 'utf8'))
+const facts = parseCompanyFacts(raw, TRACKED_TAGS)
+
+describe('parseCompanyFacts', () => {
+  it('추적 태그만 남긴다', () => {
+    expect(facts.some((f) => f.tag === 'SomeUntrackedTag')).toBe(false)
+  })
+
+  it('us-gaap과 dei 네임스페이스를 모두 읽는다', () => {
+    expect(facts.some((f) => f.tag === 'Revenues')).toBe(true)
+    expect(facts.some((f) => f.tag === 'EntityCommonStockSharesOutstanding')).toBe(true)
+  })
+
+  it('start/end로 qtrs를 유도한다', () => {
+    const q = facts.find((f) => f.tag === 'Revenues' && f.periodEnd === '2025-04-30')!
+    expect(q.qtrs).toBe(1)
+    const a = facts.find((f) => f.tag === 'Revenues' && f.periodEnd === '2025-01-26')!
+    expect(a.qtrs).toBe(4)
+  })
+
+  it('start가 없는 시점 값은 qtrs=0', () => {
+    const s = facts.find((f) => f.tag === 'EntityCommonStockSharesOutstanding')!
+    expect(s.qtrs).toBe(0)
+    expect(s.unit).toBe('shares')
+  })
+
+  it('cik·form·filed·accession을 보존하고 source는 api', () => {
+    const q = facts.find((f) => f.tag === 'Revenues' && f.periodEnd === '2025-04-30')!
+    expect(q.cik).toBe(1045810)
+    expect(q.form).toBe('10-Q')
+    expect(q.filedDate).toBe('2025-05-28')
+    expect(q.accession).toBe('0001045810-25-000123')
+    expect(q.source).toBe('api')
+    expect(q.periodStart).toBe('2025-02-01')
+  })
+})
+```
+
+- [ ] **Step 10: 테스트 실패 확인**
+
+Run: `npx vitest run tests/providers/sec-companyfacts.test.ts`
+Expected: FAIL — `Cannot find module '@/providers/fundamental/sec-companyfacts'`
+
+- [ ] **Step 11: companyfacts provider 구현**
+
+`src/providers/fundamental/sec-companyfacts.ts`:
+
+```ts
+import type { CompanyFactsProvider, RawFact } from '../types.js'
+import type { HttpClient } from '../http/client.js'
+import { TRACKED_TAGS } from './tags.js'
+
+function factsUrl(cik: number): string {
+  return `https://data.sec.gov/api/xbrl/companyfacts/CIK${String(cik).padStart(10, '0')}.json`
+}
+
+const DAY_MS = 86_400_000
+
+/** start~end 일수로 기간 길이(분기 수)를 유도한다. start가 없으면 시점 값(0). */
+function deriveQtrs(start: string | undefined, end: string): number {
+  if (!start) return 0
+  const days = (Date.parse(end) - Date.parse(start)) / DAY_MS
+  if (!Number.isFinite(days) || days <= 0) return 0
+  return Math.max(1, Math.round(days / 91.31))
+}
+
+type FactEntry = {
+  start?: string; end?: string; val?: number
+  form?: string; filed?: string; accn?: string
+}
+
+export function parseCompanyFacts(raw: unknown, tags: Set<string>): RawFact[] {
+  const root = raw as {
+    cik?: number
+    facts?: Record<string, Record<string, { units?: Record<string, FactEntry[]> }>>
+  }
+  const cik = root.cik
+  if (typeof cik !== 'number' || !root.facts) return []
+
+  const out: RawFact[] = []
+  for (const namespace of Object.values(root.facts)) {
+    for (const [tag, concept] of Object.entries(namespace)) {
+      if (!tags.has(tag)) continue
+      for (const [unit, entries] of Object.entries(concept.units ?? {})) {
+        for (const e of entries) {
+          if (typeof e.val !== 'number' || !e.end || !e.form || !e.filed || !e.accn) continue
+          out.push({
+            cik,
+            tag,
+            unit,
+            periodStart: e.start ?? null,
+            periodEnd: e.end,
+            qtrs: deriveQtrs(e.start, e.end),
+            value: e.val,
+            form: e.form,
+            filedDate: e.filed,
+            accession: e.accn,
+            source: 'api',
+          })
+        }
+      }
+    }
+  }
+  return out
+}
+
+export function createCompanyFactsProvider(http: HttpClient): CompanyFactsProvider {
+  return {
+    async fetchCompany(cik) {
+      try {
+        return parseCompanyFacts(await http.getJson(factsUrl(cik), { cache: false }), TRACKED_TAGS)
+      } catch (e) {
+        // XBRL 신고 이력이 없는 CIK는 404. 잡 전체를 중단시키지 않는다.
+        if (e instanceof Error && /HTTP 404/.test(e.message)) return []
+        throw e
+      }
+    },
+  }
+}
+```
+
+- [ ] **Step 12: 테스트 통과 확인**
+
+Run: `npx vitest run tests/providers`
+Expected: PASS (http 7 + listing 5 + reference 5 + bulk 6 + companyfacts 5 = 28 tests)
+
+- [ ] **Step 13: 커밋**
+
+```bash
+git add -A
+git commit -m "feat: SEC 재무 Provider — 분기 벌크 ZIP 및 companyfacts API
+
+벌크는 num.txt를 줄 단위로 스트리밍해 유니버스 CIK와 추적 태그만 남긴다.
+coreg가 있는 자회사 단위 행은 제외하고 연결기준만 채택한다.
+companyfacts는 start/end 일수로 기간 길이를 유도한다."
+```
+
+---
+
+### Task 9: XBRL 태그 폴백 & 기간별 필드 해석
+
+**Files:**
+- Create: `src/providers/fundamental/resolve.ts`
+- Test: `tests/providers/resolve.test.ts`
+
+**Interfaces:**
+- Consumes: `RawFact` (Task 8)
+- Produces:
+  - `type FactIndex = { duration: Map<number, Map<string, Map<string, number>>>; instant: Map<string, Map<string, number>> }` — `duration`은 `qtrs → periodEnd → tag → value`, `instant`는 `periodEnd → tag → value`
+  - `indexFacts(facts: RawFact[]): FactIndex` — 같은 (qtrs, periodEnd, tag)에 값이 여럿이면 `filedDate`가 늦은 것을 채택
+  - `type ResolvedFlow = { revenue, grossProfit, operatingIncome, netIncome, ocf, capex, sbc, rdExpense, sharesDiluted }` (전부 `number | null`)
+  - `type ResolvedStock = { cash, totalDebt, equity, sharesOutstanding }` (전부 `number | null`)
+  - `resolveFlow(tags: Map<string, number>): { fields: ResolvedFlow; used: Record<string, string> }`
+  - `resolveStock(tags: Map<string, number>): { fields: ResolvedStock; used: Record<string, string> }`
+  - `used`는 각 필드가 어떤 XBRL 태그에서 왔는지 기록하며 `financials.source_tags`에 저장된다.
+
+- [ ] **Step 1: 실패하는 테스트 작성**
+
+`tests/providers/resolve.test.ts`:
+
+```ts
+import { describe, it, expect } from 'vitest'
+import { indexFacts, resolveFlow, resolveStock } from '@/providers/fundamental/resolve'
+import type { RawFact } from '@/providers/types'
+
+function fact(p: Partial<RawFact>): RawFact {
+  return {
+    cik: 1, tag: 'Revenues', unit: 'USD', periodStart: null,
+    periodEnd: '2025-03-31', qtrs: 1, value: 100, form: '10-Q',
+    filedDate: '2025-05-01', accession: 'a', source: 'bulk', ...p,
+  }
+}
+
+describe('indexFacts', () => {
+  it('qtrs와 periodEnd로 계층 인덱스를 만든다', () => {
+    const idx = indexFacts([
+      fact({ tag: 'Revenues', qtrs: 1, periodEnd: '2025-03-31', value: 10 }),
+      fact({ tag: 'Revenues', qtrs: 4, periodEnd: '2025-03-31', value: 40 }),
+      fact({ tag: 'StockholdersEquity', qtrs: 0, periodEnd: '2025-03-31', value: 500 }),
+    ])
+    expect(idx.duration.get(1)!.get('2025-03-31')!.get('Revenues')).toBe(10)
+    expect(idx.duration.get(4)!.get('2025-03-31')!.get('Revenues')).toBe(40)
+    expect(idx.instant.get('2025-03-31')!.get('StockholdersEquity')).toBe(500)
+  })
+
+  it('같은 키에 값이 여럿이면 늦게 신고된 값을 쓴다 — 정정 공시 반영', () => {
+    const idx = indexFacts([
+      fact({ value: 100, filedDate: '2025-05-01' }),
+      fact({ value: 111, filedDate: '2025-08-01', form: '10-K' }),
+      fact({ value: 99, filedDate: '2025-04-01' }),
+    ])
+    expect(idx.duration.get(1)!.get('2025-03-31')!.get('Revenues')).toBe(111)
+  })
+})
+
+describe('resolveFlow', () => {
+  it('매출 폴백 체인의 1순위를 먼저 쓴다', () => {
+    const r = resolveFlow(new Map([
+      ['RevenueFromContractWithCustomerExcludingAssessedTax', 500],
+      ['Revenues', 400],
+    ]))
+    expect(r.fields.revenue).toBe(500)
+    expect(r.used.revenue).toBe('RevenueFromContractWithCustomerExcludingAssessedTax')
+  })
+
+  it('1순위가 없으면 다음 후보로 내려간다', () => {
+    const r = resolveFlow(new Map([['SalesRevenueNet', 300]]))
+    expect(r.fields.revenue).toBe(300)
+    expect(r.used.revenue).toBe('SalesRevenueNet')
+  })
+
+  it('GrossProfit이 없으면 매출 - 매출원가로 유도한다', () => {
+    const r = resolveFlow(new Map([['Revenues', 1000], ['CostOfRevenue', 400]]))
+    expect(r.fields.grossProfit).toBe(600)
+    expect(r.used.grossProfit).toBe('Revenues-CostOfRevenue')
+  })
+
+  it('매출원가 태그도 폴백한다', () => {
+    const r = resolveFlow(new Map([['Revenues', 1000], ['CostOfGoodsAndServicesSold', 250]]))
+    expect(r.fields.grossProfit).toBe(750)
+  })
+
+  it('GrossProfit이 있으면 그대로 쓴다', () => {
+    const r = resolveFlow(new Map([
+      ['Revenues', 1000], ['CostOfRevenue', 400], ['GrossProfit', 620],
+    ]))
+    expect(r.fields.grossProfit).toBe(620)
+    expect(r.used.grossProfit).toBe('GrossProfit')
+  })
+
+  it('아무 태그도 없으면 null이며 used에 기록되지 않는다', () => {
+    const r = resolveFlow(new Map())
+    expect(r.fields.revenue).toBeNull()
+    expect(r.fields.grossProfit).toBeNull()
+    expect(r.used.revenue).toBeUndefined()
+  })
+
+  it('영업활동현금흐름 폴백', () => {
+    const r = resolveFlow(new Map([
+      ['NetCashProvidedByUsedInOperatingActivitiesContinuingOperations', 77],
+    ]))
+    expect(r.fields.ocf).toBe(77)
+  })
+})
+
+describe('resolveStock', () => {
+  it('현금은 현금성자산과 단기투자자산을 더한다', () => {
+    const r = resolveStock(new Map([
+      ['CashAndCashEquivalentsAtCarryingValue', 100],
+      ['ShortTermInvestments', 50],
+    ]))
+    expect(r.fields.cash).toBe(150)
+    expect(r.used.cash).toBe('CashAndCashEquivalentsAtCarryingValue+ShortTermInvestments')
+  })
+
+  it('단기투자자산이 없으면 현금성자산만 쓴다', () => {
+    const r = resolveStock(new Map([['CashAndCashEquivalentsAtCarryingValue', 100]]))
+    expect(r.fields.cash).toBe(100)
+    expect(r.used.cash).toBe('CashAndCashEquivalentsAtCarryingValue')
+  })
+
+  it('총부채는 장기+유동 합산', () => {
+    const r = resolveStock(new Map([
+      ['LongTermDebtNoncurrent', 800], ['LongTermDebtCurrent', 200],
+    ]))
+    expect(r.fields.totalDebt).toBe(1000)
+  })
+
+  it('장기부채 태그가 없으면 DebtCurrent로 폴백한다', () => {
+    const r = resolveStock(new Map([['DebtCurrent', 300]]))
+    expect(r.fields.totalDebt).toBe(300)
+    expect(r.used.totalDebt).toBe('DebtCurrent')
+  })
+
+  it('부채 태그가 전혀 없으면 null — 0으로 가정하지 않는다', () => {
+    expect(resolveStock(new Map()).fields.totalDebt).toBeNull()
+  })
+
+  it('자본과 발행주식수를 읽는다', () => {
+    const r = resolveStock(new Map([
+      ['StockholdersEquity', 5000],
+      ['EntityCommonStockSharesOutstanding', 24000000],
+    ]))
+    expect(r.fields.equity).toBe(5000)
+    expect(r.fields.sharesOutstanding).toBe(24000000)
+  })
+})
+```
+
+- [ ] **Step 2: 테스트 실패 확인**
+
+Run: `npx vitest run tests/providers/resolve.test.ts`
+Expected: FAIL — `Cannot find module '@/providers/fundamental/resolve'`
+
+- [ ] **Step 3: 구현**
+
+`src/providers/fundamental/resolve.ts`:
+
+```ts
+import type { RawFact } from '../types.js'
+
+export type FactIndex = {
+  /** qtrs → periodEnd → tag → value */
+  duration: Map<number, Map<string, Map<string, number>>>
+  /** periodEnd → tag → value */
+  instant: Map<string, Map<string, number>>
+}
+
+export function indexFacts(facts: RawFact[]): FactIndex {
+  const duration: FactIndex['duration'] = new Map()
+  const instant: FactIndex['instant'] = new Map()
+  // 같은 키에 값이 여럿일 때 어떤 filedDate를 채택했는지 추적
+  const chosenAt = new Map<string, string>()
+
+  for (const f of facts) {
+    const key = `${f.qtrs}|${f.periodEnd}|${f.tag}`
+    const prev = chosenAt.get(key)
+    if (prev !== undefined && prev >= f.filedDate) continue
+    chosenAt.set(key, f.filedDate)
+
+    if (f.qtrs === 0) {
+      let byTag = instant.get(f.periodEnd)
+      if (!byTag) { byTag = new Map(); instant.set(f.periodEnd, byTag) }
+      byTag.set(f.tag, f.value)
+    } else {
+      let byPeriod = duration.get(f.qtrs)
+      if (!byPeriod) { byPeriod = new Map(); duration.set(f.qtrs, byPeriod) }
+      let byTag = byPeriod.get(f.periodEnd)
+      if (!byTag) { byTag = new Map(); byPeriod.set(f.periodEnd, byTag) }
+      byTag.set(f.tag, f.value)
+    }
+  }
+  return { duration, instant }
+}
+
+const REVENUE_CHAIN = [
+  'RevenueFromContractWithCustomerExcludingAssessedTax',
+  'Revenues',
+  'SalesRevenueNet',
+  'RevenueFromContractWithCustomerIncludingAssessedTax',
+]
+const COST_CHAIN = ['CostOfRevenue', 'CostOfGoodsAndServicesSold']
+const OCF_CHAIN = [
+  'NetCashProvidedByUsedInOperatingActivities',
+  'NetCashProvidedByUsedInOperatingActivitiesContinuingOperations',
+]
+const CAPEX_CHAIN = [
+  'PaymentsToAcquirePropertyPlantAndEquipment',
+  'PaymentsToAcquireProductiveAssets',
+]
+
+/** 체인에서 처음 발견된 값과 그 태그명을 반환한다. */
+function firstOf(
+  tags: Map<string, number>,
+  chain: string[],
+): { value: number; tag: string } | null {
+  for (const t of chain) {
+    const v = tags.get(t)
+    if (typeof v === 'number') return { value: v, tag: t }
+  }
+  return null
+}
+
+export type ResolvedFlow = {
+  revenue: number | null
+  grossProfit: number | null
+  operatingIncome: number | null
+  netIncome: number | null
+  ocf: number | null
+  capex: number | null
+  sbc: number | null
+  rdExpense: number | null
+  sharesDiluted: number | null
+}
+
+export function resolveFlow(
+  tags: Map<string, number>,
+): { fields: ResolvedFlow; used: Record<string, string> } {
+  const used: Record<string, string> = {}
+
+  const rev = firstOf(tags, REVENUE_CHAIN)
+  if (rev) used.revenue = rev.tag
+
+  let grossProfit: number | null = null
+  const gp = tags.get('GrossProfit')
+  if (typeof gp === 'number') {
+    grossProfit = gp
+    used.grossProfit = 'GrossProfit'
+  } else if (rev) {
+    const cost = firstOf(tags, COST_CHAIN)
+    if (cost) {
+      grossProfit = rev.value - cost.value
+      used.grossProfit = `${rev.tag}-${cost.tag}`
+    }
+  }
+
+  const simple = (field: string, tag: string): number | null => {
+    const v = tags.get(tag)
+    if (typeof v !== 'number') return null
+    used[field] = tag
+    return v
+  }
+
+  const ocf = firstOf(tags, OCF_CHAIN)
+  if (ocf) used.ocf = ocf.tag
+  const capex = firstOf(tags, CAPEX_CHAIN)
+  if (capex) used.capex = capex.tag
+
+  return {
+    fields: {
+      revenue: rev?.value ?? null,
+      grossProfit,
+      operatingIncome: simple('operatingIncome', 'OperatingIncomeLoss'),
+      netIncome: simple('netIncome', 'NetIncomeLoss'),
+      ocf: ocf?.value ?? null,
+      capex: capex?.value ?? null,
+      sbc: simple('sbc', 'ShareBasedCompensation'),
+      rdExpense: simple('rdExpense', 'ResearchAndDevelopmentExpense'),
+      sharesDiluted: simple(
+        'sharesDiluted',
+        'WeightedAverageNumberOfDilutedSharesOutstanding',
+      ),
+    },
+    used,
+  }
+}
+
+export type ResolvedStock = {
+  cash: number | null
+  totalDebt: number | null
+  equity: number | null
+  sharesOutstanding: number | null
+}
+
+export function resolveStock(
+  tags: Map<string, number>,
+): { fields: ResolvedStock; used: Record<string, string> } {
+  const used: Record<string, string> = {}
+
+  let cash: number | null = null
+  const cce = tags.get('CashAndCashEquivalentsAtCarryingValue')
+  if (typeof cce === 'number') {
+    const sti = tags.get('ShortTermInvestments')
+    if (typeof sti === 'number') {
+      cash = cce + sti
+      used.cash = 'CashAndCashEquivalentsAtCarryingValue+ShortTermInvestments'
+    } else {
+      cash = cce
+      used.cash = 'CashAndCashEquivalentsAtCarryingValue'
+    }
+  }
+
+  let totalDebt: number | null = null
+  const ltNon = tags.get('LongTermDebtNoncurrent')
+  const ltCur = tags.get('LongTermDebtCurrent')
+  if (typeof ltNon === 'number' || typeof ltCur === 'number') {
+    totalDebt = (ltNon ?? 0) + (ltCur ?? 0)
+    used.totalDebt = [
+      typeof ltNon === 'number' ? 'LongTermDebtNoncurrent' : null,
+      typeof ltCur === 'number' ? 'LongTermDebtCurrent' : null,
+    ]
+      .filter(Boolean)
+      .join('+')
+  } else {
+    const dc = tags.get('DebtCurrent')
+    if (typeof dc === 'number') {
+      totalDebt = dc
+      used.totalDebt = 'DebtCurrent'
+    }
+  }
+
+  const simple = (field: string, tag: string): number | null => {
+    const v = tags.get(tag)
+    if (typeof v !== 'number') return null
+    used[field] = tag
+    return v
+  }
+
+  return {
+    fields: {
+      cash,
+      totalDebt,
+      equity: simple('equity', 'StockholdersEquity'),
+      sharesOutstanding: simple('sharesOutstanding', 'EntityCommonStockSharesOutstanding'),
+    },
+    used,
+  }
+}
+```
+
+- [ ] **Step 4: 테스트 통과 확인**
+
+Run: `npx vitest run tests/providers/resolve.test.ts`
+Expected: PASS (15 tests)
+
+- [ ] **Step 5: 커밋**
+
+```bash
+git add -A
+git commit -m "feat: XBRL 태그 폴백 체인 및 기간별 필드 해석
+
+기업마다 다른 태그를 쓰므로 체인으로 폴백하고 어떤 태그를 썼는지
+used에 기록해 financials.source_tags로 저장한다.
+정정 공시는 filedDate가 늦은 값을 채택한다.
+부채 태그가 전혀 없으면 0이 아니라 null이다."
+```
