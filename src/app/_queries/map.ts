@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3'
 import { median } from '@/domain/stats'
+import { loadCompanies, qualifyingCandidates, sufficient, type CompanyRow } from './companies'
 
 export type IndustryRow = {
   slug: string
@@ -19,47 +20,6 @@ export type ThemeBlock = {
   name: string
   displayOrder: number
   industries: IndustryRow[]
-}
-
-type CompanyRow = {
-  cik: number
-  ticker: string
-  industrySlug: string
-  tenbagger: number | null
-  completeness: number | null
-  category: string | null
-  marketCap: number | null
-  revenueGrowth: number | null
-  acceleration: number | null
-  criticalCount: number
-}
-
-/**
- * 산업별 집계는 SQL 한 방보다 회사 단위로 뽑아 JS에서 접는 편이 읽기 쉽고
- * median 구현을 domain/stats와 공유할 수 있다. 유니버스가 수천 건 규모라 성능도 문제없다.
- */
-function loadCompanies(raw: Database.Database): CompanyRow[] {
-  return raw
-    .prepare(
-      `SELECT c.cik, c.ticker, ci.industry_slug AS industrySlug,
-              s.tenbagger, s.completeness, s.category,
-              (SELECT m.market_cap FROM market_data m
-                WHERE m.cik = c.cik ORDER BY m.date DESC LIMIT 1) AS marketCap,
-              (SELECT f.raw FROM score_factors f
-                WHERE f.cik = c.cik AND f.as_of = s.as_of
-                  AND f.factor_key = 'revenue_growth') AS revenueGrowth,
-              (SELECT f.raw FROM score_factors f
-                WHERE f.cik = c.cik AND f.as_of = s.as_of
-                  AND f.factor_key = 'revenue_acceleration') AS acceleration,
-              (SELECT COUNT(*) FROM red_flags r
-                WHERE r.cik = c.cik AND r.as_of = s.as_of
-                  AND r.severity = 'CRITICAL') AS criticalCount
-       FROM companies c
-       JOIN company_industry ci ON ci.cik = c.cik
-       LEFT JOIN latest_scores s ON s.cik = c.cik
-       WHERE c.is_active = 1`,
-    )
-    .all() as CompanyRow[]
 }
 
 /**
@@ -93,17 +53,14 @@ export function getOpportunityMap(raw: Database.Database, minCompleteness: numbe
 
     // completeness가 null인 행(스코어링 미실행)은 배제 대상이 아니다 — tenbagger 자체가
     // null이라 아래 필터에서 자연히 걸러진다. 기준 미달(completeness < minCompleteness)인
-    // 행만 명시적으로 뺀다.
-    const sufficient = (c: CompanyRow) => c.completeness === null || c.completeness >= minCompleteness
-
+    // 행만 명시적으로 뺀다. 게이트 정의는 ./companies에서 공유한다.
     const scores = members
-      .filter(sufficient)
+      .filter((c) => sufficient(c, minCompleteness))
       .map((c) => c.tenbagger)
       .filter((v): v is number => v !== null && Number.isFinite(v))
-    // Leader는 Industry Benchmark이지 Tenbagger 후보가 아니다
-    const candidates = members
-      .filter((c) => c.category !== 'LEADER' && c.tenbagger !== null && sufficient(c))
-      .sort((a, b) => b.tenbagger! - a.tenbagger!)
+    // Leader는 Industry Benchmark이지 Tenbagger 후보가 아니다 — "후보"의 정의도
+    // ./companies에서 공유한다.
+    const candidates = qualifyingCandidates(members, minCompleteness)
 
     rows.push({
       slug: ind.slug,
