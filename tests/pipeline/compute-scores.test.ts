@@ -6,7 +6,7 @@ import type Database from 'better-sqlite3'
 import { getRawDb, runMigrations } from '@/db/client'
 import { parseConfig } from '@/config'
 import { loadTaxonomy } from '@/taxonomy'
-import { computeScores } from '@/pipeline/jobs/compute-scores'
+import { computeScores, configHash } from '@/pipeline/jobs/compute-scores'
 
 const cfg = parseConfig(readFileSync('config.yaml', 'utf8'))
 const taxonomy = loadTaxonomy()
@@ -101,6 +101,45 @@ function seedRunwayCritical(db: Database.Database, cik: number, ticker: string, 
   ).run(cik, 100e6, 70e6, -40e6, 10e6) // runway = 10e6 / (40e6/4) = 1분기 → CRITICAL(<2)
 }
 
+/** 희석 WARNING(연 30% 증가 — dilution_warning 0.15 초과, extreme_dilution 0.50 이하)만
+ *  뜨는 기업. market_cap_opportunity의 게이트가 CRITICAL이 아닌 WARNING만으로도
+ *  warning_multiplier를 적용하는지, 그리고 Quality Gate가 Tenbagger 엔진보다 먼저
+ *  실행되는지를 검증하는 데 쓴다 (리뷰 Finding 1). */
+function seedDilutionWarning(db: Database.Database, cik: number, ticker: string, industrySlug: string) {
+  db.prepare(
+    `INSERT INTO companies (cik, ticker, name, sic, is_active, first_seen, last_updated)
+     VALUES (?, ?, ?, '3674', 1, '2026-08-09', '2026-08-09')`,
+  ).run(cik, ticker, ticker)
+  db.prepare(
+    `INSERT INTO company_industry (cik, industry_slug, theme_slug, is_primary, source)
+     VALUES (?, ?, 'ai-software-semi', 1, 'sic')`,
+  ).run(cik, industrySlug)
+  const ins = db.prepare(
+    `INSERT INTO financials
+       (cik, period_end, period_type, revenue, gross_profit, shares_diluted, computed_at)
+     VALUES (?, ?, 'TTM', ?, ?, ?, '2026-08-09')`,
+  )
+  // 매출·매출총이익률은 5개 TTM 구간 모두 동일하게 둬서 GM_COLLAPSE 등 다른 플래그가
+  // 섞여 들어오지 않게 한다. 매출 성장은 양수로 둬서 market_cap_opportunity 게이트가
+  // 매출 조건으로 0이 되는 경로를 피한다 (revenueNow > revenuePrior).
+  const ends = ['2025-03-31', '2024-12-31', '2024-09-30', '2024-06-30', '2024-03-31']
+  const revenueNow = 1e9
+  const revenuePrior = 0.9e9
+  const gm = 0.6
+  const dilutedNow = 130e6
+  const dilutedPrior = 100e6 // (130/100 - 1) = 0.30 → dilution_warning(0.15) 초과, extreme(0.50) 이하
+  ends.forEach((e, i) => {
+    const rev = i === 4 ? revenuePrior : revenueNow
+    const diluted = i === 4 ? dilutedPrior : dilutedNow
+    ins.run(cik, e, rev, rev * gm, diluted)
+  })
+  db.prepare(
+    `INSERT INTO market_data (cik, date, price, shares_outstanding, market_cap)
+     VALUES (?, '2026-08-08', 10, ?, ?)`,
+    // 시총 $2B → bands의 두 번째 구간(<$3B, 14점)에 들어간다
+  ).run(cik, 2e9 / 10, 2e9)
+}
+
 beforeAll(async () => {
   raw = getRawDb(join(mkdtempSync(join(tmpdir(), 'tb-score-')), 'sc.db'))
   runMigrations(raw)
@@ -118,14 +157,18 @@ beforeAll(async () => {
   // 재실행 시 Red Flag가 해소되는 시나리오용.
   seedRunwayCritical(raw, 30, 'FLAGGED', 'software-application')
 
+  // WARNING 등급 희석 플래그 + 채점 구간에 들어가는 시총 — Quality Gate → Tenbagger
+  // 엔진 순서를 검증하는 데 쓴다.
+  seedDilutionWarning(raw, 40, 'DILUTED', 'cloud-computing')
+
   stats = await computeScores({ raw, cfg, taxonomy, asOf: '2026-08-09' })
 })
 
 describe('computeScores', () => {
   it('모든 유니버스 기업의 점수를 쓴다', () => {
     const n = raw.prepare('SELECT COUNT(*) c FROM scores').get() as { c: number }
-    expect(n.c).toBe(7)
-    expect(stats.scored).toBe(7)
+    expect(n.c).toBe(8)
+    expect(stats.scored).toBe(8)
   })
 
   it('팩터 9개를 score_factors에 남긴다', () => {
@@ -217,7 +260,26 @@ describe('computeScores', () => {
     expect(after.c).toBe(1)
 
     const totalRows = raw.prepare('SELECT COUNT(*) c FROM scores').get() as { c: number }
-    expect(totalRows.c).toBe(7)
+    expect(totalRows.c).toBe(8)
+  })
+
+  it('WARNING Red Flag가 market_cap_opportunity 게이트에 반영된다 (Quality Gate → Tenbagger 순서)', () => {
+    // cik=40: 시총 $2B → bands[1](<$3B, 14점). 매출·매출성장 조건은 게이트를 0으로
+    // 만들지 않는다. 유일한 Red Flag는 WARNING(30% 희석)이므로 게이트 배수는
+    // warning_multiplier(0.5) — 손계산: 14 × 0.5 = 7.
+    const flags = raw
+      .prepare("SELECT code, severity FROM red_flags WHERE cik = 40 AND as_of = '2026-08-09'")
+      .all() as { code: string; severity: string }[]
+    expect(flags).toHaveLength(1)
+    expect(flags[0]!.code).toBe('DILUTION')
+    expect(flags[0]!.severity).toBe('WARNING')
+
+    const factor = raw
+      .prepare(
+        "SELECT points FROM score_factors WHERE cik = 40 AND factor_key = 'market_cap_opportunity'",
+      )
+      .get() as { points: number }
+    expect(factor.points).toBeCloseTo(7) // 14 × 0.5
   })
 
   it('같은 as_of 재실행 시 해소된 Red Flag는 남지 않는다', async () => {
@@ -256,5 +318,33 @@ describe('computeScores', () => {
       .prepare("SELECT status FROM job_runs WHERE job='scores' ORDER BY id DESC")
       .get() as { status: string }
     expect(r.status).toBe('succeeded')
+  })
+})
+
+describe('configHash', () => {
+  // engine_version은 "회사가 바뀌었나"와 "채점 규칙이 바뀌었나"를 구분하는 용도다.
+  // scoring/classification 밖의 설정이 바뀌어도 해시가 바뀌면 잘못된 "규칙 변경" 신호를
+  // 심게 되므로, 채점과 무관한 섹션은 해시에서 제외돼야 한다 (리뷰 Finding 2).
+  it('scoring/classification과 무관한 설정(ingest)이 달라도 해시는 같다', () => {
+    const a = structuredClone(cfg)
+    const b = structuredClone(cfg)
+    b.ingest.sec_rate_limit_per_sec = a.ingest.sec_rate_limit_per_sec + 1
+    b.staleness.price_days = a.staleness.price_days + 1
+    expect(configHash(b)).toBe(configHash(a))
+  })
+
+  it('scoring 곡선 값이 다르면 해시도 다르다', () => {
+    const a = structuredClone(cfg)
+    const b = structuredClone(cfg)
+    const point = b.scoring.factors.revenue_growth.curve[0]!
+    point[1] = point[1] + 0.01
+    expect(configHash(b)).not.toBe(configHash(a))
+  })
+
+  it('classification 임계값이 다르면 해시도 다르다', () => {
+    const a = structuredClone(cfg)
+    const b = structuredClone(cfg)
+    b.classification.leader_ratio_of_max = a.classification.leader_ratio_of_max + 0.01
+    expect(configHash(b)).not.toBe(configHash(a))
   })
 })

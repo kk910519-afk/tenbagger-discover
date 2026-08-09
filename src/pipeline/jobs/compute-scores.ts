@@ -18,8 +18,13 @@ const PERCENTILE_SOURCE: Record<string, string> = {
   market_cap_opportunity: 'market_cap',
 }
 
+// engine_version은 "회사가 바뀌었나"와 "채점 규칙이 바뀌었나"를 구분하기 위한 필드다.
+// scoring/classification 밖의 설정(ingest, universe, staleness 등)이 바뀌어도 점수 산출
+// 로직 자체는 그대로이므로, 그런 변경까지 해시에 섞으면 "규칙이 바뀌었다"는 잘못된
+// 신호를 점수 이력에 남기게 된다. category는 classification에서 나오므로 함께 포함한다.
 export function configHash(cfg: AppConfig): string {
-  return createHash('sha256').update(JSON.stringify(cfg)).digest('hex').slice(0, 8)
+  const scored = { scoring: cfg.scoring, classification: cfg.classification }
+  return createHash('sha256').update(JSON.stringify(scored)).digest('hex').slice(0, 8)
 }
 
 export type ScoreDeps = {
