@@ -27,6 +27,7 @@
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "yaml": "^2.9.0",
+    "yauzl": "^3.4.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
@@ -34,7 +35,9 @@
     "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^26.2.0",
     "@types/react": "^19.2.18",
+    "@types/yauzl": "^3.4.0",
     "drizzle-kit": "^0.31.10",
+    "fflate": "^0.8.3",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.23.11",
     "typescript": "^7.0.2",

@@ -1,0 +1,32 @@
+{
+  "cik": 1045810,
+  "entityName": "NVIDIA CORP",
+  "facts": {
+    "us-gaap": {
+      "Revenues": {
+        "units": {
+          "USD": [
+            { "start": "2025-02-01", "end": "2025-04-30", "val": 44060000000,
+              "fy": 2026, "fp": "Q1", "form": "10-Q", "filed": "2025-05-28",
+              "accn": "0001045810-25-000123", "frame": "CY2025Q1" },
+            { "start": "2024-01-29", "end": "2025-01-26", "val": 130497000000,
+              "fy": 2025, "fp": "FY", "form": "10-K", "filed": "2025-02-26",
+              "accn": "0001045810-25-000023" }
+          ]
+        }
+      },
+      "SomeUntrackedTag": {
+        "units": { "USD": [
+          { "end": "2025-04-30", "val": 1, "fy": 2026, "fp": "Q1",
+            "form": "10-Q", "filed": "2025-05-28", "accn": "x" } ] }
+      }
+    },
+    "dei": {
+      "EntityCommonStockSharesOutstanding": {
+        "units": { "shares": [
+          { "end": "2025-05-21", "val": 24390000000, "fy": 2026, "fp": "Q1",
+            "form": "10-Q", "filed": "2025-05-28", "accn": "0001045810-25-000123" } ] }
+      }
+    }
+  }
+}
