@@ -110,4 +110,25 @@ describe('selectStaleCiks', () => {
   it('충분히 최신이면 제외한다', () => {
     expect(selectStaleCiks(raw, '2025-04-15', 120)).not.toContain(1045810)
   })
+
+  describe('financial_facts가 전혀 없는 기업 (신규 상장사)', () => {
+    const NEW_LISTING_CIK = 2000000
+
+    beforeAll(() => {
+      raw.prepare(
+        `INSERT INTO companies (cik, ticker, name, is_active, first_seen, last_updated)
+         VALUES (${NEW_LISTING_CIK}, 'NEWCO', 'NEW LISTING CORP', 1, '2026-08-09', '2026-08-09')`,
+      ).run()
+      raw.prepare(
+        `INSERT INTO company_industry (cik, industry_slug, theme_slug, is_primary, source)
+         VALUES (${NEW_LISTING_CIK}, 'ai-infrastructure', 'ai-software-semi', 1, 'override')`,
+      ).run()
+    })
+
+    it('LEFT JOIN이 INNER JOIN으로 퇴행하면 실패한다 — 사실이 0건이어도 지연으로 잡혀야 한다', () => {
+      // financial_facts에 이 CIK 행이 전혀 없으므로 f.latest IS NULL 분기를 탄다.
+      // asOf를 오늘로 줘도(cutoff와 무관하게) 항상 포함되어야 한다.
+      expect(selectStaleCiks(raw, '2026-08-09', 120)).toContain(NEW_LISTING_CIK)
+    })
+  })
 })

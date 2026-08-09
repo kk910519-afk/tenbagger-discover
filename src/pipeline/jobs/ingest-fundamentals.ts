@@ -43,18 +43,31 @@ export async function ingestFundamentals(deps: FundamentalsDeps): Promise<JobSta
     const stale = selectStaleCiks(raw, asOf, INCREMENTAL_STALE_DAYS)
     let apiFacts = 0
     let apiFailed = 0
+    const apiFailedCiks: string[] = []
     for (const cik of stale) {
       try {
         apiFacts += insertFacts(raw, await companyFacts.fetchCompany(cik))
       } catch {
         apiFailed++
+        apiFailedCiks.push(String(cik))
       }
     }
 
+    // 회사 하나의 정규화가 실패해도(잘못된 사실 조합 등) 이미 받아온 벌크/API
+    // 데이터 전체를 버리지 않는다 — 나머지 회사는 계속 recompute한다.
     let normalized = 0
     let noData = 0
+    let normalizeFailed = 0
+    const normalizeFailedCiks: string[] = []
     for (const cik of ciks) {
-      const result = normalizeFacts(getFacts(raw, cik))
+      let result
+      try {
+        result = normalizeFacts(getFacts(raw, cik))
+      } catch {
+        normalizeFailed++
+        normalizeFailedCiks.push(String(cik))
+        continue
+      }
       if (result.quarterly.length === 0 && result.annual.length === 0) { noData++; continue }
       replaceFinancials(raw, cik, result)
       normalized++
@@ -68,8 +81,11 @@ export async function ingestFundamentals(deps: FundamentalsDeps): Promise<JobSta
       staleCompanies: stale.length,
       apiFacts,
       apiFailed,
+      apiFailedCiks,
       normalized,
       noData,
+      normalizeFailed,
+      normalizeFailedCiks,
       quarterErrors,
     }
   })
