@@ -15,7 +15,15 @@ export async function runJob(
     finishJob(raw, id, 'succeeded', stats, null)
     return stats
   } catch (e) {
-    finishJob(raw, id, 'failed', null, e instanceof Error ? e.stack ?? e.message : String(e))
+    // The original error `e` is the one that matters — it's what actually broke the
+    // job. Recording it in job_runs is best-effort: if finishJob itself throws (e.g.
+    // SQLITE_BUSY, a locked db, a disk error), that secondary failure must not replace
+    // `e`. Swallow it (logged, not silent) and rethrow the original regardless.
+    try {
+      finishJob(raw, id, 'failed', null, e instanceof Error ? e.stack ?? e.message : String(e))
+    } catch (finishError) {
+      console.error(`runJob: job "${name}" failed and finishJob() also failed while recording it`, finishError)
+    }
     throw e
   }
 }

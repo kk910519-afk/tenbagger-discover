@@ -59,9 +59,18 @@ export async function ingestUniverse(deps: UniverseDeps): Promise<JobStats> {
     const candidates = tickerMap.filter((t) => eligible.has(t.ticker.toUpperCase()))
 
     let classified = 0
-    let skippedUnmappedSic = 0
+    // Deliberate config exclusion (cfg.universe.exclude_sic) vs. a genuine taxonomy
+    // miss (classify() found no mapping) are different situations with different
+    // remediation — one means the config is working, the other means the taxonomy
+    // needs a new entry. Keep them as separate counters so neither masks the other.
+    let skippedExcludedSic = 0
+    let skippedUnclassifiable = 0
     let skippedNotOperating = 0
-    let failedLookups = 0
+    // A thrown fetchCompany() is transient (network/rate-limit, worth retrying); a
+    // null return is permanent (SEC has no record for that CIK). Different causes,
+    // different remediation — kept as separate counters.
+    let failedLookupErrors = 0
+    let failedLookupNotFound = 0
     let overrideCount = 0
     let sicBucketCount = 0
     const unmappedSicsSeen = new Set<string>()
@@ -71,11 +80,11 @@ export async function ingestUniverse(deps: UniverseDeps): Promise<JobStats> {
       try {
         ref = await reference.fetchCompany(t.cik)
       } catch {
-        failedLookups++
+        failedLookupErrors++
         continue
       }
       if (!ref) {
-        failedLookups++
+        failedLookupNotFound++
         continue
       }
       if (ref.entityType !== null && ref.entityType !== 'operating') {
@@ -83,13 +92,13 @@ export async function ingestUniverse(deps: UniverseDeps): Promise<JobStats> {
         continue
       }
       if (ref.sic && cfg.universe.exclude_sic.includes(ref.sic)) {
-        skippedUnmappedSic++
+        skippedExcludedSic++
         continue
       }
 
       const cls = taxonomy.classify(ref.sic ?? '', t.ticker)
       if (!cls) {
-        skippedUnmappedSic++
+        skippedUnclassifiable++
         if (ref.sic && !taxonomy.unmappedSics.has(ref.sic)) unmappedSicsSeen.add(ref.sic)
         continue
       }
@@ -124,9 +133,11 @@ export async function ingestUniverse(deps: UniverseDeps): Promise<JobStats> {
       afterListingFilter: eligible.size,
       matchedCik: candidates.length,
       classified,
-      skippedUnmappedSic,
+      skippedExcludedSic,
+      skippedUnclassifiable,
       skippedNotOperating,
-      failedLookups,
+      failedLookupErrors,
+      failedLookupNotFound,
       overrideCount,
       sicBucketCount,
       unmappedSicsSeen: [...unmappedSicsSeen].sort(),
