@@ -16,6 +16,10 @@ export function indexFacts(facts: RawFact[]): FactIndex {
   for (const f of facts) {
     const key = `${f.qtrs}|${f.periodEnd}|${f.tag}`
     const prev = chosenAt.get(key)
+    // When two facts have identical filedDate, the first encountered wins.
+    // This is deterministic only if upstream RawFact[] ordering is stable.
+    // On a tie, preferring first-encountered is acceptable because both report
+    // the same value on the same filing date (no new information).
     if (prev !== undefined && prev >= f.filedDate) continue
     chosenAt.set(key, f.filedDate)
 
@@ -150,6 +154,12 @@ export function resolveStock(
       used.cash = 'CashAndCashEquivalentsAtCarryingValue'
     }
   }
+  // When only ShortTermInvestments is present without CashAndCashEquivalentsAtCarryingValue,
+  // cash remains null. Short-term investments alone is anomalous (data quality issue),
+  // and treating investments as "cash" would overstate liquidity — exactly the distressed-company
+  // red flag this product needs to surface. This is intentional; use a comment to avoid
+  // "fixing" it by accident.
+  // See test: 단기투자자산만 있고 현금성자산이 없으면 null
 
   let totalDebt: number | null = null
   const ltNon = tags.get('LongTermDebtNoncurrent')

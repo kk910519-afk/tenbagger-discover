@@ -30,6 +30,14 @@ describe('indexFacts', () => {
     ])
     expect(idx.duration.get(1)!.get('2025-03-31')!.get('Revenues')).toBe(111)
   })
+
+  it('같은 filedDate일 때 먼저 만난 값을 쓴다', () => {
+    const idx = indexFacts([
+      fact({ value: 100, filedDate: '2025-05-01' }),
+      fact({ value: 222, filedDate: '2025-05-01' }),
+    ])
+    expect(idx.duration.get(1)!.get('2025-03-31')!.get('Revenues')).toBe(100)
+  })
 })
 
 describe('resolveFlow', () => {
@@ -80,6 +88,136 @@ describe('resolveFlow', () => {
     ]))
     expect(r.fields.ocf).toBe(77)
   })
+
+  it('매출 폴백 체인: Revenues > SalesRevenueNet (위치 2 vs 3)', () => {
+    const r = resolveFlow(new Map([
+      ['Revenues', 400],
+      ['SalesRevenueNet', 300],
+    ]))
+    expect(r.fields.revenue).toBe(400)
+    expect(r.used.revenue).toBe('Revenues')
+  })
+
+  it('매출 폴백 체인: SalesRevenueNet > RevenueFromContractWithCustomerIncludingAssessedTax (위치 3 vs 4)', () => {
+    const r = resolveFlow(new Map([
+      ['SalesRevenueNet', 300],
+      ['RevenueFromContractWithCustomerIncludingAssessedTax', 250],
+    ]))
+    expect(r.fields.revenue).toBe(300)
+    expect(r.used.revenue).toBe('SalesRevenueNet')
+  })
+
+  it('매출원가 폴백: CostOfRevenue > CostOfGoodsAndServicesSold', () => {
+    const r = resolveFlow(new Map([
+      ['Revenues', 1000],
+      ['CostOfRevenue', 400],
+      ['CostOfGoodsAndServicesSold', 350],
+    ]))
+    expect(r.fields.grossProfit).toBe(600)
+    expect(r.used.grossProfit).toBe('Revenues-CostOfRevenue')
+  })
+
+  it('영업활동현금흐름 폴백: NetCashProvidedByUsedInOperatingActivities 1순위', () => {
+    const r = resolveFlow(new Map([
+      ['NetCashProvidedByUsedInOperatingActivities', 100],
+      ['NetCashProvidedByUsedInOperatingActivitiesContinuingOperations', 77],
+    ]))
+    expect(r.fields.ocf).toBe(100)
+    expect(r.used.ocf).toBe('NetCashProvidedByUsedInOperatingActivities')
+  })
+
+  it('자본지출 폴백: PaymentsToAcquirePropertyPlantAndEquipment 1순위', () => {
+    const r = resolveFlow(new Map([
+      ['PaymentsToAcquirePropertyPlantAndEquipment', 200],
+      ['PaymentsToAcquireProductiveAssets', 150],
+    ]))
+    expect(r.fields.capex).toBe(200)
+    expect(r.used.capex).toBe('PaymentsToAcquirePropertyPlantAndEquipment')
+  })
+
+  it('자본지출: 첫 번째 태그만 있을 때', () => {
+    const r = resolveFlow(new Map([
+      ['PaymentsToAcquirePropertyPlantAndEquipment', 200],
+    ]))
+    expect(r.fields.capex).toBe(200)
+    expect(r.used.capex).toBe('PaymentsToAcquirePropertyPlantAndEquipment')
+  })
+
+  it('영업이익 태그를 읽는다', () => {
+    const r = resolveFlow(new Map([
+      ['OperatingIncomeLoss', 500],
+    ]))
+    expect(r.fields.operatingIncome).toBe(500)
+    expect(r.used.operatingIncome).toBe('OperatingIncomeLoss')
+  })
+
+  it('순이익 태그를 읽는다', () => {
+    const r = resolveFlow(new Map([
+      ['NetIncomeLoss', 300],
+    ]))
+    expect(r.fields.netIncome).toBe(300)
+    expect(r.used.netIncome).toBe('NetIncomeLoss')
+  })
+
+  it('주식기반보상 태그를 읽는다', () => {
+    const r = resolveFlow(new Map([
+      ['ShareBasedCompensation', 50],
+    ]))
+    expect(r.fields.sbc).toBe(50)
+    expect(r.used.sbc).toBe('ShareBasedCompensation')
+  })
+
+  it('연구개발비 태그를 읽는다', () => {
+    const r = resolveFlow(new Map([
+      ['ResearchAndDevelopmentExpense', 100],
+    ]))
+    expect(r.fields.rdExpense).toBe(100)
+    expect(r.used.rdExpense).toBe('ResearchAndDevelopmentExpense')
+  })
+
+  it('희석주식수 태그를 읽는다', () => {
+    const r = resolveFlow(new Map([
+      ['WeightedAverageNumberOfDilutedSharesOutstanding', 5000000],
+    ]))
+    expect(r.fields.sharesDiluted).toBe(5000000)
+    expect(r.used.sharesDiluted).toBe('WeightedAverageNumberOfDilutedSharesOutstanding')
+  })
+
+  it('영업이익이 없으면 null', () => {
+    const r = resolveFlow(new Map())
+    expect(r.fields.operatingIncome).toBeNull()
+    expect(r.used.operatingIncome).toBeUndefined()
+  })
+
+  it('순이익이 없으면 null', () => {
+    const r = resolveFlow(new Map())
+    expect(r.fields.netIncome).toBeNull()
+    expect(r.used.netIncome).toBeUndefined()
+  })
+
+  it('자본지출이 없으면 null', () => {
+    const r = resolveFlow(new Map())
+    expect(r.fields.capex).toBeNull()
+    expect(r.used.capex).toBeUndefined()
+  })
+
+  it('주식기반보상이 없으면 null', () => {
+    const r = resolveFlow(new Map())
+    expect(r.fields.sbc).toBeNull()
+    expect(r.used.sbc).toBeUndefined()
+  })
+
+  it('연구개발비가 없으면 null', () => {
+    const r = resolveFlow(new Map())
+    expect(r.fields.rdExpense).toBeNull()
+    expect(r.used.rdExpense).toBeUndefined()
+  })
+
+  it('희석주식수가 없으면 null', () => {
+    const r = resolveFlow(new Map())
+    expect(r.fields.sharesDiluted).toBeNull()
+    expect(r.used.sharesDiluted).toBeUndefined()
+  })
 })
 
 describe('resolveStock', () => {
@@ -122,5 +260,25 @@ describe('resolveStock', () => {
     ]))
     expect(r.fields.equity).toBe(5000)
     expect(r.fields.sharesOutstanding).toBe(24000000)
+  })
+
+  it('단기투자자산만 있고 현금성자산이 없으면 null — 데이터 이상 보호', () => {
+    const r = resolveStock(new Map([
+      ['ShortTermInvestments', 50],
+    ]))
+    expect(r.fields.cash).toBeNull()
+    expect(r.used.cash).toBeUndefined()
+  })
+
+  it('자본이 없으면 null', () => {
+    const r = resolveStock(new Map())
+    expect(r.fields.equity).toBeNull()
+    expect(r.used.equity).toBeUndefined()
+  })
+
+  it('발행주식수가 없으면 null', () => {
+    const r = resolveStock(new Map())
+    expect(r.fields.sharesOutstanding).toBeNull()
+    expect(r.used.sharesOutstanding).toBeUndefined()
   })
 })
