@@ -1,0 +1,49 @@
+{
+  "name": "tenbagger-discovery-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "description": "",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:migrate": "tsx src/db/migrate.ts",
+    "pipeline:universe": "tsx src/pipeline/runner.ts universe",
+    "pipeline:fundamentals": "tsx src/pipeline/runner.ts fundamentals",
+    "pipeline:prices": "tsx src/pipeline/runner.ts prices",
+    "pipeline:scores": "tsx src/pipeline/runner.ts scores",
+    "pipeline:all": "tsx src/pipeline/runner.ts all"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "better-sqlite3": "^13.0.3",
+    "drizzle-orm": "^0.45.2",
+    "next": "^15.5.23",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "yaml": "^2.9.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.3",
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^26.2.0",
+    "@types/react": "^19.2.18",
+    "drizzle-kit": "^0.31.10",
+    "tailwindcss": "^4.3.3",
+    "tsx": "^4.23.11",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  },
+  "allowScripts": {
+    "esbuild@0.18.20": true,
+    "esbuild@0.25.12": true,
+    "esbuild@0.28.2": true,
+    "better-sqlite3": false
+  }
+}
