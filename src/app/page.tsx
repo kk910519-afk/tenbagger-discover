@@ -1,10 +1,12 @@
 import { getRawDb } from '@/db/client'
 import { loadConfig } from '@/config'
 import { getOpportunityMap, type IndustryRow, type ThemeBlock } from './_queries/map'
+import { getTopCandidates, type TopCandidate } from './_queries/top-candidates'
 import { formatUsd, formatPct, formatScore } from './_lib/format'
 import { Value, SignedValue } from './_components/Value'
 import { Badge } from './_components/Badge'
 import { ScoreBar } from './_components/ScoreBar'
+import { TopCandidates } from './_components/TopCandidates'
 
 export const dynamic = 'force-dynamic'
 
@@ -12,8 +14,10 @@ export default function Home() {
   const cfg = loadConfig()
   const raw = getRawDb()
   let themes: ThemeBlock[]
+  let topCandidates: TopCandidate[]
   try {
     themes = getOpportunityMap(raw, cfg.scoring.min_completeness)
+    topCandidates = getTopCandidates(raw, cfg.scoring.min_completeness, 5)
   } finally {
     raw.close()
   }
@@ -23,6 +27,8 @@ export default function Home() {
     0,
   )
 
+  // 유니버스 자체가 비어 있는 경우(파이프라인 미실행)는 헤드라인 블록도 렌더링할
+  // 데이터가 없다 — 빈 표 껍데기 대신 기존 설치 안내를 그대로 유지한다.
   if (total === 0) {
     return (
       <div className="max-w-lg">
@@ -39,6 +45,22 @@ export default function Home() {
 
   return (
     <div className="space-y-10">
+      <section>
+        <h2 className="text-xl font-medium tracking-tight">Top 5 · Universe-Wide</h2>
+        <p className="mt-1 text-xs text-[var(--color-text-dim)]">
+          Theme·Industry 경계와 무관하게 점수가 가장 높은 후보 5곳
+        </p>
+        {topCandidates.length === 0 ? (
+          <p className="mt-3 text-xs text-[var(--color-text-faint)]">
+            데이터 완전성 기준({formatPct(cfg.scoring.min_completeness, 0)})을 통과한 후보가 아직 없습니다.
+          </p>
+        ) : (
+          <div className="mt-3">
+            <TopCandidates candidates={topCandidates} />
+          </div>
+        )}
+      </section>
+
       <div>
         <h1 className="text-xl font-medium tracking-tight">Growth Opportunity Map</h1>
         <p className="mt-1 text-xs text-[var(--color-text-dim)]">

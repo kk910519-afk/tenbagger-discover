@@ -1,5 +1,6 @@
 import type { FactorView } from '../_queries/stock'
 import { formatPct, formatUsd } from '../_lib/format'
+import { factorsByFillRatio } from '../_lib/strengths'
 import { ScoreBar } from './ScoreBar'
 import { Badge } from './Badge'
 
@@ -111,10 +112,7 @@ export function FactorBreakdown({ factors }: { factors: FactorView[] }) {
  * 계산되지 않은 팩터(NO_DATA/NOT_IMPLEMENTED)는 비교 대상이 아니므로 제외한다.
  */
 export function StrengthWeakness({ factors }: { factors: FactorView[] }) {
-  const scored = factors
-    .filter((f) => f.status === 'SCORED' && f.points !== null && f.weight > 0)
-    .map((f) => ({ ...f, fill: f.points! / f.weight }))
-    .sort((a, b) => b.fill - a.fill)
+  const scored = factorsByFillRatio(factors)
 
   if (scored.length === 0) return null
   const top = scored.slice(0, 3)
