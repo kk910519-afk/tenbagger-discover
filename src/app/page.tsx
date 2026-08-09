@@ -1,5 +1,5 @@
 import { getRawDb } from '@/db/client'
-import { getOpportunityMap, type IndustryRow } from './_queries/map'
+import { getOpportunityMap, type IndustryRow, type ThemeBlock } from './_queries/map'
 import { formatUsd, formatPct, formatScore } from './_lib/format'
 import { Value, SignedValue } from './_components/Value'
 import { Badge } from './_components/Badge'
@@ -9,8 +9,12 @@ export const dynamic = 'force-dynamic'
 
 export default function Home() {
   const raw = getRawDb()
-  const themes = getOpportunityMap(raw)
-  raw.close()
+  let themes: ThemeBlock[]
+  try {
+    themes = getOpportunityMap(raw)
+  } finally {
+    raw.close()
+  }
 
   const total = themes.reduce(
     (sum, t) => sum + t.industries.reduce((n, i) => n + i.candidateCount, 0),

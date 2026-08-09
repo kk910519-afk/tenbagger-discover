@@ -55,7 +55,7 @@ function loadCompanies(raw: Database.Database): CompanyRow[] {
                   AND r.severity = 'CRITICAL') AS criticalCount
        FROM companies c
        JOIN company_industry ci ON ci.cik = c.cik
-       JOIN latest_scores s ON s.cik = c.cik
+       LEFT JOIN latest_scores s ON s.cik = c.cik
        WHERE c.is_active = 1`,
     )
     .all() as CompanyRow[]
