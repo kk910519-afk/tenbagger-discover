@@ -148,6 +148,39 @@ describe('competitiveAdvantageFactor', () => {
     expect(r.raw).toBeCloseTo(0.925, 5)
     expect(r.detail).toContain('4개 중 1개')
   })
+
+  it('산업 후보가 min_industry_candidates 미만이면 산업 대비 마진 신호를 제외한다', () => {
+    // 후보 수 부족한 산업의 중앙값은 무의미하므로 신호 자체를 계산에서 뺀다 —
+    // 3-of-4 평균이어야 하고, 이는 같은 회사가 후보가 충분한 산업에 속했을 때의
+    // 4-of-4 점수와 달라야 한다 (억제되지 않으면 회귀 테스트가 이를 잡아낸다).
+    const ttm = [fp('2025-03-31', {
+      revenue: 1000, grossProfit: 800, operatingIncome: 400,
+      totalDebt: 500, equity: 2000, cash: 500, rdExpense: 200,
+    })]
+    const quarterly = stableQuarters(0.80)
+
+    const smallIndustry = competitiveAdvantageFactor(
+      ctx({
+        ttm, quarterly,
+        industryStats: {
+          candidateCount: 2, medianGrossMargin: 0.60,
+          medianRevenueGrowth: 0.18, distributions: {},
+        },
+      }),
+    )
+    expect(smallIndustry.status).toBe('SCORED')
+    expect(smallIndustry.detail).toContain('4개 중 3개')
+    expect(smallIndustry.detail).not.toContain('산업 대비 마진')
+    // ROIC 0.645 · 마진 안정성 1.00 · R&D 0.925 (산업 대비 마진 신호 제외) → 평균 0.856667
+    expect(smallIndustry.points!).toBeCloseTo(8.566667, 5)
+    expect(smallIndustry.raw).toBeCloseTo(0.856667, 5)
+
+    // 동일 회사가 후보 5개(min_industry_candidates=3 충족) 산업에 속하면
+    // 산업 대비 마진 신호(0.9333)까지 포함한 4-of-4 평균 → 8.758333점
+    const largeIndustry = competitiveAdvantageFactor(ctx({ ttm, quarterly }))
+    expect(largeIndustry.points!).toBeCloseTo(8.758333, 5)
+    expect(smallIndustry.points).not.toBe(largeIndustry.points)
+  })
 })
 
 describe('balanceSheetFactor', () => {
