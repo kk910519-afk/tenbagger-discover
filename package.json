@@ -11,11 +11,11 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "db:migrate": "tsx src/db/migrate.ts",
-    "pipeline:universe": "tsx src/pipeline/runner.ts universe",
-    "pipeline:fundamentals": "tsx src/pipeline/runner.ts fundamentals",
-    "pipeline:prices": "tsx src/pipeline/runner.ts prices",
-    "pipeline:scores": "tsx src/pipeline/runner.ts scores",
-    "pipeline:all": "tsx src/pipeline/runner.ts all"
+    "pipeline:universe": "tsx src/pipeline/cli.ts universe",
+    "pipeline:fundamentals": "tsx src/pipeline/cli.ts fundamentals",
+    "pipeline:prices": "tsx src/pipeline/cli.ts prices",
+    "pipeline:scores": "tsx src/pipeline/cli.ts scores",
+    "pipeline:all": "tsx src/pipeline/cli.ts all"
   },
   "keywords": [],
   "author": "",
