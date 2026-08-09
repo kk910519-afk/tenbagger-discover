@@ -113,4 +113,21 @@ describe('buildSnapshots', () => {
   it('asOf를 전파한다', () => {
     expect(snaps[0]!.asOf).toBe('2026-08-09')
   })
+
+  it('taxonomy에 없는 industry_slug를 만나면 에러를 던진다', () => {
+    const db = getRawDb(join(mkdtempSync(join(tmpdir(), 'tb-snap-bad-')), 's.db'))
+    runMigrations(db)
+    db.prepare(
+      `INSERT INTO companies (cik, ticker, name, sic, is_active, first_seen, last_updated)
+       VALUES (99, 'ZZZ', 'ZZZ Inc', '3674', 1, '2026-08-09', '2026-08-09')`,
+    ).run()
+    db.prepare(
+      `INSERT INTO company_industry (cik, industry_slug, theme_slug, is_primary, source)
+       VALUES (99, 'nonexistent-slug', 'ai-software-semi', 1, 'sic')`,
+    ).run()
+
+    expect(() => buildSnapshots({ raw: db, taxonomy, cfg, asOf: '2026-08-09' })).toThrow(
+      /ZZZ.*nonexistent-slug/,
+    )
+  })
 })

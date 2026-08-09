@@ -55,7 +55,13 @@ export function buildSnapshots(deps: SnapshotDeps): CompanySnapshot[] {
   const partial: CompanySnapshot[] = []
   for (const r of rows) {
     const industry = taxonomy.industries.get(r.industrySlug)
-    if (!industry) continue // taxonomy 로더가 무결성을 검증하므로 정상 경로에서는 발생하지 않는다
+    if (!industry) {
+      throw new Error(
+        `buildSnapshots: CIK ${r.cik} (${r.ticker})의 industry_slug "${r.industrySlug}"가 ` +
+          `taxonomy에 없습니다. 마지막 유니버스 수집 이후 taxonomy가 변경된 것으로 보입니다. ` +
+          `npm run pipeline:universe를 다시 실행하세요.`,
+      )
+    }
 
     const fin = getFinancialsFor(raw, r.cik)
     const market = getLatestMarketData(raw, r.cik)
