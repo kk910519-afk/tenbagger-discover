@@ -31,13 +31,37 @@ function daysBetween(a: string, b: string): number {
   return Math.abs(Date.parse(a) - Date.parse(b)) / DAY_MS
 }
 
-/** asOf 이전(포함) 중 가장 최근 시점 값 */
+// 시점(instant) 값 조회 시 태그마다 별도로 "asOf 이전 최근값"을 찾되, 너무 오래된
+// 값은 버린다. 재무상태표 항목(현금/부채/자본)은 항상 회계기간 종료일에 찍히지만
+// 표지 발행주식수(EntityCommonStockSharesOutstanding)는 그 신고서 제출일 근처의
+// 별도 날짜에 찍힌다 — 두 항목이 같은 날짜를 공유한다고 가정하면 발행주식수가
+// 통째로 사라진다(실측: 1,086개사 중 847개사 miss). 태그별 최근값을 독립적으로
+// 찾아야 한다.
+//
+// 다만 무제한으로 과거를 뒤지면 수년 전 폐지/재상장 등으로 남은 낡은 값이 전혀
+// 무관한 최근 기간에 되살아날 수 있다. 이 파일은 이미 Q4 유도에 "400일" 창을
+// 회계연도 상한으로 쓰고 있으므로(Q4_LOOKBACK_DAYS) 같은 상수를 시점 조회의
+// 최대 소급 기간으로도 재사용한다: 분기 신고 주기(~90일)를 감안하면 최대 한 번의
+// 누락된 분기 신고까지는 메워주면서, 그보다 오래된 값은 null로 남겨 이전에 고쳤던
+// "결측을 0/구식값으로 채우지 않는다" 원칙을 지킨다.
+const INSTANT_STALENESS_LIMIT_DAYS = Q4_LOOKBACK_DAYS
+
+/** asOf 이전(포함) 중, 태그별로 가장 최근 시점 값을 독립적으로 찾는다. */
 function pickInstant(idx: FactIndex, asOf: string): Map<string, number> {
-  let best: string | null = null
-  for (const d of idx.instant.keys()) {
-    if (d <= asOf && (best === null || d > best)) best = d
+  const result = new Map<string, number>()
+  const bestDateOf = new Map<string, string>()
+  for (const [date, tags] of idx.instant) {
+    if (date > asOf) continue
+    if (daysBetween(date, asOf) > INSTANT_STALENESS_LIMIT_DAYS) continue
+    for (const [tag, value] of tags) {
+      const bestDate = bestDateOf.get(tag)
+      if (bestDate === undefined || date > bestDate) {
+        bestDateOf.set(tag, date)
+        result.set(tag, value)
+      }
+    }
   }
-  return best === null ? new Map() : idx.instant.get(best)!
+  return result
 }
 
 function fcfOf(ocf: number | null, capex: number | null): number | null {

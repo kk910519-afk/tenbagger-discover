@@ -193,6 +193,60 @@ describe('normalizeFacts — TTM 안전장치 (회귀)', () => {
   })
 })
 
+describe('normalizeFacts — 시점 태그별 독립 해석 (NVIDIA 발행주식수 버그 재현)', () => {
+  // NVIDIA 실사례: 재무상태표(현금/부채/자본)는 회계기간 종료일에 찍히지만,
+  // 표지(cover page) 발행주식수는 그 신고서의 제출일 근처 별도 날짜에 찍힌다.
+  // 분기 종료일과 정확히 같은 날짜에 발행주식수가 없으면(거의 항상 그렇다)
+  // "하나의 날짜를 골라 그 날짜의 맵을 통째로 쓰는" 방식은 발행주식수를 잃는다.
+  const facts = [
+    ...fourQuarters('Revenues', [100, 110, 130, 160]),
+    f('CashAndCashEquivalentsAtCarryingValue', 0, '2025-03-31', 1200),
+    f('StockholdersEquity', 0, '2025-03-31', 5000),
+    // 발행주식수는 분기 종료일(2025-03-31)이 아니라 그 이전 표지 제출일에 찍힌다.
+    f('EntityCommonStockSharesOutstanding', 0, '2024-11-14', 900),
+    f('EntityCommonStockSharesOutstanding', 0, '2025-02-20', 950),
+    // 미래 시점 값 — asOf(2025-03-31)보다 나중이므로 과거로 새어 들어오면 안 된다.
+    f('EntityCommonStockSharesOutstanding', 0, '2025-05-15', 980),
+  ]
+  const r = normalizeFacts(facts)
+
+  it('재무상태표 값(현금/자본)은 종료일 그대로 해석된다', () => {
+    const q = r.quarterly.find((q) => q.periodEnd === '2025-03-31')!
+    expect(q.cash).toBe(1200)
+    expect(q.equity).toBe(5000)
+  })
+
+  it('발행주식수는 같은 날짜가 아니어도 그 태그의 최근값을 독립적으로 찾는다', () => {
+    const q = r.quarterly.find((q) => q.periodEnd === '2025-03-31')!
+    expect(q.sharesOutstanding).toBe(950)
+  })
+
+  it('종료일 이후의 발행주식수 값은 과거로 새어 들어오지 않는다', () => {
+    const q = r.quarterly.find((q) => q.periodEnd === '2025-03-31')!
+    expect(q.sharesOutstanding).not.toBe(980)
+  })
+
+  it('TTM 행도 anchor 분기에서 복사되어 발행주식수를 채운다', () => {
+    expect(r.ttm[0]!.periodEnd).toBe('2025-03-31')
+    expect(r.ttm[0]!.sharesOutstanding).toBe(950)
+  })
+})
+
+describe('normalizeFacts — 시점 값 조회 기간 제한 (staleness bound)', () => {
+  it('제한(400일)보다 오래된 값은 쓰지 않고 null로 남긴다', () => {
+    const facts = [
+      ...fourQuarters('Revenues', [100, 110, 130, 160]),
+      f('CashAndCashEquivalentsAtCarryingValue', 0, '2025-03-31', 1200),
+      // 마지막 발행주식수 신고가 목표일보다 500일 이상 전 — 너무 오래돼서 쓰지 않는다.
+      f('EntityCommonStockSharesOutstanding', 0, '2023-11-01', 700),
+    ]
+    const r = normalizeFacts(facts)
+    const q = r.quarterly.find((q) => q.periodEnd === '2025-03-31')!
+    expect(q.cash).toBe(1200)
+    expect(q.sharesOutstanding).toBeNull()
+  })
+})
+
 describe('normalizeFacts — 연간 및 출처 기록', () => {
   it('연간 기간을 최근순으로 만든다', () => {
     const r = normalizeFacts([
