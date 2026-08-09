@@ -19,20 +19,30 @@
   --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
 }
 
-html, body {
-  background: var(--color-bg);
-  color: var(--color-text);
-}
-
-/* 숫자는 항상 자릿수가 정렬되어야 비교가 가능하다 */
+/* 숫자는 항상 자릿수가 정렬되어야 비교가 가능하다 — 다른 유틸리티에 덮이면
+   안 되므로 의도적으로 레이어 밖에 둔다. */
 .num {
   font-variant-numeric: tabular-nums;
   font-family: var(--font-mono);
 }
 
-table { border-collapse: collapse; }
-th { font-weight: 500; color: var(--color-text-dim); text-align: left; }
-th, td { padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--color-border); }
-tbody tr:hover { background: var(--color-surface-2); }
-a { color: inherit; text-decoration: none; }
-a:hover { text-decoration: underline; }
+/*
+ * Tailwind v4는 자기 유틸리티를 전부 @layer utilities 안에 넣는다. 레이어가
+ * 없는(unlayered) CSS는 명시도(specificity)와 무관하게 항상 레이어가 있는
+ * CSS를 이긴다 — 그래서 아래 규칙들이 레이어 밖에 있으면 th.text-right 같은
+ * Tailwind 유틸리티가 절대 못 이긴다. @layer base로 감싸서 utilities 레이어보다
+ * 낮은 우선순위를 갖게 한다.
+ */
+@layer base {
+  html, body {
+    background: var(--color-bg);
+    color: var(--color-text);
+  }
+
+  table { border-collapse: collapse; }
+  th { font-weight: 500; color: var(--color-text-dim); text-align: left; }
+  th, td { padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--color-border); }
+  tbody tr:hover { background: var(--color-surface-2); }
+  a { color: inherit; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+}

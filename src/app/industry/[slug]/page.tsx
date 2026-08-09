@@ -3,6 +3,7 @@ import { getRawDb } from '@/db/client'
 import { loadConfig } from '@/config'
 import { getIndustryView, type IndustryView } from '@/app/_queries/industry'
 import { CandidateTable } from '@/app/_components/CandidateTable'
+import { ColumnLegend } from '@/app/_components/ColumnLegend'
 
 export const dynamic = 'force-dynamic'
 
@@ -44,6 +45,8 @@ export default async function IndustryPage({
         <p className="text-xs text-[var(--color-text-dim)]">{view.themeName}</p>
         <h1 className="text-lg font-medium tracking-tight">{view.name}</h1>
       </div>
+
+      <ColumnLegend />
 
       {view.groups.map((g) => {
         const key = g.category ?? 'UNSCORED'
