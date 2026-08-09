@@ -1,7 +1,8 @@
-import { describe, it, expect } from 'vitest'
-import { mkdtempSync } from 'node:fs'
+import { describe, it, expect, vi } from 'vitest'
+import { mkdtempSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import * as fs from 'node:fs'
 import { createHttpClient } from '@/providers/http/client'
 
 function tmpCache() {
@@ -183,7 +184,7 @@ describe('createHttpClient', () => {
     expect(binFiles.length).toBeGreaterThan(0)
   })
 
-  it('여러 요청의 cache 쓰기 후 .tmp 파일이 남지 않는다', async () => {
+  it('여러 요청의 cache 쓰기는 .tmp 파일을 남기지 않는다', async () => {
     const cacheDir = tmpCache()
     const client = createHttpClient({
       userAgent: 'x',
@@ -197,11 +198,10 @@ describe('createHttpClient', () => {
     await client.getText('https://example.com/2', { cache: true })
     await client.getText('https://example.com/3', { cache: true })
 
-    // 모든 쓰기가 완료된 후 .tmp 파일이 없어야 함
-    const fs = require('node:fs')
-    const files = fs.readdirSync(cacheDir)
-    const tmpFiles = files.filter((f: string) => f.endsWith('.tmp'))
-    const binFiles = files.filter((f: string) => f.endsWith('.bin'))
+    // 모든 쓰기 후 .tmp 파일이 없어야 함 (원자적 rename 검증)
+    const files = readdirSync(cacheDir)
+    const tmpFiles = files.filter((f) => f.endsWith('.tmp'))
+    const binFiles = files.filter((f) => f.endsWith('.bin'))
     expect(tmpFiles).toHaveLength(0)
     expect(binFiles).toHaveLength(3)
   })
