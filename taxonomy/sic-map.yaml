@@ -80,6 +80,33 @@ map:
   "3711": { theme: emerging-tech, industry: autonomous-driving }
   "3714": { theme: emerging-tech, industry: autonomous-driving }
 
+  # --- 2026-08-09 SIC 커버리지 확장 (job_runs.unmappedSicsSeen 223개 처리) ---
+  # 설명 출처: SEC "Standard Industrial Classification (SIC) Code List"
+  # (https://www.sec.gov/search-filings/standard-industrial-classification-sic-code-list),
+  # 페이지에 없는 5개 코드(3564/3600/5172/6200/7330)는 data.sec.gov submissions API의
+  # sicDescription으로 보완 — 자세한 내용은 sic-expansion-report.md 참고.
+  "1400": { theme: emerging-tech, industry: advanced-materials }  # MINING & QUARRYING OF NONMETALLIC MINERALS (NO FUELS)
+  "2800": { theme: emerging-tech, industry: advanced-materials }  # CHEMICALS & ALLIED PRODUCTS
+  "2890": { theme: emerging-tech, industry: advanced-materials }  # MISCELLANEOUS CHEMICAL PRODUCTS
+  "3510": { theme: energy-next, industry: grid-infrastructure }  # ENGINES & TURBINES
+  "3560": { theme: industrial-automation-defense, industry: industrial-automation }  # GENERAL INDUSTRIAL MACHINERY & EQUIPMENT
+  "3569": { theme: industrial-automation-defense, industry: robotics }  # GENERAL INDUSTRIAL MACHINERY & EQUIPMENT, NEC
+  "3590": { theme: energy-next, industry: next-generation-energy }  # MISC INDUSTRIAL & COMMERCIAL MACHINERY & EQUIPMENT
+  "3613": { theme: energy-next, industry: grid-infrastructure }  # SWITCHGEAR & SWITCHBOARD APPARATUS
+  "3620": { theme: energy-next, industry: next-generation-energy }  # ELECTRICAL INDUSTRIAL APPARATUS
+  "3670": { theme: ai-software-semi, industry: semiconductors }  # ELECTRONIC COMPONENTS & ACCESSORIES
+  "3677": { theme: ai-software-semi, industry: semiconductors }  # ELECTRONIC COILS, TRANSFORMERS & OTHER INDUCTORS
+  "3678": { theme: ai-software-semi, industry: semiconductors }  # ELECTRONIC CONNECTORS
+  "3825": { theme: ai-software-semi, industry: semiconductor-equipment }  # INSTRUMENTS FOR MEAS & TESTING OF ELECTRICITY & ELEC SIGNALS
+  "3851": { theme: healthcare-biotech, industry: medical-devices }  # OPHTHALMIC GOODS
+  "4700": { theme: digital-consumer-fintech, industry: travel-technology }  # TRANSPORTATION SERVICES
+  "4822": { theme: digital-consumer-fintech, industry: digital-media }  # TELEGRAPH & OTHER MESSAGE COMMUNICATIONS
+  "4899": { theme: emerging-tech, industry: satellite }  # COMMUNICATIONS SERVICES, NEC
+  "4900": { theme: energy-next, industry: grid-infrastructure }  # ELECTRIC, GAS & SANITARY SERVICES
+  "7310": { theme: digital-consumer-fintech, industry: digital-advertising }  # SERVICES-ADVERTISING
+  "7389": { theme: ai-software-semi, industry: software-application }  # SERVICES-BUSINESS SERVICES, NEC
+  "8734": { theme: healthcare-biotech, industry: diagnostics }  # SERVICES-TESTING LABORATORIES
+
 # 유니버스에 나타나지만 의도적으로 제외하는 SIC.
 # 커버리지 테스트(Task 24)가 map에도 unmapped에도 없는 SIC를 발견하면 실패한다.
 unmapped:
@@ -93,3 +120,207 @@ unmapped:
   - "2000"   # Food & Kindred Products
   - "5812"   # Eating Places
   - "6500"   # Real Estate
+
+  # --- 2026-08-09 SIC 커버리지 확장: 의도적 제외 (사유는 sic-expansion-report.md 참고) ---
+  - "0100"   # AGRICULTURAL PRODUCTION-CROPS -- commodity agriculture/forestry/fishing
+  - "0200"   # AGRICULTURAL PROD-LIVESTOCK & ANIMAL SPECIALTIES -- commodity agriculture/forestry/fishing
+  - "0700"   # AGRICULTURAL SERVICES -- commodity agriculture/forestry/fishing
+  - "0900"   # FISHING, HUNTING AND TRAPPING -- commodity agriculture/forestry/fishing
+  - "1000"   # METAL MINING -- commodity mining (metals/coal)
+  - "1040"   # GOLD AND SILVER ORES -- commodity mining (metals/coal)
+  - "1220"   # BITUMINOUS COAL & LIGNITE MINING -- commodity mining (metals/coal)
+  - "1381"   # DRILLING OIL & GAS WELLS -- legacy oil & gas field services/equipment
+  - "1382"   # OIL & GAS FIELD EXPLORATION SERVICES -- legacy oil & gas field services/equipment
+  - "1389"   # OIL & GAS FIELD SERVICES, NEC -- legacy oil & gas field services/equipment
+  - "1531"   # OPERATIVE BUILDERS -- construction/homebuilding
+  - "1540"   # GENERAL BLDG CONTRACTORS - NONRESIDENTIAL BLDGS -- construction/homebuilding
+  - "1600"   # HEAVY CONSTRUCTION OTHER THAN BLDG CONST - CONTRACTORS -- construction/homebuilding
+  - "1623"   # WATER, SEWER, PIPELINE, COMM & POWER LINE CONSTRUCTION -- construction/homebuilding
+  - "1700"   # CONSTRUCTION - SPECIAL TRADE CONTRACTORS -- construction/homebuilding
+  - "1731"   # ELECTRICAL WORK -- construction/homebuilding
+  - "2011"   # MEAT PACKING PLANTS -- food & kindred products / beverage / tobacco
+  - "2013"   # SAUSAGES & OTHER PREPARED MEAT PRODUCTS -- food & kindred products / beverage / tobacco
+  - "2015"   # POULTRY SLAUGHTERING AND PROCESSING -- food & kindred products / beverage / tobacco
+  - "2020"   # DAIRY PRODUCTS -- food & kindred products / beverage / tobacco
+  - "2030"   # CANNED, FROZEN & PRESERVD FRUIT, VEG & FOOD SPECIALTIES -- food & kindred products / beverage / tobacco
+  - "2033"   # CANNED, FRUITS, VEG, PRESERVES, JAMS & JELLIES -- food & kindred products / beverage / tobacco
+  - "2040"   # GRAIN MILL PRODUCTS -- food & kindred products / beverage / tobacco
+  - "2052"   # COOKIES & CRACKERS -- food & kindred products / beverage / tobacco
+  - "2060"   # SUGAR & CONFECTIONERY PRODUCTS -- food & kindred products / beverage / tobacco
+  - "2080"   # BEVERAGES -- food & kindred products / beverage / tobacco
+  - "2086"   # BOTTLED & CANNED SOFT DRINKS & CARBONATED WATERS -- food & kindred products / beverage / tobacco
+  - "2090"   # MISCELLANEOUS FOOD PREPARATIONS & KINDRED PRODUCTS -- food & kindred products / beverage / tobacco
+  - "2111"   # CIGARETTES -- food & kindred products / beverage / tobacco
+  - "2211"   # BROADWOVEN FABRIC MILLS, COTTON -- textile mill products
+  - "2273"   # CARPETS & RUGS -- textile mill products
+  - "2300"   # APPAREL & OTHER FINISHD PRODS OF FABRICS & SIMILAR MATL -- apparel manufacturing
+  - "2320"   # MEN'S & BOYS' FURNISHGS, WORK CLOTHG, & ALLIED GARMENTS -- apparel manufacturing
+  - "2421"   # SAWMILLS & PLANTING MILLS, GENERAL -- lumber & wood products (commodity)
+  - "2451"   # MOBILE HOMES -- construction/homebuilding
+  - "2510"   # HOUSEHOLD FURNITURE -- household/office furniture (commodity)
+  - "2511"   # WOOD HOUSEHOLD FURNITURE, (NO UPHOLSTERED) -- household/office furniture (commodity)
+  - "2520"   # OFFICE FURNITURE -- household/office furniture (commodity)
+  - "2531"   # PUBLIC BLDG & RELATED FURNITURE -- household/office furniture (commodity)
+  - "2670"   # CONVERTED PAPER & PAPERBOARD PRODS (NO CONTANERS/BOXES) -- paper/paperboard products (commodity packaging)
+  - "2673"   # PLASTICS, FOIL & COATED PAPER BAGS -- paper/paperboard products (commodity packaging)
+  - "2711"   # NEWSPAPERS: PUBLISHING OR PUBLISHING & PRINTING -- legacy print publishing/printing
+  - "2731"   # BOOKS: PUBLISHING OR PUBLISHING & PRINTING -- legacy print publishing/printing
+  - "2750"   # COMMERCIAL PRINTING -- legacy print publishing/printing
+  - "2810"   # INDUSTRIAL INORGANIC CHEMICALS -- commodity/bulk industrial chemicals
+  - "2844"   # PERFUMES, COSMETICS & OTHER TOILET PREPARATIONS -- consumer staples (cosmetics/toiletries)
+  - "2860"   # INDUSTRIAL ORGANIC CHEMICALS -- commodity/bulk industrial chemicals
+  - "2870"   # AGRICULTURAL CHEMICALS -- commodity/bulk industrial chemicals
+  - "3011"   # TIRES & INNER TUBES -- rubber & plastics products (commodity)
+  - "3021"   # RUBBER & PLASTICS FOOTWEAR -- rubber & plastics products (commodity)
+  - "3060"   # FABRICATED RUBBER PRODUCTS, NEC -- rubber & plastics products (commodity)
+  - "3080"   # MISCELLANEOUS PLASTICS PRODUCTS -- rubber & plastics products (commodity)
+  - "3089"   # PLASTICS PRODUCTS, NEC -- rubber & plastics products (commodity)
+  - "3100"   # LEATHER & LEATHER PRODUCTS -- leather & footwear (commodity consumer)
+  - "3140"   # FOOTWEAR, (NO RUBBER) -- leather & footwear (commodity consumer)
+  - "3231"   # GLASS PRODUCTS, MADE OF PURCHASED GLASS -- stone/glass/clay/concrete (commodity materials)
+  - "3260"   # POTTERY & RELATED PRODUCTS -- stone/glass/clay/concrete (commodity materials)
+  - "3272"   # CONCRETE PRODUCTS, EXCEPT BLOCK & BRICK -- stone/glass/clay/concrete (commodity materials)
+  - "3310"   # STEEL WORKS, BLAST FURNACES & ROLLING & FINISHING MILLS -- primary metals (commodity)
+  - "3312"   # STEEL WORKS, BLAST FURNACES & ROLLING MILLS (COKE OVENS) -- primary metals (commodity)
+  - "3317"   # STEEL PIPE & TUBES -- primary metals (commodity)
+  - "3334"   # PRIMARY PRODUCTION OF ALUMINUM -- primary metals (commodity)
+  - "3341"   # SECONDARY SMELTING & REFINING OF NONFERROUS METALS -- primary metals (commodity)
+  - "3350"   # ROLLING DRAWING & EXTRUDING OF NONFERROUS METALS -- primary metals (commodity)
+  - "3357"   # DRAWING & INSULATING OF NONFERROUS WIRE -- primary metals (commodity)
+  - "3360"   # NONFERROUS FOUNDRIES (CASTINGS) -- primary metals (commodity)
+  - "3390"   # MISCELLANEOUS PRIMARY METAL PRODUCTS -- primary metals (commodity)
+  - "3420"   # CUTLERY, HANDTOOLS & GENERAL HARDWARE -- fabricated metal products (commodity/legacy hardware)
+  - "3430"   # HEATING EQUIP, EXCEPT ELEC & WARM AIR; & PLUMBING FIXTURES -- fabricated metal products (commodity/legacy hardware)
+  - "3443"   # FABRICATED PLATE WORK (BOILER SHOPS) -- fabricated metal products (commodity/legacy hardware)
+  - "3460"   # METAL FORGINGS & STAMPINGS -- fabricated metal products (commodity/legacy hardware)
+  - "3470"   # COATING, ENGRAVING & ALLIED SERVICES -- fabricated metal products (commodity/legacy hardware)
+  - "3490"   # MISCELLANEOUS FABRICATED METAL PRODUCTS -- fabricated metal products (commodity/legacy hardware)
+  - "3523"   # FARM MACHINERY & EQUIPMENT -- legacy/heavy industrial machinery, filer sample not clearly thematic
+  - "3531"   # CONSTRUCTION MACHINERY & EQUIP -- legacy/heavy industrial machinery, filer sample not clearly thematic
+  - "3533"   # OIL & GAS FIELD MACHINERY & EQUIPMENT -- legacy oil & gas field services/equipment
+  - "3540"   # METALWORKG MACHINERY & EQUIPMENT -- legacy/heavy industrial machinery, filer sample not clearly thematic
+  - "3564"   # Industrial & Commercial Fans & Blowers & Air Purifing Equip (data.sec.gov submissions) -- industrial fans/blowers & air purification equipment (commodity/legacy industrial equipment)
+  - "3580"   # REFRIGERATION & SERVICE INDUSTRY MACHINERY -- commercial/food-service refrigeration equipment (commodity)
+  - "3600"   # Electronic & Other Electrical Equipment (No Computer Equip) (data.sec.gov submissions) -- grab-bag electrical/electronic equipment header, filer sample thin & not clearly thematic
+  - "3634"   # ELECTRIC HOUSEWARES & FANS -- consumer electrical appliances (commodity)
+  - "3640"   # ELECTRIC LIGHTING & WIRING EQUIPMENT -- consumer electrical appliances (commodity)
+  - "3651"   # HOUSEHOLD AUDIO & VIDEO EQUIPMENT -- consumer audio/video electronics (commodity)
+  - "3713"   # TRUCK & BUS BODIES -- legacy/consumer vehicle & transport equipment manufacturing
+  - "3730"   # SHIP & BOAT BUILDING & REPAIRING -- legacy/consumer vehicle & transport equipment manufacturing
+  - "3743"   # RAILROAD EQUIPMENT -- legacy/consumer vehicle & transport equipment manufacturing
+  - "3751"   # MOTORCYCLES, BICYCLES & PARTS -- legacy/consumer vehicle & transport equipment manufacturing
+  - "3790"   # MISCELLANEOUS TRANSPORTATION EQUIPMENT -- legacy/consumer vehicle & transport equipment manufacturing
+  - "3821"   # LABORATORY APPARATUS & FURNITURE -- laboratory furniture manufacturing (not diagnostic instruments)
+  - "3873"   # WATCHES, CLOCKS, CLOCKWORK OPERATED DEVICES/PARTS -- consumer goods (watches/jewelry/toys/sporting goods)
+  - "3910"   # JEWELRY, SILVERWARE & PLATED WARE -- consumer goods (watches/jewelry/toys/sporting goods)
+  - "3942"   # DOLLS & STUFFED TOYS -- consumer goods (watches/jewelry/toys/sporting goods)
+  - "3944"   # GAMES, TOYS & CHILDREN'S VEHICLES (NO DOLLS & BICYCLES) -- consumer goods (watches/jewelry/toys/sporting goods)
+  - "3949"   # SPORTING & ATHLETIC GOODS, NEC -- consumer goods (watches/jewelry/toys/sporting goods)
+  - "3990"   # MISCELLANEOUS MANUFACTURING INDUSTRIES -- miscellaneous manufacturing NEC, grab-bag with no thematic center in filer sample
+  - "4011"   # RAILROADS, LINE-HAUL OPERATING -- commodity rail/trucking/shipping carriers
+  - "4210"   # TRUCKING & COURIER SERVICES (NO AIR) -- commodity rail/trucking/shipping carriers
+  - "4213"   # TRUCKING (NO LOCAL) -- commodity rail/trucking/shipping carriers
+  - "4412"   # DEEP SEA FOREIGN TRANSPORTATION OF FREIGHT -- commodity rail/trucking/shipping carriers
+  - "4512"   # AIR TRANSPORTATION, SCHEDULED -- commodity/cyclical airline & air-courier carriers
+  - "4513"   # AIR COURIER SERVICES -- commodity/cyclical airline & air-courier carriers
+  - "4522"   # AIR TRANSPORTATION, NONSCHEDULED -- commodity/cyclical airline & air-courier carriers
+  - "4731"   # ARRANGEMENT OF TRANSPORTATION OF FREIGHT & CARGO -- traditional freight forwarding/brokerage, no automation signal in filer sample
+  - "4812"   # RADIOTELEPHONE COMMUNICATIONS -- mature wireless/telecom carriers
+  - "4832"   # RADIO BROADCASTING STATIONS -- legacy broadcast/cable media
+  - "4833"   # TELEVISION BROADCASTING STATIONS -- legacy broadcast/cable media
+  - "4841"   # CABLE & OTHER PAY TELEVISION SERVICES -- legacy broadcast/cable media
+  - "4923"   # NATURAL GAS TRANSMISISON & DISTRIBUTION -- fossil-fuel gas distribution utilities
+  - "4924"   # NATURAL GAS DISTRIBUTION -- fossil-fuel gas distribution utilities
+  - "4932"   # GAS & OTHER SERVICES COMBINED -- fossil-fuel gas distribution utilities
+  - "4941"   # WATER SUPPLY -- non-grid utilities (water/refuse/waste)
+  - "4953"   # REFUSE SYSTEMS -- non-grid utilities (water/refuse/waste)
+  - "4955"   # HAZARDOUS WASTE MANAGEMENT -- non-grid utilities (water/refuse/waste)
+  - "5010"   # WHOLESALE-MOTOR VEHICLES & MOTOR VEHICLE PARTS & SUPPLIES -- wholesale/distribution trade (commodity, low-margin)
+  - "5030"   # WHOLESALE-LUMBER & OTHER CONSTRUCTION MATERIALS -- wholesale/distribution trade (commodity, low-margin)
+  - "5045"   # WHOLESALE-COMPUTERS & PERIPHERAL EQUIPMENT & SOFTWARE -- wholesale/distribution trade (commodity, low-margin)
+  - "5047"   # WHOLESALE-MEDICAL, DENTAL & HOSPITAL EQUIPMENT & SUPPLIES -- wholesale/distribution trade (commodity, low-margin)
+  - "5050"   # WHOLESALE-METALS & MINERALS (NO PETROLEUM) -- wholesale/distribution trade (commodity, low-margin)
+  - "5051"   # WHOLESALE-METALS SERVICE CENTERS & OFFICES -- wholesale/distribution trade (commodity, low-margin)
+  - "5065"   # WHOLESALE-ELECTRONIC PARTS & EQUIPMENT, NEC -- wholesale/distribution trade (commodity, low-margin)
+  - "5080"   # WHOLESALE-MACHINERY, EQUIPMENT & SUPPLIES -- wholesale/distribution trade (commodity, low-margin)
+  - "5084"   # WHOLESALE-INDUSTRIAL MACHINERY & EQUIPMENT -- wholesale/distribution trade (commodity, low-margin)
+  - "5090"   # WHOLESALE-MISC DURABLE GOODS -- wholesale/distribution trade (commodity, low-margin)
+  - "5099"   # WHOLESALE-DURABLE GOODS, NEC -- wholesale/distribution trade (commodity, low-margin)
+  - "5122"   # WHOLESALE-DRUGS, PROPRIETARIES & DRUGGISTS' SUNDRIES -- wholesale/distribution trade (commodity, low-margin)
+  - "5130"   # WHOLESALE-APPAREL, PIECE GOODS & NOTIONS -- wholesale/distribution trade (commodity, low-margin)
+  - "5140"   # WHOLESALE-GROCERIES & RELATED PRODUCTS -- wholesale/distribution trade (commodity, low-margin)
+  - "5141"   # WHOLESALE-GROCERIES, GENERAL LINE -- wholesale/distribution trade (commodity, low-margin)
+  - "5150"   # WHOLESALE-FARM PRODUCT RAW MATERIALS -- wholesale/distribution trade (commodity, low-margin)
+  - "5160"   # WHOLESALE-CHEMICALS & ALLIED PRODUCTS -- wholesale/distribution trade (commodity, low-margin)
+  - "5172"   # Wholesale-Petroleum & Petroleum Products (No Bulk Stations) (data.sec.gov submissions) -- wholesale/distribution trade (commodity, low-margin)
+  - "5180"   # WHOLESALE-BEER, WINE & DISTILLED ALCOHOLIC BEVERAGES -- wholesale/distribution trade (commodity, low-margin)
+  - "5190"   # WHOLESALE-MISCELLANEOUS NONDURABLE GOODS -- wholesale/distribution trade (commodity, low-margin)
+  - "5200"   # RETAIL-BUILDING MATERIALS, HARDWARE, GARDEN SUPPLY -- retail trade (commodity/consumer)
+  - "5331"   # RETAIL-VARIETY STORES -- retail trade (commodity/consumer)
+  - "5400"   # RETAIL-FOOD STORES -- retail trade (commodity/consumer)
+  - "5411"   # RETAIL-GROCERY STORES -- retail trade (commodity/consumer)
+  - "5412"   # RETAIL-CONVENIENCE STORES -- retail trade (commodity/consumer)
+  - "5500"   # RETAIL-AUTO DEALERS & GASOLINE STATIONS -- retail trade (commodity/consumer)
+  - "5531"   # RETAIL-AUTO & HOME SUPPLY STORES -- retail trade (commodity/consumer)
+  - "5600"   # RETAIL-APPAREL & ACCESSORY STORES -- retail trade (commodity/consumer)
+  - "5651"   # RETAIL-FAMILY CLOTHING STORES -- retail trade (commodity/consumer)
+  - "5661"   # RETAIL-SHOE STORES -- retail trade (commodity/consumer)
+  - "5700"   # RETAIL-HOME FURNITURE, FURNISHINGS & EQUIPMENT STORES -- retail trade (commodity/consumer)
+  - "5712"   # RETAIL-FURNITURE STORES -- retail trade (commodity/consumer)
+  - "5810"   # RETAIL-EATING & DRINKING PLACES -- retail trade (commodity/consumer)
+  - "5900"   # RETAIL-MISCELLANEOUS RETAIL -- retail trade (commodity/consumer)
+  - "5912"   # RETAIL-DRUG STORES AND PROPRIETARY STORES -- retail trade (commodity/consumer)
+  - "5940"   # RETAIL-MISCELLANEOUS SHOPPING GOODS STORES -- retail trade (commodity/consumer)
+  - "5960"   # RETAIL-NONSTORE RETAILERS -- retail trade (commodity/consumer)
+  - "5990"   # RETAIL-RETAIL STORES, NEC -- retail trade (commodity/consumer)
+  - "6029"   # COMMERCIAL BANKS, NEC -- commercial/savings banks
+  - "6035"   # SAVINGS INSTITUTION, FEDERALLY CHARTERED -- commercial/savings banks
+  - "6036"   # SAVINGS INSTITUTIONS, NOT FEDERALLY CHARTERED -- commercial/savings banks
+  - "6153"   # SHORT-TERM BUSINESS CREDIT INSTITUTIONS -- consumer/business lending & debt-collection institutions
+  - "6159"   # MISCELLANEOUS BUSINESS CREDIT INSTITUTION -- consumer/business lending & debt-collection institutions
+  - "6162"   # MORTGAGE BANKERS & LOAN CORRESPONDENTS -- consumer/business lending & debt-collection institutions
+  - "6163"   # LOAN BROKERS -- consumer/business lending & debt-collection institutions
+  - "6200"   # Security & Commodity Brokers, Dealers, Exchanges & Services (data.sec.gov submissions) -- financial brokers/exchanges (traditional, structurally financial services)
+  - "6211"   # SECURITY BROKERS, DEALERS & FLOTATION COMPANIES -- financial brokers/exchanges (traditional, structurally financial services)
+  - "6221"   # COMMODITY CONTRACTS BROKERS & DEALERS -- financial brokers/dealers, thin & mixed filer sample (uranium royalty vs crypto financing)
+  - "6282"   # INVESTMENT ADVICE -- investment advisory services
+  - "6321"   # ACCIDENT & HEALTH INSURANCE -- insurance underwriting
+  - "6324"   # HOSPITAL & MEDICAL SERVICE PLANS -- insurance underwriting
+  - "6331"   # FIRE, MARINE & CASUALTY INSURANCE -- insurance underwriting
+  - "6351"   # SURETY INSURANCE -- insurance underwriting
+  - "6361"   # TITLE INSURANCE -- insurance underwriting
+  - "6411"   # INSURANCE AGENTS, BROKERS & SERVICE -- insurance agents/brokers
+  - "6512"   # OPERATORS OF NONRESIDENTIAL BUILDINGS -- real estate operation/development
+  - "6513"   # OPERATORS OF APARTMENT BUILDINGS -- real estate operation/development
+  - "6531"   # REAL ESTATE AGENTS & MANAGERS (FOR OTHERS) -- real estate operation/development
+  - "6552"   # LAND SUBDIVIDERS & DEVELOPERS (NO CEMETERIES) -- real estate operation/development
+  - "6794"   # PATENT OWNERS & LESSORS -- IP licensing, industry-agnostic (spans pharma/fashion/tech patents), no single theme fits cleanly
+  - "6795"   # MINERAL ROYALTY TRADERS -- mineral royalty trading (commodity mining finance)
+  - "7000"   # HOTELS, ROOMING HOUSES, CAMPS & OTHER LODGING PLACES -- hospitality/lodging (commodity, cyclical)
+  - "7011"   # HOTELS & MOTELS -- hospitality/lodging (commodity, cyclical)
+  - "7200"   # SERVICES-PERSONAL SERVICES -- personal services (low-growth labor services)
+  - "7330"   # Services-Mailing, Reproduction, Commercial Art & Photography (data.sec.gov submissions) -- legacy print/mail services
+  - "7331"   # SERVICES-DIRECT MAIL ADVERTISING SERVICES -- legacy print/mail services
+  - "7340"   # SERVICES-TO DWELLINGS & OTHER BUILDINGS -- building maintenance services (commodity)
+  - "7350"   # SERVICES-MISCELLANEOUS EQUIPMENT RENTAL & LEASING -- equipment rental & leasing (commodity)
+  - "7359"   # SERVICES-EQUIPMENT RENTAL & LEASING, NEC -- equipment rental & leasing (commodity)
+  - "7363"   # SERVICES-HELP SUPPLY SERVICES -- staffing/labor supply services (low-margin)
+  - "7380"   # SERVICES-MISCELLANEOUS BUSINESS SERVICES -- business services header, filer sample skews obscure/low-quality small caps
+  - "7500"   # SERVICES-AUTOMOTIVE REPAIR, SERVICES & PARKING -- auto repair/rental services (commodity)
+  - "7510"   # SERVICES-AUTO RENTAL & LEASING (NO DRIVERS) -- auto repair/rental services (commodity)
+  - "7830"   # SERVICES-MOTION PICTURE THEATERS -- legacy movie theater exhibition
+  - "7900"   # SERVICES-AMUSEMENT & RECREATION SERVICES -- amusement/recreation services (commodity leisure)
+  - "7948"   # SERVICES-RACING, INCLUDING TRACK OPERATION -- amusement/recreation services (commodity leisure)
+  - "7997"   # SERVICES-MEMBERSHIP SPORTS & RECREATION CLUBS -- amusement/recreation services (commodity leisure)
+  - "8000"   # SERVICES-HEALTH SERVICES -- healthcare service delivery (clinics/facilities), reimbursement-driven not product-scale growth
+  - "8011"   # SERVICES-OFFICES & CLINICS OF DOCTORS OF MEDICINE -- healthcare service delivery (clinics/facilities), reimbursement-driven not product-scale growth
+  - "8050"   # SERVICES-NURSING & PERSONAL CARE FACILITIES -- healthcare service delivery (clinics/facilities), reimbursement-driven not product-scale growth
+  - "8051"   # SERVICES-SKILLED NURSING CARE FACILITIES -- healthcare service delivery (clinics/facilities), reimbursement-driven not product-scale growth
+  - "8062"   # SERVICES-GENERAL MEDICAL & SURGICAL HOSPITALS, NEC -- healthcare service delivery (clinics/facilities), reimbursement-driven not product-scale growth
+  - "8082"   # SERVICES-HOME HEALTH CARE SERVICES -- healthcare service delivery (clinics/facilities), reimbursement-driven not product-scale growth
+  - "8093"   # SERVICES-SPECIALTY OUTPATIENT FACILITIES, NEC -- healthcare service delivery (clinics/facilities), reimbursement-driven not product-scale growth
+  - "8111"   # SERVICES-LEGAL SERVICES -- legal services
+  - "8200"   # SERVICES-EDUCATIONAL SERVICES -- education services, no edtech industry defined in taxonomy
+  - "8700"   # SERVICES-ENGINEERING, ACCOUNTING, RESEARCH, MANAGEMENT -- professional/engineering consulting services (labor-intensive, not product companies)
+  - "8711"   # SERVICES-ENGINEERING SERVICES -- professional/engineering consulting services (labor-intensive, not product companies)
+  - "8742"   # SERVICES-MANAGEMENT CONSULTING SERVICES -- management consulting services
