@@ -37,29 +37,37 @@ describe('computeMoatSignal', () => {
     expect(r.periodsEvaluated).toBeLessThan(cfg.valuation.moat.min_periods_required)
   })
 
-  it('매출이 없는 연간 행은 회계연도로 세지 않는다 (eBay 유령 연간 기간)', () => {
-    // 실측: financials EBAY A 2025-09-30 revenue NULL / gross_profit 44,000,000.
-    // bulk에만 있는 디멘션 슬라이스가 연간 기간 행으로 남아, 2022~2025년의 9월 30일
-    // 유령 기간 네 개가 lookback 창을 잠식했다. eBay는 그래서 유효 기간 3개로
-    // INSUFFICIENT_DATA(MISSING_FINANCIALS)를 받았다(QCOM도 같은 모양).
-    // 전체 규모: 매출이 NULL인데 매출총이익이 있는 연간 행 284개 / 85개사.
+  it('매출이 결측이어도 ROIC 입력이 갖춰진 연간 기간은 전부 센다 (XEL 코호트)', () => {
+    // ROIC는 영업이익·부채·자본·현금만 쓴다 — 매출은 쓰지 않는다. 한때 이 엔진이
+    // `revenue !== null`인 연간 행만 셌는데, 그 필터는 오염(디멘션 슬라이스)이 아니라
+    // **우리 쪽 태그 커버리지의 구멍**에도 그대로 걸렸다. XEL은 규제 유틸리티 매출
+    // 태그를 추적하지 않아 2019~2025년 매출이 비어 있었고, 그 일곱 해는 네 필드가
+    // 모두 갖춰져 있는데도 세어지지 않아 `TOO_FEW_PERIODS`(연간 실적 자체가 부족하다는
+    // 진술)를 받았다. 실측으로 같은 처지의 회사가 38개였다.
     const real = wideMoatCompany()
-    const phantom = real.annual.slice(0, 4).map((p) => ({
-      ...p,
-      periodEnd: `${p.periodEnd.slice(0, 4)}-09-30`,
-      revenue: null,
-      operatingIncome: null,
-      grossProfit: 44_000_000,
-    }))
-    const contaminated = {
+    const revenueBlind = {
       ...real,
-      annual: [...phantom, ...real.annual].sort((a, b) => b.periodEnd.localeCompare(a.periodEnd)),
+      annual: real.annual.map((p) => ({ ...p, revenue: null, grossProfit: null })),
     }
-    const r = computeMoatSignal(contaminated, cfg)
+    const r = computeMoatSignal(revenueBlind, cfg)
     const clean = computeMoatSignal(real, cfg)
-    expect(r.signal).toBe(clean.signal)
     expect(r.periodsEvaluated).toBe(clean.periodsEvaluated)
     expect(r.periodsClearing).toBe(clean.periodsClearing)
+    expect(r.signal).toBe(clean.signal)
+    expect(r.insufficientReason).toBeNull()
+  })
+
+  it('매출 결측을 이유로 TOO_FEW_PERIODS를 주지 않는다', () => {
+    const real = wideMoatCompany()
+    // 최근 5개 해의 매출만 비운다 — 남은 3개로는 최소 요건(4개)에 못 미치므로,
+    // 매출로 거르는 규칙 아래에서는 "보고된 연간 실적이 3개뿐"이 된다.
+    const partial = {
+      ...real,
+      annual: real.annual.map((p, i) => (i < 5 ? { ...p, revenue: null } : p)),
+    }
+    const r = computeMoatSignal(partial, cfg)
+    expect(r.insufficientReason).not.toBe('TOO_FEW_PERIODS')
+    expect(r.periodsEvaluated).toBe(computeMoatSignal(real, cfg).periodsEvaluated)
   })
 
   describe('INSUFFICIENT_DATA 사유 구분', () => {

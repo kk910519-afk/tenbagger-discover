@@ -288,6 +288,35 @@ function migrateTierNames(raw: Database.Database): void {
   })()
 }
 
+/**
+ * `PRAGMA user_version`으로 관리하는 일회성 데이터 보수의 현재 단계.
+ * 스키마가 아니라 **저장된 값**을 고치는 마이그레이션에 쓴다.
+ */
+const DATA_REPAIR_VERSION = 1
+
+/**
+ * 저장된 bulk 사실을 한 번 비운다(재수집은 다음 fundamentals 실행이 한다).
+ *
+ * 왜 지우지 않으면 안 되는가: `sec-bulk.ts`가 이제 디멘션 슬라이스
+ * (`segments != ''`)를 파싱 시점에 버리지만, 이미 저장된 오염 행은 **재수집으로
+ * 덮이지 않는다**. `insertFacts`의 ON CONFLICT는 `filed_date`가 더 최신이거나
+ * (동률일 때) API가 bulk를 대체하는 경우에만 갱신하는데, 같은 zip을 다시 파싱하면
+ * filed_date도 source도 그대로여서 갱신 조건이 성립하지 않는다. 즉 파서만 고치면
+ * 새로 수집되는 회사만 나아지고 기존 오염은 영구히 남는다.
+ *
+ * 지워도 되는 근거: 라이브 DB의 bulk 사실은 filed_date가 2024-07-03~2026-03-31로
+ * 전부 `ingest.bulk_quarters`(8분기) 창 안에 있어 다음 실행이 같은 zip에서 전부
+ * 다시 만든다. API 사실은 건드리지 않는다.
+ */
+function purgeBulkFactsOnce(raw: Database.Database): void {
+  const v = Number(raw.pragma('user_version', { simple: true }))
+  if (Number.isFinite(v) && v >= DATA_REPAIR_VERSION) return
+  raw.transaction(() => {
+    raw.exec(`DELETE FROM financial_facts WHERE source = 'bulk'`)
+  })()
+  raw.pragma(`user_version = ${DATA_REPAIR_VERSION}`)
+}
+
 export function runMigrations(raw: Database.Database): void {
   raw.exec(DDL)
   ensureColumn(raw, 'companies', 'state_of_incorporation', 'state_of_incorporation TEXT')
@@ -317,4 +346,5 @@ export function runMigrations(raw: Database.Database): void {
   // 컬럼 추가가 끝난 뒤에 실행한다 — 테이블을 통째로 다시 만들면서 컬럼 목록을 명시하므로,
   // 사후 추가 컬럼이 이미 붙어 있어야 한다.
   migrateTierNames(raw)
+  purgeBulkFactsOnce(raw)
 }

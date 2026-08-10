@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { resolveTotalDebt, type InstantContext } from '@/providers/fundamental/resolve'
+import { resolveFlow, resolveTotalDebt, type InstantContext } from '@/providers/fundamental/resolve'
 
 /**
  * **총부채·주식수 회귀 기준선.**
@@ -172,5 +172,100 @@ describe('총부채 기준선 — 신고서 대차대조표 대조 (FILING-CONFI
     expect(debt({ LongTermDebt: 0 })).toBeNull()
     expect(debt({ DebtLongtermAndShorttermCombinedAmount: 0 })).toBeNull()
     expect(debt({ LinesOfCreditCurrent: 0 })).toBeNull()
+  })
+})
+
+/**
+ * **매출·영업이익 회귀 기준선 — 새로 덮은 신고자 유형.**
+ *
+ * 위 부채 기준선이 만들어진 이유(“기준선은 자기가 이름 대지 않은 필드에 대해서는
+ * 장님이다”)가 이번에도 그대로 반복됐다: 부채 기준선 12개는 XEL의 2019~2025년 매출이
+ * 통째로 비어 있고 ADP의 영업이익이 6개 연간 기간 전부 결측인 동안 한 자리도 움직이지
+ * 않았다. 이 블록은 그 사각지대를 닫는다 — 이번에 새로 덮은 세 유형(규제 유틸리티,
+ * 대출·핀테크, 영업이익 줄을 신고하지 않는 대형 서비스 기업)의 값을 SEC companyfacts
+ * 원문 수치 그대로 고정한다.
+ */
+function flow(facts: Record<string, number>) {
+  return resolveFlow(new Map(Object.entries(facts)))
+}
+
+describe('매출·영업이익 기준선 — SEC companyfacts 원문 대조', () => {
+  it('XEL 2025-12-31 — 매출 14,669,000,000 / 영업이익 2,583,000,000', () => {
+    // SOURCE: FY2025 10-K accession 0000072903-26-000009.
+    // `Revenues`는 2019-09-30에서 끊겼고 그 뒤로는 규제 유틸리티 총매출 태그만 쓴다.
+    // 신고된 영업이익이 1순위이며, 여기서는 매출 − CostsAndExpenses와도 정확히 같다
+    // (14,669 − 12,086 = 2,583) — 유도식이 이 신고자에게 항등식임을 함께 증명한다.
+    const r = flow({
+      RegulatedAndUnregulatedOperatingRevenue: 14_669_000_000,
+      CostsAndExpenses: 12_086_000_000,
+      OperatingIncomeLoss: 2_583_000_000,
+    })
+    expect(r.fields.revenue).toBe(14_669_000_000)
+    expect(r.used.revenue).toBe('RegulatedAndUnregulatedOperatingRevenue')
+    expect(r.fields.operatingIncome).toBe(2_583_000_000)
+    expect(r.used.operatingIncome).toBe('OperatingIncomeLoss')
+  })
+
+  it('MGEE 2025-12-31 — 매출 743,654,000 (2008년 이후 이 태그만 쓴다)', () => {
+    // SOURCE: FY2025 10-K. 추적 매출 태그를 한 번도 쓴 적이 없는 신고자다.
+    const r = flow({ RegulatedAndUnregulatedOperatingRevenue: 743_654_000 })
+    expect(r.fields.revenue).toBe(743_654_000)
+  })
+
+  it('LNT 2025-12-31 — 같은 태그가 부분 매출일 때 총계 4,362,000,000이 이긴다', () => {
+    // SOURCE: FY2025 10-K. RUR 140,000,000은 비규제 부분이다.
+    const r = flow({
+      RegulatedAndUnregulatedOperatingRevenue: 140_000_000,
+      Revenues: 4_362_000_000,
+    })
+    expect(r.fields.revenue).toBe(4_362_000_000)
+  })
+
+  it('SOFI 2025-12-31 — 매출 3,613,354,000 (계약매출 619,353,000이 아니다)', () => {
+    // SOURCE: FY2025 10-K. `RevenuesNetOfInterestExpense`가 손익계산서의 총매출 줄이고
+    // 추적 태그로 잡히던 619,353,000은 그 안의 계약매출 한 갈래다(6분의 1).
+    const r = flow({
+      RevenuesNetOfInterestExpense: 3_613_354_000,
+      RevenueFromContractWithCustomerExcludingAssessedTax: 619_353_000,
+    })
+    expect(r.fields.revenue).toBe(3_613_354_000)
+  })
+
+  it('ADP FY2025·FY2026 — 영업이익 4,956,000,000 / 5,319,700,000', () => {
+    // SOURCE: FY2026 10-K. ADP는 `OperatingIncomeLoss`도 `GrossProfit`도 신고하지 않고
+    // 총매출과 총비용만 신고한다 — 여섯 개 연간 기간 전부 영업이익이 결측이었다.
+    expect(flow({
+      Revenues: 20_560_900_000,
+      CostsAndExpenses: 15_604_900_000,
+    }).fields.operatingIncome).toBe(4_956_000_000)
+    expect(flow({
+      Revenues: 21_947_400_000,
+      CostsAndExpenses: 16_627_700_000,
+    }).fields.operatingIncome).toBe(5_319_700_000)
+  })
+
+  it('BIIB 2025-12-31 / CACC 2025-12-31 — 영업이익 1,556,500,000 / 565,400,000', () => {
+    // SOURCE: 각 사 FY2025 10-K. 둘 다 최근 연간 기간에서 `OperatingIncomeLoss`를
+    // 신고하지 않는다(BIIB는 2022년부터, CACC는 이력 전체).
+    expect(flow({
+      Revenues: 9_890_600_000,
+      CostsAndExpenses: 8_334_100_000,
+    }).fields.operatingIncome).toBe(1_556_500_000)
+    expect(flow({
+      Revenues: 2_317_200_000,
+      CostsAndExpenses: 1_751_800_000,
+    }).fields.operatingIncome).toBe(565_400_000)
+  })
+
+  it('덮지 않은 것은 여전히 null이다 — 결측을 0으로 채우지 않는다', () => {
+    // 이자·배당수익만으로 매출을 만들지 않는다(CASS 2025: 97,566,000은 총매출
+    // 190,750,000의 절반, 실측 비율 중앙값 0.051).
+    expect(flow({ InterestAndDividendIncomeOperating: 97_566_000 }).fields.revenue).toBeNull()
+    expect(flow({ NoninterestIncome: 109_858_000 }).fields.revenue).toBeNull()
+    // 매출 − OperatingExpenses는 매출원가가 빠져 있어 쓰지 않는다.
+    expect(flow({
+      Revenues: 34_100_000_000,
+      OperatingExpenses: 12_919_000_000,
+    }).fields.operatingIncome).toBeNull()
   })
 })

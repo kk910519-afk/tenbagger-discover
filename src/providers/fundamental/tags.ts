@@ -227,6 +227,53 @@ export const LEASE_DEBT_TAGS: ReadonlySet<string> = new Set<string>([
  */
 export const LIABILITIES_ANCHOR_TAGS: readonly string[] = ['Liabilities', 'LiabilitiesCurrent']
 
+// ── 업종별 매출 총계 태그 ───────────────────────────────────────────────────
+//
+// 부채 태그와 같은 방법으로 골랐다: 최신 연간 매출이 결측인 **178개사 전수**의
+// companyfacts 원문(178/178 응답 정상)에서 결측 연간 기간 923개에 실제로 존재하는
+// USD·연간(330~400일) 개념을 세고, 이미 추적 중인 매출 태그와 **겹치는 기간의 비율**로
+// 총계인지 구성요소인지를 판정했다. 상세 표는 coverage-closeout-report.md 2절.
+//
+// **채택한 둘은 그 신고자에게 손익계산서 맨 윗줄이다.**
+//  - `RegulatedAndUnregulatedOperatingRevenue` — 규제 유틸리티. XEL은 2017·2018년에
+//    `Revenues`와 이 태그를 **같은 값**으로 나란히 신고했고(11,404,000,000 =
+//    11,404,000,000, 11,537,000,000 = 11,537,000,000) 2019년부터 `Revenues`를 버렸다.
+//    같은 것의 다른 이름이라는 증명이며, 그래서 XEL의 2019~2025년 매출(11.5B~15.3B)이
+//    통째로 비어 있었다. MGEE는 2008년 이후 전 기간을 이 태그로만 신고한다.
+//  - `RevenuesNetOfInterestExpense` — 이자수익이 매출인 대출·핀테크 신고자의 총매출
+//    줄이다(SOFI 2025-12-31 3,613,354,000 = 실제 순매출; 추적 태그로는 계약매출
+//    619,353,000만 잡혀 6분의 1로 축소돼 있었다).
+//
+// **기각한 것 — 전부 구성요소로 실측됐다.** 이름이 그럴듯하다고 넣지 않는다:
+//  - `InterestAndDividendIncomeOperating`(결측 기간의 2.8%, 최다 후보) — 추적 태그와
+//    겹치는 25개 기간에서 비율 중앙값 **0.051**, 1% 이내 일치 **0건**. 은행의
+//    이자·배당수익만이라 비이자수익이 빠진다(CASS 2025: 97,566,000 vs 총매출
+//    190,750,000).
+//  - `NoninterestIncome`(2.3%) — 위의 나머지 반쪽.
+//  - `RevenuesExcludingInterestAndDividends`(0.4%, 중앙값 0.818),
+//    `SalesRevenueGoodsNet`(0.2%, 0.793), `SalesRevenueServicesNet`(0.245),
+//    `ContractsRevenue`(0.719), `ElectricUtilityRevenue`(0.335),
+//    `RegulatedOperatingRevenue`(0.375), `OilAndGasRevenue`(0.043),
+//    `HealthCareOrganizationRevenue`(0.084) — 이름 그대로 매출의 한 갈래다.
+//
+// 채택한 둘도 항상 총계인 것은 아니다: LNT(Alliant Energy)는
+// `RegulatedAndUnregulatedOperatingRevenue`를 142,000,000(비규제 부분)으로 쓰면서
+// `Revenues` 4.2B을 따로 신고한다. 그래서 이 태그들은 순서 체인이 아니라
+// **`resolveRevenue`의 최댓값 후보**로 들어간다 — 오염·부분 값은 정의상 총계보다
+// 작다는, 이 코드베이스가 이미 쓰고 있는 같은 규칙이다.
+export const INDUSTRY_REVENUE_TOTAL_TAGS: readonly string[] = [
+  'RegulatedAndUnregulatedOperatingRevenue',
+  'RevenuesNetOfInterestExpense',
+]
+
+/**
+ * 영업이익을 신고하지 않는 신고자를 위한 **손익계산서 구조 태그**.
+ * `OperatingIncomeLoss`가 없을 때 `resolveFlow`가 이 둘로 되살린다(근거는
+ * resolve.ts `resolveOperatingIncome` 주석의 실측 일치율).
+ */
+export const OPERATING_COST_TOTAL_TAG = 'CostsAndExpenses'
+export const OPERATING_EXPENSES_TAG = 'OperatingExpenses'
+
 /**
  * 수집 대상 XBRL 태그. 폴백 체인의 모든 후보를 포함한다.
  * 정규화(Task 9)가 이 중 어떤 태그를 실제로 쓸지 결정한다.
@@ -237,12 +284,15 @@ export const TRACKED_TAGS = new Set<string>([
   'RevenueFromContractWithCustomerIncludingAssessedTax',
   'Revenues',
   'SalesRevenueNet',
+  ...INDUSTRY_REVENUE_TOTAL_TAGS,
   // 매출총이익 / 매출원가
   'GrossProfit',
   'CostOfRevenue',
   'CostOfGoodsAndServicesSold',
   // 손익
   'OperatingIncomeLoss',
+  OPERATING_COST_TOTAL_TAG,
+  OPERATING_EXPENSES_TAG,
   'NetIncomeLoss',
   'ResearchAndDevelopmentExpense',
   'ShareBasedCompensation',

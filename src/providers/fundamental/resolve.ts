@@ -1,8 +1,9 @@
 import type { RawFact } from '../types.js'
 import {
   BASIC_SHARES_CHAIN, CASH_TAG_SHAPES, DEBT_COMBINED_TOTAL_TAG, DEBT_CURRENT_TOTAL_TAG,
-  DEBT_TAGS, DEBT_TAG_SHAPES, LONG_TERM_DEBT_CURRENT_TAG, LONG_TERM_DEBT_FAMILY,
-  LONG_TERM_DEBT_NONCURRENT_TAG, LONG_TERM_DEBT_TOTAL_TAG, SHORT_TERM_BORROWING_TAGS,
+  DEBT_TAGS, DEBT_TAG_SHAPES, INDUSTRY_REVENUE_TOTAL_TAGS, LONG_TERM_DEBT_CURRENT_TAG,
+  LONG_TERM_DEBT_FAMILY, LONG_TERM_DEBT_NONCURRENT_TAG, LONG_TERM_DEBT_TOTAL_TAG,
+  OPERATING_COST_TOTAL_TAG, OPERATING_EXPENSES_TAG, SHORT_TERM_BORROWING_TAGS,
   SPECIFIC_DEBT_FAMILIES, type DebtFamily, type DebtTagShape,
 } from './tags.js'
 
@@ -474,6 +475,7 @@ function firstOf(
 const REVENUE_TAG_EXCL_TAX = 'RevenueFromContractWithCustomerExcludingAssessedTax'
 const REVENUE_TAG_TOTAL = 'Revenues'
 const GROSS_PROFIT_TAG = 'GrossProfit'
+const OPERATING_INCOME_TAG = 'OperatingIncomeLoss'
 
 /**
  * 매출 태그 해석. 결함 2(ingest-hardening 과제): 같은 회계기간·같은 소스에
@@ -504,6 +506,15 @@ function resolveRevenue(tags: Map<string, number>): { value: number; tag: string
   if (typeof excl === 'number') candidates.push({ value: excl, tag: REVENUE_TAG_EXCL_TAX })
   if (typeof total === 'number') candidates.push({ value: total, tag: REVENUE_TAG_TOTAL })
 
+  // 업종별 총매출 태그(유틸리티·대출업 등)도 같은 최댓값 규칙에 넣는다. 이 신고자들은
+  // 위 두 태그를 아예 쓰지 않아 지금까지 매출이 통째로 비어 있었고(XEL 2019~2025),
+  // 반대로 같은 태그를 부분 매출로 쓰는 신고자(LNT)에서는 총계가 더 커서 저절로 진다.
+  // 근거는 tags.ts `INDUSTRY_REVENUE_TOTAL_TAGS` 주석의 실측 표.
+  for (const t of INDUSTRY_REVENUE_TOTAL_TAGS) {
+    const v = tags.get(t)
+    if (typeof v === 'number') candidates.push({ value: v, tag: t })
+  }
+
   // 매출 = 매출총이익 + 매출원가. 회계 항등식이므로 추정이 아니라 회사가 신고한
   // 숫자끼리의 산술이다. 매출 태그만 디멘션 오염된 기간(Astera Labs 2025 Q1:
   // 매출 태그 44.6M인데 GrossProfit 119.4M + CostOfGoodsAndServicesSold 40.0M
@@ -520,7 +531,60 @@ function resolveRevenue(tags: Map<string, number>): { value: number; tag: string
     for (const c of candidates) if (c.value > best.value) best = c
     return best
   }
-  return firstOf(tags, REVENUE_CHAIN)
+  const chained = firstOf(tags, REVENUE_CHAIN)
+  if (chained) return chained
+  // 체인 태그를 하나도 쓰지 않고 업종 총계 태그로만 신고하는 회사(XEL·MGEE·SOFI).
+  // `GrossProfit+CostOfRevenue` 후보만 있는 경우는 예전 그대로 null이다 — 매출
+  // 태그가 전혀 없는 회사에 산술 합을 매출로 승격시키는 것은 이번 과제의 판단 범위가
+  // 아니고, 그 조합은 매출 태그가 있을 때 오염을 이기는 용도로만 도입됐다.
+  return candidates.find((c) => INDUSTRY_REVENUE_TOTAL_TAGS.includes(c.tag)) ?? null
+}
+
+/**
+ * 영업이익. 1순위는 언제나 신고된 `OperatingIncomeLoss`이고, 그것이 없을 때만
+ * 손익계산서의 구조로 되살린다. 두 유도식의 정확도는 실측이다 — 매출·영업이익이
+ * 모두 산출되는 회사에서 결정적으로 뽑은 **200개사 표본**의 연간 기간에서,
+ * `OperatingIncomeLoss`가 함께 신고된 기간만 골라 유도값과 대조했다:
+ *
+ * | 유도식 | 1% 이내 일치 | 표본 |
+ * |---|---|---|
+ * | `GrossProfit − OperatingExpenses` | **98.1%** | 938/956 |
+ * | `매출 − CostsAndExpenses`         | **92.6%** | 512/553 |
+ * | `매출 − OperatingExpenses`        | 32.5% | 452/1,392 |
+ *
+ * 세 번째는 기각했다 — `OperatingExpenses`는 정의상 매출원가를 제외한 비용이라
+ * 매출에서 바로 빼면 매출총이익만큼 과대계상된다(AMD 2025: 유도 21,181M vs 신고
+ * 3,694M). 첫 번째를 먼저 두는 이유는 정확도이고, `GrossProfit`은 **신고된 태그만**
+ * 쓴다(우리가 `매출 − 매출원가`로 유도한 값에 다시 `OperatingExpenses`를 빼면
+ * 매출원가를 두 번 세는 신고자가 생긴다).
+ *
+ * ADP가 두 번째 티어의 사례다: `OperatingIncomeLoss`도 `GrossProfit`도 신고하지
+ * 않고 `Revenues`와 `CostsAndExpenses`만 쓴다(FY2025: 20,560.9M − 15,604.9M =
+ * 4,956.0M, 매출의 24.1%).
+ *
+ * 남는 오차는 숨기지 않는다 — 두 유도식이 어긋나는 7~2%는 대개 대출업(이자비용이
+ * `CostsAndExpenses` 안에 들어가 사실상 세전이익이 된다)과 영업외 항목을 비용
+ * 총계에 넣는 신고자다. provenance(`source_tags`)에 유도식이 그대로 남으므로
+ * 어떤 값이 신고된 것이고 어떤 값이 유도된 것인지 DB에서 구분된다.
+ */
+function resolveOperatingIncome(
+  tags: Map<string, number>,
+  revenue: { value: number; tag: string } | null,
+): { value: number; tag: string } | null {
+  const reported = tags.get(OPERATING_INCOME_TAG)
+  if (typeof reported === 'number') return { value: reported, tag: OPERATING_INCOME_TAG }
+
+  const gp = tags.get(GROSS_PROFIT_TAG)
+  const opex = tags.get(OPERATING_EXPENSES_TAG)
+  if (typeof gp === 'number' && typeof opex === 'number') {
+    return { value: gp - opex, tag: `${GROSS_PROFIT_TAG}-${OPERATING_EXPENSES_TAG}` }
+  }
+
+  const costs = tags.get(OPERATING_COST_TOTAL_TAG)
+  if (revenue && typeof costs === 'number') {
+    return { value: revenue.value - costs, tag: `${revenue.tag}-${OPERATING_COST_TOTAL_TAG}` }
+  }
+  return null
 }
 
 export type ResolvedFlow = {
@@ -567,12 +631,14 @@ export function resolveFlow(
   if (ocf) used.ocf = ocf.tag
   const capex = firstOf(tags, CAPEX_CHAIN)
   if (capex) used.capex = capex.tag
+  const opInc = resolveOperatingIncome(tags, rev)
+  if (opInc) used.operatingIncome = opInc.tag
 
   return {
     fields: {
       revenue: rev?.value ?? null,
       grossProfit,
-      operatingIncome: simple('operatingIncome', 'OperatingIncomeLoss'),
+      operatingIncome: opInc?.value ?? null,
       netIncome: simple('netIncome', 'NetIncomeLoss'),
       ocf: ocf?.value ?? null,
       capex: capex?.value ?? null,

@@ -205,6 +205,86 @@ describe('resolveFlow — 매출 태그 공존 시 큰 값 선택 (결함 2, Alp
   })
 })
 
+describe('resolveFlow — 업종별 총매출 태그 (coverage-closeout 2절)', () => {
+  const RUR = 'RegulatedAndUnregulatedOperatingRevenue'
+  const RNIE = 'RevenuesNetOfInterestExpense'
+
+  it('규제 유틸리티 총매출만 신고하는 회사의 매출을 되살린다 (XEL 2025-12-31)', () => {
+    // 실측: XEL은 `Revenues`를 2019-09-30에서 끊고 이 태그로 옮겼다. 그 결과
+    // 2019~2025년 연간 매출이 통째로 비어 있었다.
+    const r = resolveFlow(new Map([[RUR, 14_669_000_000]]))
+    expect(r.fields.revenue).toBe(14_669_000_000)
+    expect(r.used.revenue).toBe(RUR)
+  })
+
+  it('같은 태그를 부분 매출로 쓰는 회사에서는 총계가 이긴다 (LNT 2025-12-31)', () => {
+    // 실측: LNT는 `RegulatedAndUnregulatedOperatingRevenue`를 140,000,000(비규제)로
+    // 쓰면서 `Revenues` 4,362,000,000을 따로 신고한다. 최댓값 규칙이 그대로 답이다.
+    const r = resolveFlow(new Map([[RUR, 140_000_000], ['Revenues', 4_362_000_000]]))
+    expect(r.fields.revenue).toBe(4_362_000_000)
+    expect(r.used.revenue).toBe('Revenues')
+  })
+
+  it('대출·핀테크의 총매출 줄을 쓴다 (SOFI 2025-12-31)', () => {
+    // 실측: 추적 태그로는 계약매출 619,353,000만 잡혀 실제 순매출의 6분의 1이었다.
+    const r = resolveFlow(new Map([
+      [RNIE, 3_613_354_000],
+      ['RevenueFromContractWithCustomerExcludingAssessedTax', 619_353_000],
+    ]))
+    expect(r.fields.revenue).toBe(3_613_354_000)
+    expect(r.used.revenue).toBe(RNIE)
+  })
+})
+
+describe('resolveFlow — 영업이익 유도 (coverage-closeout 3절)', () => {
+  it('신고된 OperatingIncomeLoss가 언제나 1순위다', () => {
+    const r = resolveFlow(new Map([
+      ['OperatingIncomeLoss', 2_583_000_000],
+      ['Revenues', 14_669_000_000],
+      ['CostsAndExpenses', 12_086_000_000],
+      ['GrossProfit', 5_000_000_000],
+      ['OperatingExpenses', 1_000_000_000],
+    ]))
+    expect(r.fields.operatingIncome).toBe(2_583_000_000)
+    expect(r.used.operatingIncome).toBe('OperatingIncomeLoss')
+  })
+
+  it('GrossProfit − OperatingExpenses로 되살린다 (표본 일치율 98.1%)', () => {
+    const r = resolveFlow(new Map([
+      ['GrossProfit', 620_000],
+      ['OperatingExpenses', 400_000],
+    ]))
+    expect(r.fields.operatingIncome).toBe(220_000)
+    expect(r.used.operatingIncome).toBe('GrossProfit-OperatingExpenses')
+  })
+
+  it('매출 − CostsAndExpenses로 되살린다 (ADP FY2025)', () => {
+    // 실측: ADP는 `OperatingIncomeLoss`도 `GrossProfit`도 신고하지 않는다.
+    // 20,560.9M − 15,604.9M = 4,956.0M (매출의 24.1%).
+    const r = resolveFlow(new Map([
+      ['Revenues', 20_560_900_000],
+      ['CostsAndExpenses', 15_604_900_000],
+    ]))
+    expect(r.fields.operatingIncome).toBe(4_956_000_000)
+    expect(r.used.operatingIncome).toBe('Revenues-CostsAndExpenses')
+  })
+
+  it('매출 − OperatingExpenses는 쓰지 않는다 — 매출원가가 빠져 매출총이익만큼 부풀린다', () => {
+    // 실측 일치율 32.5%. AMD 2025: 유도 21,181M vs 신고 3,694M.
+    const r = resolveFlow(new Map([
+      ['Revenues', 34_100_000_000],
+      ['OperatingExpenses', 12_919_000_000],
+    ]))
+    expect(r.fields.operatingIncome).toBeNull()
+    expect(r.used.operatingIncome).toBeUndefined()
+  })
+
+  it('유도할 재료가 없으면 null이다 — 0으로 채우지 않는다', () => {
+    const r = resolveFlow(new Map([['Revenues', 1000]]))
+    expect(r.fields.operatingIncome).toBeNull()
+  })
+})
+
 describe('resolveFlow', () => {
   it('매출 폴백 체인의 1순위를 먼저 쓴다', () => {
     const r = resolveFlow(new Map([

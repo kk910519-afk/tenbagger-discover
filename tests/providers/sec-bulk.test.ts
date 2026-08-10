@@ -7,7 +7,11 @@ import {
 } from '@/providers/fundamental/sec-bulk'
 
 const SUB_HEADER = ['adsh', 'cik', 'name', 'sic', 'form', 'period', 'fy', 'fp', 'filed']
-const NUM_HEADER = ['adsh', 'tag', 'version', 'coreg', 'ddate', 'qtrs', 'uom', 'value', 'footnote']
+// 실제 num.txt의 컬럼 순서 그대로다(2026q1 아카이브에서 확인):
+// adsh, tag, version, ddate, qtrs, uom, segments, coreg, value, footnote
+const NUM_HEADER = [
+  'adsh', 'tag', 'version', 'ddate', 'qtrs', 'uom', 'segments', 'coreg', 'value', 'footnote',
+]
 
 describe('parseSubLine', () => {
   it('adsh·cik·form·filed를 뽑는다', () => {
@@ -27,7 +31,7 @@ describe('parseSubLine', () => {
 
 describe('parseNumLine', () => {
   it('수치 행을 파싱한다', () => {
-    const line = '0001045810-25-000123\tRevenues\tus-gaap/2024\t\t20250430\t1\tUSD\t44060000000\t'
+    const line = '0001045810-25-000123\tRevenues\tus-gaap/2024\t20250430\t1\tUSD\t\t\t44060000000\t'
     expect(parseNumLine(line, NUM_HEADER)).toEqual({
       adsh: '0001045810-25-000123',
       tag: 'Revenues',
@@ -36,16 +40,26 @@ describe('parseNumLine', () => {
       uom: 'USD',
       value: 44060000000,
       coreg: '',
+      segments: '',
     })
   })
 
+  it('segments 컬럼을 그대로 돌려준다 — 디멘션 슬라이스 판정의 유일한 근거다', () => {
+    const line =
+      '0001065088-26-000027\tGrossProfit\tus-gaap/2025\t20250930\t4\tUSD\t' +
+      'EquityMethodInvestmentNonconsolidatedInvestee=EquityMethodInvestmentNonconsolidatedInvesteeOrGroupOfInvestees;\t\t44000000\t'
+    expect(parseNumLine(line, NUM_HEADER)?.segments).toBe(
+      'EquityMethodInvestmentNonconsolidatedInvestee=EquityMethodInvestmentNonconsolidatedInvesteeOrGroupOfInvestees;',
+    )
+  })
+
   it('value가 비어 있으면 null', () => {
-    const line = '0001045810-25-000123\tRevenues\tus-gaap/2024\t\t20250430\t1\tUSD\t\t'
+    const line = '0001045810-25-000123\tRevenues\tus-gaap/2024\t20250430\t1\tUSD\t\t\t\t'
     expect(parseNumLine(line, NUM_HEADER)).toBeNull()
   })
 
   it('value가 "0"이면 실제 값 0으로 파싱한다 (빈 값과 구분)', () => {
-    const line = '0001045810-25-000123\tRevenues\tus-gaap/2024\t\t20250430\t1\tUSD\t0\t'
+    const line = '0001045810-25-000123\tRevenues\tus-gaap/2024\t20250430\t1\tUSD\t\t\t0\t'
     const result = parseNumLine(line, NUM_HEADER)
     expect(result).not.toBeNull()
     expect(result?.value).toBe(0)
@@ -62,17 +76,19 @@ describe('extractFactsFromZip', () => {
   const num = [
     NUM_HEADER.join('\t'),
     // 대상 CIK · 추적 태그 · 연결기준 → 채택
-    '0001045810-25-000123\tRevenues\tus-gaap/2024\t\t20250430\t1\tUSD\t44060000000\t',
+    '0001045810-25-000123\tRevenues\tus-gaap/2024\t20250430\t1\tUSD\t\t\t44060000000\t',
     // coreg가 있으면 자회사 단위이므로 제외
-    '0001045810-25-000123\tRevenues\tus-gaap/2024\tSUBSID\t20250430\t1\tUSD\t1000\t',
+    '0001045810-25-000123\tRevenues\tus-gaap/2024\t20250430\t1\tUSD\t\tSUBSID\t1000\t',
+    // segments가 있으면 디멘션 슬라이스이므로 제외 (제품·지역 축)
+    '0001045810-25-000123\tRevenues\tus-gaap/2024\t20250430\t1\tUSD\tGeographical=CN;\t\t1169000000\t',
     // 추적 대상이 아닌 태그는 제외
-    '0001045810-25-000123\tSomeOtherTag\tus-gaap/2024\t\t20250430\t1\tUSD\t5\t',
+    '0001045810-25-000123\tSomeOtherTag\tus-gaap/2024\t20250430\t1\tUSD\t\t\t5\t',
     // USD가 아닌 단위(주식수 제외)는 제외
-    '0001045810-25-000123\tGrossProfit\tus-gaap/2024\t\t20250430\t1\tEUR\t9\t',
+    '0001045810-25-000123\tGrossProfit\tus-gaap/2024\t20250430\t1\tEUR\t\t\t9\t',
     // 유니버스 밖 CIK는 제외
-    '0000000099-25-000001\tRevenues\tus-gaap/2024\t\t20250331\t1\tUSD\t777\t',
+    '0000000099-25-000001\tRevenues\tus-gaap/2024\t20250331\t1\tUSD\t\t\t777\t',
     // 주식수는 shares 단위 허용
-    '0001045810-25-000123\tWeightedAverageNumberOfDilutedSharesOutstanding\tus-gaap/2024\t\t20250430\t1\tshares\t24600000000\t',
+    '0001045810-25-000123\tWeightedAverageNumberOfDilutedSharesOutstanding\tus-gaap/2024\t20250430\t1\tshares\t\t\t24600000000\t',
   ].join('\n')
 
   const zip = Buffer.from(
@@ -100,5 +116,61 @@ describe('extractFactsFromZip', () => {
     expect(rev.value).toBe(44060000000)
     expect(rev.source).toBe('bulk')
     expect(rev.periodStart).toBeNull()
+  })
+
+  it('디멘션 슬라이스를 버린다 — 연결 총계만 남는다', async () => {
+    const facts = await extractFactsFromZip(zip, new Set([1045810]))
+    const revenues = facts.filter((f) => f.tag === 'Revenues')
+    expect(revenues).toHaveLength(1)
+    expect(revenues[0]?.value).toBe(44060000000)
+    // 지역 축 슬라이스 1,169,000,000이 연결 총계와 같은 키로 저장되면
+    // 어느 쪽이 살아남을지는 num.txt의 줄 순서가 정한다.
+    expect(facts.map((f) => f.value)).not.toContain(1169000000)
+  })
+
+  it('eBay 유령 연간 기간의 실제 행 — 지분법 피투자회사 축이 붙은 4분기 매출총이익은 들어오지 않는다', async () => {
+    // 실측(0001065088-26-000027, eBay FY2025 10-K): `GrossProfit` ddate=20250930
+    // qtrs=4 값 44,000,000에는 `EquityMethodInvestmentNonconsolidatedInvestee` 축이
+    // 붙어 있다 — eBay(회계연도 12월 말)가 아니라 Adevinta의 요약재무다. 이 한 행이
+    // 매출 NULL·매출총이익만 있는 "연간" 기간을 만들어 해자 lookback 창을 잠식했다.
+    const ebaySub = [
+      SUB_HEADER.join('\t'),
+      '0001065088-26-000027\t1065088\tEBAY INC\t7389\t10-K\t20251231\t2025\tFY\t20260219',
+    ].join('\n')
+    const ebayNum = [
+      NUM_HEADER.join('\t'),
+      '0001065088-26-000027\tGrossProfit\tus-gaap/2025\t20250930\t4\tUSD\t' +
+        'EquityMethodInvestmentNonconsolidatedInvestee=EquityMethodInvestmentNonconsolidatedInvesteeOrGroupOfInvestees;\t\t44000000\t',
+      '0001065088-26-000027\tGrossProfit\tus-gaap/2025\t20251231\t4\tUSD\t\t\t7931000000\t',
+    ].join('\n')
+    const ebayZip = Buffer.from(
+      zipSync({ 'sub.txt': strToU8(ebaySub), 'num.txt': strToU8(ebayNum) }),
+    )
+    const facts = await extractFactsFromZip(ebayZip, new Set([1065088]))
+    expect(facts).toHaveLength(1)
+    expect(facts[0]?.periodEnd).toBe('2025-12-31')
+    expect(facts[0]?.value).toBe(7931000000)
+  })
+
+  it('XEL 자본변동표 슬라이스 — 자본이 음수로 저장되던 행이 들어오지 않는다', async () => {
+    // 실측(0000072903-26-000009, XEL FY2025 10-K): 2023-12-31의 `StockholdersEquity`는
+    // `EquityComponents=…` 축이 붙은 세 줄뿐이고(−53M / −94M / −41M) 연결 총계는 그
+    // 신고서에 없다. 이 −53,000,000이 실제 수백억 달러대 자기자본 자리에 저장돼 있었고,
+    // 나중 신고라는 이유로 이미 정확했던 API 값까지 덮어썼다.
+    const xelSub = [
+      SUB_HEADER.join('\t'),
+      '0000072903-26-000009\t72903\tXCEL ENERGY INC\t4931\t10-K\t20251231\t2025\tFY\t20260225',
+    ].join('\n')
+    const xelNum = [
+      NUM_HEADER.join('\t'),
+      '0000072903-26-000009\tStockholdersEquity\tus-gaap/2025\t20231231\t0\tUSD\tEquityComponents=AccumulatedGainLossNetCashFlowHedgeParent;\t\t-53000000\t',
+      '0000072903-26-000009\tStockholdersEquity\tus-gaap/2025\t20251231\t0\tUSD\t\t\t23609000000\t',
+    ].join('\n')
+    const xelZip = Buffer.from(
+      zipSync({ 'sub.txt': strToU8(xelSub), 'num.txt': strToU8(xelNum) }),
+    )
+    const facts = await extractFactsFromZip(xelZip, new Set([72903]))
+    expect(facts).toHaveLength(1)
+    expect(facts[0]?.value).toBe(23609000000)
   })
 })

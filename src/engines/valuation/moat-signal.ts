@@ -57,16 +57,29 @@ export type MoatResult = {
 export function computeMoatSignal(snapshot: CompanySnapshot, cfg: AppConfig): MoatResult {
   const m = cfg.valuation.moat
   const wacc = cfg.scoring.wacc_assumption
-  // **매출이 없는 연간 행은 회계연도가 아니다.** bulk(num.txt)에는 API 대응이 없는
-  // 디멘션 슬라이스가 연간 기간처럼 들어오는 경우가 있고(실측 284행 / 85개사), 그 행은
-  // `revenue`가 NULL인 채 `gross_profit` 하나만 들고 있다 — eBay의 A 2025-09-30이
-  // gross_profit 44,000,000 / revenue NULL로 정확히 그 모습이며, 2022~2025년의 9월 30일
-  // 유령 연간 기간 네 개가 lookback 창을 잠식해 eBay가 유효 기간 3개로 INSUFFICIENT_DATA를
-  // 받는다(QCOM도 같은 모양). 매출이 아예 없는 기간은 그 회사의 한 해를 대표하지 않으므로
-  // 창에 넣지 않는다 — 오염 값을 뒤집는 규칙이 아니라 **세지 않는** 규칙이라, 신고된
-  // 값을 형제 분기로 뒤집는 판단(cumulative.ts:210이 의도적으로 하지 않기로 한 것)을
-  // 건드리지 않는다.
-  const annual: FinancialPeriod[] = snapshot.annual.filter((p) => p.revenue !== null)
+  // **연간으로 들어온 기간은 전부 센다 — 매출 유무로 거르지 않는다.**
+  //
+  // 한때 여기서 `revenue !== null`인 행만 셌다. 겨냥한 것은 유령 연간 기간이었다:
+  // bulk(num.txt)의 디멘션 슬라이스가 연간 기간처럼 들어와 매출 NULL·매출총이익만
+  // 든 행이 되고(eBay의 A 2025-09-30, gross_profit 44,000,000 — 실제로는 지분법
+  // 피투자회사 요약재무), 그 유령이 lookback 창을 잠식해 eBay가 유효 기간 3개로
+  // INSUFFICIENT_DATA를 받았다.
+  //
+  // 그 필터는 **원인이 아니라 증상에 걸려 있었다.** 오염의 실제 증거는 매출이 없다는
+  // 것이 아니라 그 사실에 디멘션 축이 붙어 있다는 것이고, 그것은 파싱 시점에만 볼 수
+  // 있다(sec-bulk.ts의 `segments` 필터가 지금 거기서 거른다 — 유령 행 자체가 더는
+  // 만들어지지 않는다). 반면 매출 결측은 **우리 쪽 태그 커버리지의 구멍**이기도
+  // 하다: XEL은 규제 유틸리티 매출 태그를 추적하지 않아 2019~2025년 매출이 통째로
+  // 비어 있었고, 그동안 그 일곱 해는 영업이익·부채·자본·현금이 모두 갖춰져 있었는데도
+  // 이 필터에 걸려 세어지지 않았다. 실측으로 그런 회사가 **38개**였다 — ROIC가 요구하는
+  // 네 필드가 모두 있는 연간 기간이 4개 이상인데 `TOO_FEW_PERIODS`(=연간 실적 자체가
+  // 부족하다는 진술)를 받고 있었다.
+  //
+  // **ROIC는 매출을 쓰지 않는다**(영업이익·부채·자본·현금뿐). 매출 결측을 이유로
+  // 기간을 버리는 것은 회사를 우리의 결측으로 벌하는 것이고, 이 제품의 상시 규칙에
+  // 어긋난다. 계산에 필요한 필드가 없는 기간은 아래 `roicVerdict`가 이미 UNDEFINED로
+  // 가려내고, 그 원인은 insufficientReason이 따로 보고한다.
+  const annual: FinancialPeriod[] = snapshot.annual
   const periods: FinancialPeriod[] = annual.slice(0, m.lookback_periods)
 
   const minInvested = cfg.scoring.min_invested_capital_ratio
