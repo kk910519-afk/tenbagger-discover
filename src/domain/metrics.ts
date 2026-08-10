@@ -72,6 +72,26 @@ export function roic(p: FinancialPeriod | undefined, taxRate: number): number | 
   return (p.operatingIncome * (1 - taxRate)) / invested
 }
 
+/**
+ * roic()가 null인 이유를 둘로 구분한다: 재무 항목 자체가 없는 것(MISSING_FIELDS, 진짜
+ * "모른다")과, 항목은 다 있는데 투하자본(totalDebt + equity − cash)이 0 이하로 나오는
+ * 것(NON_POSITIVE_INVESTED_CAPITAL — 현금이 부채·자본 합계보다 많은 초기 성장 단계
+ * 기업에 흔하다. 이건 결측이 아니라 ROIC라는 지표 자체가 정의되지 않는 경우다).
+ *
+ * roic() 본체는 건드리지 않는다 — Tenbagger 채점 엔진이 그 함수를 그대로 공유하므로,
+ * 이 함수는 같은 조건을 별도로 재현해 분류만 얹을 뿐 roic()의 반환값에는 관여하지 않는다.
+ */
+export type RoicGap = 'MISSING_FIELDS' | 'NON_POSITIVE_INVESTED_CAPITAL'
+
+export function roicGap(p: FinancialPeriod | undefined): RoicGap | null {
+  if (!p) return 'MISSING_FIELDS'
+  if (p.operatingIncome === null || p.totalDebt === null || p.equity === null || p.cash === null) {
+    return 'MISSING_FIELDS'
+  }
+  const invested = p.totalDebt + p.equity - p.cash
+  return invested <= 0 ? 'NON_POSITIVE_INVESTED_CAPITAL' : null
+}
+
 /** FCF가 음수인 기업만 의미가 있다. 분기 평균 소모액 기준 잔여 분기 수. */
 export function cashRunwayQuarters(ttm: FinancialPeriod[]): number | null {
   const p = ttm[0]

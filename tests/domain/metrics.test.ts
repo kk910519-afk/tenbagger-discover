@@ -4,7 +4,7 @@ import {
   ttmRevenueGrowth, revenueCagr3y, revenueAcceleration,
   grossMargin, operatingMargin, fcfMargin,
   grossMarginSeries, grossMarginTrendBps,
-  roic, cashRunwayQuarters, netCashToMarketCap, debtToEbitda, opexGrowth,
+  roic, roicGap, cashRunwayQuarters, netCashToMarketCap, debtToEbitda, opexGrowth,
 } from '@/domain/metrics'
 
 function p(over: Partial<FinancialPeriod> & { periodEnd: string }): FinancialPeriod {
@@ -105,6 +105,32 @@ describe('roic', () => {
   it('투하자본이 0 이하면 null', () => {
     const per = p({ periodEnd: 'x', operatingIncome: 100, totalDebt: 0, equity: 100, cash: 500 })
     expect(roic(per, 0.21)).toBeNull()
+  })
+})
+
+describe('roicGap — roic()가 null인 이유를 구분한다(roic() 자체의 조건과 정확히 대응해야 함)', () => {
+  it('재무 항목이 결측이면 MISSING_FIELDS', () => {
+    const per = p({ periodEnd: 'x', operatingIncome: 100, totalDebt: 0, equity: 100, cash: null })
+    expect(roic(per, 0.21)).toBeNull()
+    expect(roicGap(per)).toBe('MISSING_FIELDS')
+  })
+
+  it('기간 자체가 없으면(undefined) MISSING_FIELDS', () => {
+    expect(roicGap(undefined)).toBe('MISSING_FIELDS')
+  })
+
+  it('항목은 다 있는데 투하자본이 0 이하면 NON_POSITIVE_INVESTED_CAPITAL', () => {
+    const per = p({ periodEnd: 'x', operatingIncome: 100, totalDebt: 0, equity: 100, cash: 500 })
+    expect(roic(per, 0.21)).toBeNull()
+    expect(roicGap(per)).toBe('NON_POSITIVE_INVESTED_CAPITAL')
+  })
+
+  it('roic()가 값을 낼 수 있으면 null(간극 없음)', () => {
+    const per = p({
+      periodEnd: '2025-12-31', operatingIncome: 1000, totalDebt: 2000, equity: 6000, cash: 1000,
+    })
+    expect(roic(per, 0.21)).not.toBeNull()
+    expect(roicGap(per)).toBeNull()
   })
 })
 

@@ -162,11 +162,80 @@ export function oneStrongYearCompany(): CompanySnapshot {
   })
 }
 
-/** ROIC를 계산할 수 있는 연간 기간이 3개뿐(최소 4개 필요) — INSUFFICIENT_DATA */
+/** 연간 기간 자체가 3개뿐(최소 4개 필요) — 신규 상장 등, 데이터 품질과 무관하게 채울 수 없음 → TOO_FEW_PERIODS */
 export function insufficientMoatHistoryCompany(): CompanySnapshot {
   return base({
     ticker: 'THINHX',
     annual: [annualPeriod(2025, 15), annualPeriod(2024, 15), annualPeriod(2023, 15)],
+  })
+}
+
+/**
+ * 연간 기간은 5개로 충분하지만 그 중 2개(cash 결측, totalDebt 결측)에서 ROIC 계산에
+ * 필요한 재무 항목이 없어 유효 기간이 3개뿐(최소 4개 필요) → MISSING_FINANCIALS.
+ */
+export function missingFinancialsMoatCompany(): CompanySnapshot {
+  return base({
+    ticker: 'MISSFIN',
+    annual: [
+      annualPeriod(2025, 15),
+      annualPeriod(2024, 15),
+      period('2023-12-31', 'A', { revenue: 45, operatingIncome: 15, totalDebt: 60, equity: 50, cash: null }),
+      period('2022-12-31', 'A', { revenue: 45, operatingIncome: 15, totalDebt: null, equity: 50, cash: 10 }),
+      annualPeriod(2021, 15),
+    ],
+  })
+}
+
+/**
+ * 연간 기간 5개 모두 재무 항목은 갖춰져 있지만, 보유 현금이 부채+자본 합계보다 많아
+ * 투하자본(=부채+자본−현금)이 매해 0 이하 → 유효 기간 0개, 결측은 하나도 없음 →
+ * NOT_APPLICABLE(현금부자 초기 성장 기업의 전형적인 모양 — 라이브 DB의 상위 후보 다수가
+ * 이 모양이다).
+ */
+export function notApplicableMoatCompany(): CompanySnapshot {
+  const cashRich = (year: number) =>
+    period(`${year}-12-31`, 'A', { revenue: 45, operatingIncome: 15, totalDebt: 10, equity: 20, cash: 100 })
+  return base({
+    ticker: 'NOTAPP',
+    annual: [cashRich(2025), cashRich(2024), cashRich(2023), cashRich(2022), cashRich(2021)],
+  })
+}
+
+/** 투하자본 0 이하인 해 4개 + 결측 1개. 결측 기간을 낙관적으로 되돌려도(유효 2개) 여전히
+ * 최소 4개에 못 미치므로 그 결측은 결론을 바꿀 수 없었다 — 진짜 병목은 투하자본 미달 →
+ * NOT_APPLICABLE. 결측이 하나 섞여 있다고 무조건 "모른다"고 말하지 않는다는 규칙을 검증.
+ */
+function cashRich(year: number): FinancialPeriod {
+  return period(`${year}-12-31`, 'A', { revenue: 45, operatingIncome: 15, totalDebt: 10, equity: 20, cash: 100 })
+}
+
+export function mixedGapCannotFlipMoatCompany(): CompanySnapshot {
+  return base({
+    ticker: 'MIXNF',
+    annual: [
+      annualPeriod(2025, 15), // 유효
+      cashRich(2024), cashRich(2023), cashRich(2022), cashRich(2021), // 투하자본 ≤ 0 (4개)
+      period('2020-12-31', 'A', { revenue: 45, operatingIncome: 15, totalDebt: 60, equity: 50, cash: null }), // 결측
+    ],
+  })
+}
+
+/** 투하자본 0 이하인 해 2개 + 결측 4개. 결측 기간을 낙관적으로 되돌리면(유효 1+4=5개) 최소
+ * 4개를 채우고도 남는다 — 그 결측이 채워졌다면 결론이 달라질 수 있었다는 뜻이므로, 투하자본
+ * 미달 기간이 섞여 있어도 MISSING_FINANCIALS를 보고한다(결측이 진짜 병목일 가능성을 배제할
+ * 수 없으므로).
+ */
+export function mixedGapCouldFlipMoatCompany(): CompanySnapshot {
+  const missing = (year: number): FinancialPeriod =>
+    period(`${year}-12-31`, 'A', { revenue: 45, operatingIncome: 15, totalDebt: 60, equity: 50, cash: null })
+  return base({
+    ticker: 'MIXCF',
+    annual: [
+      annualPeriod(2025, 15), // 유효
+      missing(2024), missing(2023), missing(2022), missing(2021), // 결측 (4개)
+      cashRich(2020), cashRich(2019), // 투하자본 ≤ 0 (2개)
+    ],
   })
 }
 

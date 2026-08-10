@@ -2,6 +2,7 @@ import type { ValuationView } from '@/app/_queries/stock'
 import { formatPct } from '@/app/_lib/format'
 import {
   fairValueReasonLabel,
+  moatInsufficientReasonLabel,
   priceToFairValueUnavailableReason,
   UNCERTAINTY_DRIVER_LABELS,
   moatTone,
@@ -21,7 +22,8 @@ const DASH = '—'
 const TOOLTIPS = {
   moat:
     'ROIC가 최근 연간 실적에서 자본비용(WACC)을 얼마나 꾸준히 웃돌았는지를 봅니다. WIDE는 대부분의 기간에서, ' +
-    'NARROW는 일부 기간에서 상회했다는 뜻이고, 평가할 연간 데이터가 부족하면 판정하지 않습니다. 마진이나 ' +
+    'NARROW는 일부 기간에서 상회했다는 뜻이고, 평가할 연간 데이터가 부족하거나 ROIC 자체가 정의되지 않는 ' +
+    '기업이면(예: 현금이 투입 자본보다 많은 초기 성장 단계) 판정하지 않고 그 이유를 밝힙니다. 마진이나 ' +
     '성장률만으로는 주지 않습니다 — 지속성이 기준입니다.',
   fairValue:
     '미래 잉여현금흐름을 예측해 오늘 가치로 할인한 주당 내재가치입니다. 매출이 없거나, 성장률을 추정할 이력이 ' +
@@ -95,7 +97,7 @@ export function ValuationSection({
             </div>
             <p className="mt-1 pl-44 text-xs text-[var(--color-text-dim)]">
               {valuation.moatSignal === 'INSUFFICIENT_DATA'
-                ? (valuation.moatEvidence[0] ?? '평가할 데이터가 부족합니다')
+                ? moatInsufficientReasonLabel(valuation.moatInsufficientReason)
                 : valuation.moatEvidence.join(' · ')}
             </p>
           </div>

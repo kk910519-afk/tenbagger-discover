@@ -34,8 +34,13 @@ const okPtfv: PriceToFairValueResult = {
   status: 'OK', ratio: 0.8, marginOfSafety: 0.2, valuationStatus: 'UNDERVALUED',
 }
 const unavailablePtfv: PriceToFairValueResult = { status: 'UNAVAILABLE', reason: '테스트' }
-const wideMoat: MoatResult = { signal: 'WIDE', periodsEvaluated: 8, periodsClearing: 7, evidence: ['a', 'b'] }
-const insufficientMoat: MoatResult = { signal: 'INSUFFICIENT_DATA', periodsEvaluated: 1, periodsClearing: 0, evidence: ['a'] }
+const wideMoat: MoatResult = {
+  signal: 'WIDE', periodsEvaluated: 8, periodsClearing: 7, insufficientReason: null, evidence: ['a', 'b'],
+}
+const insufficientMoat: MoatResult = {
+  signal: 'INSUFFICIENT_DATA', periodsEvaluated: 1, periodsClearing: 0,
+  insufficientReason: 'TOO_FEW_PERIODS', evidence: ['a'],
+}
 const lowUncertainty: UncertaintyResult = {
   level: 'LOW', score: 0.1,
   drivers: [{ key: 'data_completeness', status: 'MEASURED', risk: 0.1, detail: 'x' }],
@@ -57,6 +62,7 @@ describe('writeValuations', () => {
     expect(r.fair_value_per_share).toBe(42)
     expect(r.valuation_status).toBe('UNDERVALUED')
     expect(r.moat_signal).toBe('WIDE')
+    expect(r.moat_insufficient_reason).toBeNull()
     expect(r.uncertainty_level).toBe('LOW')
     expect(JSON.parse(r.moat_evidence as string)).toEqual(['a', 'b'])
   })
@@ -71,6 +77,7 @@ describe('writeValuations', () => {
     expect(r.fair_value_per_share).toBeNull()
     expect(r.price_to_fair_value_status).toBe('UNAVAILABLE')
     expect(r.valuation_status).toBeNull()
+    expect(r.moat_insufficient_reason).toBe('TOO_FEW_PERIODS')
   })
 
   it('(cik, as_of) 이력이 쌓인다', () => {

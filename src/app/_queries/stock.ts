@@ -4,6 +4,7 @@ import { grossMargin, operatingMargin, fcfMargin } from '@/domain/metrics'
 import { loadConfig } from '@/config'
 import type {
   FairValueReason,
+  MoatInsufficientReason,
   MoatSignal,
   UncertaintyDriverKey,
   UncertaintyLevel,
@@ -50,6 +51,7 @@ export type ValuationView = {
   moatSignal: MoatSignal
   moatPeriodsEvaluated: number
   moatPeriodsClearing: number
+  moatInsufficientReason: MoatInsufficientReason | null
   moatEvidence: string[]
   fairValueStatus: 'OK' | 'INSUFFICIENT_DATA'
   fairValueReason: FairValueReason | null
@@ -134,6 +136,7 @@ type HeadRow = {
   valMoatSignal: MoatSignal | null
   valMoatPeriodsEvaluated: number | null
   valMoatPeriodsClearing: number | null
+  valMoatInsufficientReason: MoatInsufficientReason | null
   valMoatEvidence: string | null
   valFairValueStatus: 'OK' | 'INSUFFICIENT_DATA' | null
   valFairValueReason: FairValueReason | null
@@ -175,6 +178,7 @@ export function getStockDetail(
               v.moat_signal AS valMoatSignal,
               v.moat_periods_evaluated AS valMoatPeriodsEvaluated,
               v.moat_periods_clearing AS valMoatPeriodsClearing,
+              v.moat_insufficient_reason AS valMoatInsufficientReason,
               v.moat_evidence AS valMoatEvidence,
               v.fair_value_status AS valFairValueStatus,
               v.fair_value_reason AS valFairValueReason,
@@ -264,6 +268,7 @@ export function getStockDetail(
           moatSignal: head.valMoatSignal,
           moatPeriodsEvaluated: head.valMoatPeriodsEvaluated,
           moatPeriodsClearing: head.valMoatPeriodsClearing,
+          moatInsufficientReason: head.valMoatInsufficientReason,
           moatEvidence: JSON.parse(head.valMoatEvidence) as string[],
           fairValueStatus: head.valFairValueStatus,
           fairValueReason: head.valFairValueReason,

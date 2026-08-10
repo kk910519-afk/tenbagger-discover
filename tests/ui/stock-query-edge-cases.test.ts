@@ -172,16 +172,16 @@ describe('getStockDetail 밸류에이션이 INSUFFICIENT_DATA인 회사', () => 
          cik, as_of,
          fair_value_status, fair_value_reason, fair_value_detail,
          price_to_fair_value_status,
-         moat_signal, moat_periods_evaluated, moat_periods_clearing, moat_evidence,
+         moat_signal, moat_periods_evaluated, moat_periods_clearing, moat_insufficient_reason, moat_evidence,
          uncertainty_level, uncertainty_score, uncertainty_drivers,
          engine_version
        ) VALUES (
          501, '2026-08-09',
          'INSUFFICIENT_DATA', 'NOT_CASH_GENERATIVE', '잉여현금흐름과 영업이익이 모두 0 이하',
          'UNAVAILABLE',
-         'INSUFFICIENT_DATA', 2, 0, '["ROIC를 산출할 수 있는 연간 기간이 2개뿐 — 최소 4개 필요"]',
+         'INSUFFICIENT_DATA', 2, 0, 'TOO_FEW_PERIODS', '["보고된 연간 실적이 2개뿐 — 판정에 필요한 최소 4개에 못 미침"]',
          'VERY_HIGH', 0.9, '[]',
-         'valuation-1.0.0'
+         'valuation-1.2.0'
        )`,
     ).run()
 
@@ -199,5 +199,6 @@ describe('getStockDetail 밸류에이션이 INSUFFICIENT_DATA인 회사', () => 
     expect(v.marginOfSafety).toBeNull()
     expect(v.valuationStatus).toBeNull()
     expect(v.moatSignal).toBe('INSUFFICIENT_DATA')
+    expect(v.moatInsufficientReason).toBe('TOO_FEW_PERIODS')
   })
 })

@@ -1,5 +1,6 @@
 import type {
   FairValueReason,
+  MoatInsufficientReason,
   MoatSignal,
   UncertaintyDriverKey,
   UncertaintyLevel,
@@ -24,6 +25,29 @@ export const FAIR_VALUE_REASON_LABELS: Record<FairValueReason, string> = {
 export function fairValueReasonLabel(reason: FairValueReason | null): string {
   if (reason === null) return '내재가치를 계산할 수 없습니다'
   return FAIR_VALUE_REASON_LABELS[reason]
+}
+
+/**
+ * Moat Signal이 INSUFFICIENT_DATA일 때 "왜 판정하지 않았는지"를 사람이 읽을 한국어
+ * 한 줄로 옮긴다. 세 사유는 서로 다른 이야기라서 다른 문장을 쓴다(브리프 §Moat 사유
+ * 구분) — TOO_FEW_PERIODS/MISSING_FINANCIALS는 데이터가 부족하다는 뜻이고,
+ * NOT_APPLICABLE은 데이터는 다 있지만 ROIC라는 지표 자체가 이 회사에는 적용되지
+ * 않는다는 뜻이다. "투하자본" 같은 전문용어 없이 누구나 읽을 수 있게 쓴다.
+ * MoatInsufficientReason은 정확히 이 3개뿐이다(src/engines/valuation/moat-signal.ts)
+ * — Record로 선언해 새 사유가 추가되면 이 파일이 컴파일 타임에 깨지도록 한다.
+ */
+export const MOAT_INSUFFICIENT_REASON_LABELS: Record<MoatInsufficientReason, string> = {
+  TOO_FEW_PERIODS: '상장 후 보고된 연간 실적이 판정에 필요한 최소 기간보다 적어 아직 판단할 수 없습니다',
+  MISSING_FINANCIALS:
+    'ROIC 계산에 필요한 재무 항목(영업이익·부채·자본·현금)이 일부 연도에 보고되지 않아 판단할 수 없습니다',
+  NOT_APPLICABLE:
+    '보유 현금이 부채와 자본을 합친 금액보다 많은 해가 있어 ROIC 자체를 정의할 수 없습니다 — 데이터가 없어서가 아니라, ' +
+    '현금을 많이 쌓아둔 초기 성장 단계 기업에는 이 지표가 적용되지 않기 때문입니다',
+}
+
+export function moatInsufficientReasonLabel(reason: MoatInsufficientReason | null): string {
+  if (reason === null) return '평가할 데이터가 부족합니다'
+  return MOAT_INSUFFICIENT_REASON_LABELS[reason]
 }
 
 /**

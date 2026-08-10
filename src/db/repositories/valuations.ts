@@ -28,7 +28,7 @@ export function writeValuations(raw: Database.Database, rows: ValuationWrite[]):
        fair_value_status, fair_value_reason, fair_value_per_share,
        fair_value_assumptions, fair_value_detail,
        price_to_fair_value_status, price_to_fair_value_ratio, margin_of_safety, valuation_status,
-       moat_signal, moat_periods_evaluated, moat_periods_clearing, moat_evidence,
+       moat_signal, moat_periods_evaluated, moat_periods_clearing, moat_insufficient_reason, moat_evidence,
        uncertainty_level, uncertainty_score, uncertainty_drivers,
        engine_version
      ) VALUES (
@@ -36,7 +36,7 @@ export function writeValuations(raw: Database.Database, rows: ValuationWrite[]):
        @fairValueStatus, @fairValueReason, @fairValuePerShare,
        @fairValueAssumptions, @fairValueDetail,
        @priceToFairValueStatus, @priceToFairValueRatio, @marginOfSafety, @valuationStatus,
-       @moatSignal, @moatPeriodsEvaluated, @moatPeriodsClearing, @moatEvidence,
+       @moatSignal, @moatPeriodsEvaluated, @moatPeriodsClearing, @moatInsufficientReason, @moatEvidence,
        @uncertaintyLevel, @uncertaintyScore, @uncertaintyDrivers,
        @engineVersion
      )`,
@@ -64,6 +64,7 @@ export function writeValuations(raw: Database.Database, rows: ValuationWrite[]):
         moatSignal: r.moat.signal,
         moatPeriodsEvaluated: r.moat.periodsEvaluated,
         moatPeriodsClearing: r.moat.periodsClearing,
+        moatInsufficientReason: r.moat.insufficientReason,
         moatEvidence: JSON.stringify(r.moat.evidence),
         uncertaintyLevel: r.uncertainty.level,
         uncertaintyScore: r.uncertainty.score,

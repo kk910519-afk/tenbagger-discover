@@ -157,6 +157,7 @@ CREATE TABLE IF NOT EXISTS valuations (
   moat_signal TEXT NOT NULL CHECK (moat_signal IN ('WIDE','NARROW','NONE','INSUFFICIENT_DATA')),
   moat_periods_evaluated INTEGER NOT NULL,
   moat_periods_clearing INTEGER NOT NULL,
+  moat_insufficient_reason TEXT CHECK (moat_insufficient_reason IN ('TOO_FEW_PERIODS','MISSING_FINANCIALS','NOT_APPLICABLE')),
   moat_evidence TEXT NOT NULL,
   uncertainty_level TEXT NOT NULL CHECK (uncertainty_level IN ('LOW','MEDIUM','HIGH','VERY_HIGH')),
   uncertainty_score REAL NOT NULL,
@@ -237,5 +238,14 @@ export function runMigrations(raw: Database.Database): void {
     'market_data',
     'shares_basis',
     `shares_basis TEXT CHECK (shares_basis IN ('reported','diluted_fallback'))`,
+  )
+  // moat_insufficient_reason도 사후 추가된 컬럼이다(moat-reason 과제) — 같은 이유로
+  // 별도로 채운다. NULL 기본값은 CHECK 제약을 위반하지 않는다(WIDE/NARROW/NONE 및
+  // 엔진 버전 업그레이드 전 기존 행 모두 NULL로 남는다).
+  ensureColumn(
+    raw,
+    'valuations',
+    'moat_insufficient_reason',
+    `moat_insufficient_reason TEXT CHECK (moat_insufficient_reason IN ('TOO_FEW_PERIODS','MISSING_FINANCIALS','NOT_APPLICABLE'))`,
   )
 }

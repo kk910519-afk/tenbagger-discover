@@ -179,6 +179,7 @@ export const valuations = sqliteTable(
     moatSignal: text('moat_signal').notNull(),
     moatPeriodsEvaluated: integer('moat_periods_evaluated').notNull(),
     moatPeriodsClearing: integer('moat_periods_clearing').notNull(),
+    moatInsufficientReason: text('moat_insufficient_reason'),
     moatEvidence: text('moat_evidence').notNull(),
     uncertaintyLevel: text('uncertainty_level').notNull(),
     uncertaintyScore: real('uncertainty_score').notNull(),
