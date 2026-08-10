@@ -20,8 +20,9 @@ export const FAIR_VALUE_REASON_LABELS: Record<FairValueReason, string> = {
   NO_SHARE_COUNT: '희석주식수와 발행주식수 정보가 모두 없습니다',
   NO_BALANCE_SHEET_DATA: '현금 또는 총부채 데이터가 없습니다',
   GROWTH_NOT_PROJECTABLE:
-    '최근 매출 성장률이 너무 높아 앞으로 몇 년간 이어진다고 가정할 수 없습니다 — ' +
-    '그 비율을 그대로 늘려 잡으면 내재가치가 측정이 아니라 가정이 되므로 숫자를 내지 않습니다',
+    '최근 매출 성장률을 예측에 그대로 태우면 예측 구간이 끝날 때 매출이 지금의 몇 배로 ' +
+    '불어나야 합니다 — 그만큼의 확대를 전제한 값은 이 회사에 대한 측정이 아니라 우리가 ' +
+    '고른 가정이므로 숫자를 내지 않습니다',
   INVALID_ASSUMPTIONS: '할인율이 터미널 성장률보다 낮거나 같아 계산이 발산합니다',
 }
 
@@ -81,14 +82,36 @@ export const UNCERTAINTY_DRIVER_LABELS: Record<UncertaintyDriverKey, string> = {
   business_concentration: '사업 집중도',
 }
 
+/**
+ * 등급 이름은 영문 코드 그대로 배지에 뜨므로, 그 옆에 프레임워크를 모르는 사람도 읽을 수
+ * 있는 한국어 한 줄을 붙인다(페이지의 다른 설명문과 같은 톤 — 전문용어 없이, 무엇을
+ * 봤는지만 말한다). ABSENT는 "측정했고 없었다", INSUFFICIENT_DATA는 "측정하지 못했다"로
+ * 문장 자체를 다르게 써서 둘이 섞이지 않게 한다.
+ * MoatSignal은 정확히 이 4개뿐이다 — Record로 선언해 등급이 늘면 컴파일 타임에 깨진다.
+ */
+export const MOAT_SIGNAL_LABELS: Record<MoatSignal, string> = {
+  PERSISTENT: '자본비용을 넘는 수익이 대부분의 해에 이어졌습니다',
+  INTERMITTENT: '넘은 해와 넘지 못한 해가 섞여 있습니다',
+  ABSENT: '따져봤지만 이어지는 초과 수익을 찾지 못했습니다',
+  INSUFFICIENT_DATA: '따져볼 수 없었습니다',
+}
+
+/** MINIMAL→SEVERE 순으로 "이 내재가치 추정을 얼마나 믿을 수 있는지"가 낮아진다. */
+export const UNCERTAINTY_LEVEL_LABELS: Record<UncertaintyLevel, string> = {
+  MINIMAL: '추정을 뒷받침할 근거가 고르게 갖춰져 있습니다',
+  MODERATE: '대체로 갖춰졌지만 흔들리는 부분이 있습니다',
+  ELEVATED: '근거가 부족하거나 실적이 들쭉날쭉해 확신이 낮습니다',
+  SEVERE: '확신할 근거가 거의 없습니다 — 내재가치를 참고로만 보십시오',
+}
+
 /** Value/Badge 둘 다 받는 톤 이름 — 기존 시맨틱 색 5종 중 4종(neutral은 무색)만 쓴다. */
 export type Tone = 'neutral' | 'positive' | 'risk' | 'watch'
 
-/** WIDE(양호)/NARROW(일부)/NONE(근거 없음)를 색으로도 구분한다 — 색이 주된 신호는 아니다. */
+/** 지속(PERSISTENT)/간헐(INTERMITTENT)/없음(ABSENT)을 색으로도 구분한다 — 색이 주된 신호는 아니다. */
 export function moatTone(signal: MoatSignal): Tone {
-  if (signal === 'WIDE') return 'positive'
-  if (signal === 'NARROW') return 'watch'
-  return 'neutral' // NONE, INSUFFICIENT_DATA
+  if (signal === 'PERSISTENT') return 'positive'
+  if (signal === 'INTERMITTENT') return 'watch'
+  return 'neutral' // ABSENT, INSUFFICIENT_DATA
 }
 
 export function valuationStatusTone(status: ValuationStatus | null): Tone {
@@ -98,7 +121,7 @@ export function valuationStatusTone(status: ValuationStatus | null): Tone {
 }
 
 export function uncertaintyTone(level: UncertaintyLevel): Tone {
-  if (level === 'LOW') return 'positive'
-  if (level === 'MEDIUM') return 'watch'
-  return 'risk' // HIGH, VERY_HIGH
+  if (level === 'MINIMAL') return 'positive'
+  if (level === 'MODERATE') return 'watch'
+  return 'risk' // ELEVATED, SEVERE
 }

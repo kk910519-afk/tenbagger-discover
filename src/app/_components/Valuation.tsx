@@ -4,7 +4,9 @@ import {
   fairValueReasonLabel,
   moatInsufficientReasonLabel,
   priceToFairValueUnavailableReason,
+  MOAT_SIGNAL_LABELS,
   UNCERTAINTY_DRIVER_LABELS,
+  UNCERTAINTY_LEVEL_LABELS,
   moatTone,
   valuationStatusTone,
   uncertaintyTone,
@@ -21,13 +23,16 @@ const DASH = '—'
  */
 const TOOLTIPS = {
   moat:
-    'ROIC가 최근 연간 실적에서 자본비용(WACC)을 얼마나 꾸준히 웃돌았는지를 봅니다. WIDE는 대부분의 기간에서, ' +
-    'NARROW는 일부 기간에서 상회했다는 뜻이고, 평가할 연간 데이터가 부족하거나 ROIC 자체가 정의되지 않는 ' +
-    '기업이면(예: 현금이 투입 자본보다 많은 초기 성장 단계) 판정하지 않고 그 이유를 밝힙니다. 마진이나 ' +
-    '성장률만으로는 주지 않습니다 — 지속성이 기준입니다.',
+    'ROIC가 최근 연간 실적에서 자본비용(WACC)을 얼마나 꾸준히 웃돌았는지를 봅니다. PERSISTENT는 대부분의 ' +
+    '해에서, INTERMITTENT는 일부 해에서 넘었다는 뜻이고, ABSENT는 따져봤지만 이어지는 초과 수익이 없었다는 ' +
+    '뜻입니다. 평가할 연간 데이터가 부족하거나 ROIC 자체가 정의되지 않는 기업이면(예: 현금이 투입 자본보다 ' +
+    '많은 초기 성장 단계) 판정하지 않고 그 이유를 따로 밝힙니다 — "없었다"와 "따져볼 수 없었다"는 다른 ' +
+    '이야기이므로 절대 같은 칸에 넣지 않습니다. 마진이나 성장률만으로는 주지 않습니다 — 지속성이 기준입니다.',
   fairValue:
     '미래 잉여현금흐름을 예측해 오늘 가치로 할인한 주당 내재가치입니다. 매출이 없거나, 성장률을 추정할 이력이 ' +
-    '없거나, 현금을 만들어내지 못하거나, 주식수·현금·부채 정보가 없으면 계산하지 않고 이유를 밝힙니다.',
+    '없거나, 현금을 만들어내지 못하거나, 주식수·현금·부채 정보가 없으면 계산하지 않고 이유를 밝힙니다. ' +
+    '예측이 끝나는 해의 매출이 지금의 몇 배가 되어야 하는지도 함께 보고, 그 배수가 너무 크면 역시 계산하지 ' +
+    '않습니다 — 그만큼의 확대를 전제한 값은 회사에 대한 측정이 아니라 우리가 고른 가정이기 때문입니다.',
   priceToFairValue:
     '현재가를 Fair Value로 나눈 비율입니다. 1보다 작으면 시장가가 내재가치보다 낮다는 뜻이고, 1보다 크면 그 ' +
     '반대입니다. Fair Value가 없으면 이 비율도 없습니다.',
@@ -37,7 +42,7 @@ const TOOLTIPS = {
   uncertainty:
     '이 내재가치 추정을 얼마나 확신할 수 있는지를 나타냅니다 — 주가 변동성이 아닙니다. 매출 예측가능성· ' +
     '영업 레버리지·재무 레버리지·데이터 완전성 네 가지를 측정해 평균 낸 값이고, 사업 집중도는 이번 단계에서 ' +
-    '측정하지 않습니다.',
+    '측정하지 않습니다. MINIMAL → MODERATE → ELEVATED → SEVERE 순으로 확신이 낮아집니다.',
 } as const
 
 function formatPerShare(v: number | null): string {
@@ -95,10 +100,13 @@ export function ValuationSection({
                 <Badge tone={moatTone(valuation.moatSignal)}>{valuation.moatSignal}</Badge>
               )}
             </div>
+            {/* 등급 이름은 영문 코드다 — 프레임워크를 모르는 사람이 읽을 한국어 한 줄을
+                반드시 함께 낸다. INSUFFICIENT_DATA는 등급 설명이 아니라 "왜 판정하지
+                않았는지"를 세 사유로 나눠 말한다(그 구분이 이 섹션의 핵심이다). */}
             <p className="mt-1 pl-44 text-xs text-[var(--color-text-dim)]">
               {valuation.moatSignal === 'INSUFFICIENT_DATA'
                 ? moatInsufficientReasonLabel(valuation.moatInsufficientReason)
-                : valuation.moatEvidence.join(' · ')}
+                : `${MOAT_SIGNAL_LABELS[valuation.moatSignal]} — ${valuation.moatEvidence.join(' · ')}`}
             </p>
           </div>
 
@@ -160,6 +168,9 @@ export function ValuationSection({
               <Badge tone={uncertaintyTone(valuation.uncertaintyLevel)}>{valuation.uncertaintyLevel}</Badge>
               <Value dim>{Math.round(valuation.uncertaintyScore * 100)}%</Value>
             </div>
+            <p className="mt-1 pl-44 text-xs text-[var(--color-text-dim)]">
+              {UNCERTAINTY_LEVEL_LABELS[valuation.uncertaintyLevel]}
+            </p>
             <ul className="mt-1 space-y-0.5 pl-44 text-xs text-[var(--color-text-dim)]">
               {valuation.uncertaintyDrivers.map((dr) => (
                 <li key={dr.key} className="flex flex-wrap items-baseline gap-x-2">

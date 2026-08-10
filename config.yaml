@@ -161,23 +161,42 @@ quality_gate:
 valuation:
   projection_years: 5
   terminal_growth_rate: 0.025       # 장기 명목 GDP 성장률에 근접한 값 — scoring.wacc_assumption(0.09)보다 반드시 작아야 함
-  # 명시적 예측에 투영할 수 있는 초기 성장률의 상한. 이 값을 넘으면 숫자를 내지 않고
+  # 명시적 예측이 **실제로 주장하는 결과**의 상한 — 페이드 스케줄을 그대로 태웠을 때
+  # projection_years 뒤 매출이 지금의 몇 배가 되는가. 이 값을 넘으면 숫자를 내지 않고
   # INSUFFICIENT_DATA(GROWTH_NOT_PROJECTABLE)로 돌린다 — 상한값으로 깎아서 계산하지
   # 않는다. 깎는 것은 "측정하지 못한 값을 우리가 지어내는" 일이고, 이 엔진의 다섯 게이트가
   # 이미 거부하는 방식이다(설계 원칙: 근거가 없으면 숫자가 아니라 그렇게 말한다).
   #
-  # 왜 상한이 필요한가: 추세 성장률 하나가 5년간 복리로 곱해진다. CRMD의 TTM YoY +385%는
-  # 5년 뒤 매출을 63배로 만들고, 시총 $692M 기업의 내재가치를 $50.7B(주당 $545.63,
-  # 안전마진 98.6% "저평가")로 계산했다. 이것은 측정이 아니라 저작(authorship)이다.
+  # 왜 성장'률'이 아니라 배수인가: 엔진은 초기 성장률을 터미널 성장률로 페이드시키므로,
+  # 같은 초기 성장률이라도 fade_curve·projection_years·terminal_growth_rate가 달라지면
+  # 결과는 크게 달라진다. 초기 성장률 상한은 그 차이를 보지 못하는 대리 지표이고, 배수는
+  # 투영이 화면에 대고 주장하는 바로 그 값이다. 위 세 설정을 바꿔도 이 상한은 계속
+  # 같은 것을 막는다.
   #
-  # 왜 0.60인가: scoring.factors.revenue_growth.curve가 0.60에서 1.00으로 포화한다 —
-  # 제품은 이미 "성장률 60% 위로는 값의 차이가 더 이상 정보를 갖지 않는다"고 선언했다.
-  # DCF는 초기 성장률의 혼합 비중(blend)을 그 팩터에서 그대로 빌려 쓰므로, 그 곡선이
-  # 정보가 끝난다고 본 지점을 5년 복리 투영의 경계로 삼는 것이 같은 판단의 연장이다.
-  # scoring.revenue_scale_damping(매출 규모 감쇠) 곡선은 여기에 맞지 않는다: 그것은
-  # "매출 기반이 작아서 비율이 의미를 잃는 경우"를 다루는데, CRMD의 TTM 매출은 $400M로
-  # 감쇠 구간(≤$50M) 밖이다. 문제는 매출 규모가 아니라 복리 투영 자체다.
-  max_projectable_growth: 0.60
+  # 왜 상한이 필요한가: CRMD의 TTM YoY +385%는 5년 뒤 매출을 63.41배로 만들고, 시총
+  # $588M 기업의 내재가치를 주당 $545.63(안전마진 98.6% "저평가")으로 계산했다.
+  # 이것은 측정이 아니라 저작(authorship)이다.
+  #
+  # 왜 3.00배인가:
+  #   · 규칙을 한 문장으로 말할 수 있다 — "예측 구간 안에서 매출이 세 배를 넘게 불어난다고
+  #     전제하지 않는다".
+  #   · 지금까지 쓰던 초기 성장률 상한 0.60(scoring.factors.revenue_growth.curve가 1.00으로
+  #     포화하는 지점 = "이 위로는 성장률의 차이가 더 이상 정보를 갖지 않는다")을 이 페이드
+  #     스케줄에 태우면 정확히 2.9835배다. 즉 같은 경계를, 투영이 실제로 주장하는 단위로
+  #     다시 쓴 값이다.
+  #   · 결과로 검증했다: 이 상한이 배제하는 15개 기업의 암시 배수는 3.10~63.41배이고, 그중
+  #     가장 작은 SMCI(3.10배)조차 주가 $31.13에 대해 주당 $277.51(안전마진 +88.8%)을 낸다.
+  #     상한을 조금이라도 올리면 가장 먼저 들어오는 것이 바로 그 값이므로, 더 느슨한 값을
+  #     지지하는 측정 근거가 없다.
+  #   · scoring.revenue_scale_damping(매출 규모 감쇠) 곡선은 여기에 맞지 않는다: 그것은
+  #     "매출 기반이 작아서 비율이 의미를 잃는 경우"를 다루는데, CRMD의 TTM 매출은 $400M로
+  #     감쇠 구간(≤$50M) 밖이다. 문제는 매출 규모가 아니라 복리 투영 자체다.
+  #
+  # 이 상한은 옛 max_projectable_growth를 포섭한다: 페이드가 고정된 상태에서 암시 배수는
+  # 초기 성장률의 순증가 함수이므로 모든 성장률 상한은 배수 상한으로 옮겨 적을 수 있지만,
+  # 그 역은 성립하지 않는다(페이드를 바꾸면 같은 성장률 상한이 다른 결과를 허용한다).
+  # 그래서 둘을 함께 두지 않고 성장률 상한은 제거했다.
+  max_implied_revenue_multiple: 3.00
   # x=예측 연차(1..projection_years), y=초기값(성장률/FCF마진)에 남는 가중치.
   # y=1: 초기 추정치 그대로, y=0: 터미널 성장률/성숙 마진으로 완전 수렴.
   # projection_years년째에 0에 도달해 명시적 예측과 터미널가치 사이에 불연속이 생기지 않게 한다.
@@ -189,8 +208,10 @@ valuation:
   moat:
     lookback_periods: 8             # 최근 연간 8개 기간(최대)까지만 본다
     min_periods_required: 4         # ROIC 산출 가능 기간이 4개 미만이면 INSUFFICIENT_DATA
-    wide_clear_ratio: 0.75          # 유효 기간의 75% 이상에서 ROIC>WACC → WIDE
-    narrow_clear_ratio: 0.40        # 40~75% → NARROW, 그 미만은 NONE
+    # 등급 이름은 Morningstar의 published tier 어휘(Wide/Narrow/None)를 쓰지 않는다.
+    # 측정하는 것이 "초과수익의 지속성"뿐이므로 이름도 그 사실만 말한다. 임계값은 불변.
+    persistent_clear_ratio: 0.75    # 유효 기간의 75% 이상에서 ROIC>WACC → PERSISTENT
+    intermittent_clear_ratio: 0.40  # 40~75% → INTERMITTENT, 그 미만은 ABSENT(측정했고 없었다)
   uncertainty:
     growth_lookback_quarters: 8     # 매출 YoY·영업이익률 변동성 계산에 쓰는 최근 TTM 구간 수
     min_periods: 4                  # 이 미만이면 해당 드라이버는 UNAVAILABLE
@@ -212,4 +233,6 @@ valuation:
     revenue_predictability_curve: [[0.00, 0.00], [0.08, 0.20], [0.15, 0.45], [0.30, 0.75], [0.50, 1.00]]
     operating_margin_volatility_curve: [[0.00, 0.00], [0.02, 0.20], [0.05, 0.45], [0.10, 0.75], [0.20, 1.00]]
     data_completeness_curve: [[0.00, 1.00], [0.50, 0.75], [0.70, 0.45], [0.85, 0.20], [1.00, 0.00]]
-    level_thresholds: { medium: 0.25, high: 0.50, very_high: 0.75 }
+    # MINIMAL → MODERATE → ELEVATED → SEVERE. Morningstar의 published tier 어휘
+    # (Low/Medium/High/Very High/Extreme)를 쓰지 않는다. 경계값은 불변이다.
+    level_thresholds: { moderate: 0.25, elevated: 0.50, severe: 0.75 }

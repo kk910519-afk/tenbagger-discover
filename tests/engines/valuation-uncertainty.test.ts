@@ -47,12 +47,12 @@ describe('computeUncertainty', () => {
     expect(concentration!.status).toBe('UNAVAILABLE')
   })
 
-  it('LOW/MEDIUM/HIGH/VERY_HIGH 중 하나를 항상 반환한다 (데이터가 거의 없어도 예외를 던지지 않는다)', () => {
+  it('MINIMAL/MODERATE/ELEVATED/SEVERE 중 하나를 항상 반환한다 (데이터가 거의 없어도 예외를 던지지 않는다)', () => {
     const empty = { ...eligibleForFairValue(), ttm: [], annual: [], quarterly: [] }
     const r = computeUncertainty(empty, cfg)
-    expect(['LOW', 'MEDIUM', 'HIGH', 'VERY_HIGH']).toContain(r.level)
+    expect(['MINIMAL', 'MODERATE', 'ELEVATED', 'SEVERE']).toContain(r.level)
     // 아무것도 측정할 수 없으면 확신할 근거가 없다는 뜻 — 최고 불확실성으로 처리한다
-    expect(r.level).toBe('VERY_HIGH')
+    expect(r.level).toBe('SEVERE')
   })
 
   it('데이터 완전성 드라이버는 항상 MEASURED다 (핵심 필드 유무만으로 계산 가능)', () => {
@@ -114,7 +114,7 @@ describe('computeUncertainty — 드라이버 수치 고정', () => {
     expect(r.score).toBeCloseTo(0.11600755, 8)
     expect(r.score).not.toBeCloseTo(Math.max(...risks), 3)
     expect(r.score).not.toBeCloseTo(Math.min(...risks), 3)
-    expect(r.level).toBe('LOW')
+    expect(r.level).toBe('MINIMAL')
   })
 })
 
@@ -133,34 +133,34 @@ describe('computeUncertainty — 방향과 임계값', () => {
   it('level_thresholds 경계를 정확히 걷는다 (임계값을 뒤바꾸면 깨진다)', () => {
     // score를 직접 만들 수 없으므로 임계값을 옮겨 같은 회사의 등급이 어떻게 갈리는지 본다.
     // 기준 픽스처의 score는 0.11600755다.
-    const at = (medium: number, high: number, veryHigh: number) => {
+    const at = (moderate: number, elevated: number, severe: number) => {
       const c = structuredClone(cfg)
-      c.valuation.uncertainty.level_thresholds = { medium, high, very_high: veryHigh }
+      c.valuation.uncertainty.level_thresholds = { moderate, elevated, severe }
       return computeUncertainty(eligibleForFairValue(), c).level
     }
-    expect(at(0.25, 0.50, 0.75)).toBe('LOW')
-    expect(at(0.11600755, 0.50, 0.75)).toBe('MEDIUM') // 경계는 이상(>=)
-    expect(at(0.05, 0.11600755, 0.75)).toBe('HIGH')
-    expect(at(0.05, 0.08, 0.11600755)).toBe('VERY_HIGH')
+    expect(at(0.25, 0.50, 0.75)).toBe('MINIMAL')
+    expect(at(0.11600755, 0.50, 0.75)).toBe('MODERATE') // 경계는 이상(>=)
+    expect(at(0.05, 0.11600755, 0.75)).toBe('ELEVATED')
+    expect(at(0.05, 0.08, 0.11600755)).toBe('SEVERE')
   })
 })
 
 /**
  * 리뷰 Finding 4: 측정된 것만 평균 내면 이력이 없는 회사가 제품에서 가장 확신 높은
- * 라벨(LOW)을 받는다 — 불확실성 지표가 정확히 거꾸로 작동한다.
+ * 라벨(MINIMAL)을 받는다 — 불확실성 지표가 정확히 거꾸로 작동한다.
  */
 describe('computeUncertainty — 커버리지가 낮으면 불확실성이 높아진다', () => {
-  it('이력이 하나도 없는 회사는 LOW가 아니라 VERY_HIGH다', () => {
+  it('이력이 하나도 없는 회사는 MINIMAL이 아니라 SEVERE다', () => {
     const r = computeUncertainty(noHistoryCompany(), cfg)
     const measured = r.drivers.filter((d) => d.status === 'MEASURED')
     // 측정 가능한 것은 data_completeness 하나뿐 (영업 적자라 재무 레버리지도 불가)
     expect(measured).toHaveLength(1)
     expect(measured[0]!.key).toBe('data_completeness')
-    // 수정 전: score = data_completeness의 risk 그대로(0.13) → LOW
+    // 수정 전: score = data_completeness의 risk 그대로(0.13) → MINIMAL
     // 수정 후: 0.25 × 0.13 + 0.75 × 1.0
     expect(r.score).toBeCloseTo(0.25 * measured[0]!.risk! + 0.75, 10)
     expect(r.score).toBeGreaterThan(0.75)
-    expect(r.level).toBe('VERY_HIGH')
+    expect(r.level).toBe('SEVERE')
   })
 
   it('증거가 많을수록 불확실성이 낮다 — 같은 회사에서 드라이버가 늘면 score가 내려간다', () => {
@@ -174,7 +174,7 @@ describe('computeUncertainty — 커버리지가 낮으면 불확실성이 높�
     const empty = { ...eligibleForFairValue(), ttm: [], annual: [], quarterly: [] }
     const r = computeUncertainty(empty, cfg)
     expect(r.score).toBeCloseTo(1, 10)
-    expect(r.level).toBe('VERY_HIGH')
+    expect(r.level).toBe('SEVERE')
   })
 
   it('미구현 드라이버(business_concentration)는 커버리지 분모에서 빠진다', () => {

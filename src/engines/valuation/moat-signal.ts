@@ -2,7 +2,21 @@ import type { AppConfig } from '@/config'
 import type { CompanySnapshot, FinancialPeriod } from '@/domain/types'
 import { roic, roicGap, type RoicGap } from '@/domain/metrics'
 
-export type MoatSignal = 'WIDE' | 'NARROW' | 'NONE' | 'INSUFFICIENT_DATA'
+/**
+ * 이 척도가 실제로 재는 것은 "초과수익이 얼마나 오래 이어졌는가"뿐이다 — 등급 이름도
+ * 그 사실만 말한다. Morningstar가 published tier로 쓰는 어휘(Wide / Narrow / None)는
+ * 쓰지 않는다: 프레이밍은 Morningstar-Inspired로 남기되 등급 이름을 그대로 가져오면
+ * 우리 측정을 그들의 등급인 것처럼 읽히게 만든다(제품 오너 상시 규칙).
+ *
+ *   - PERSISTENT   : 유효 기간의 wide→persistent 비율 이상에서 ROIC > 자본비용 — 초과수익이 지속됐다
+ *   - INTERMITTENT : 그 아래 intermittent 비율까지 — 상회한 해와 못 넘은 해가 섞여 있다
+ *   - ABSENT       : **측정했고**, 지속적 초과수익이 발견되지 않았다. 데이터는 충분했다.
+ *   - INSUFFICIENT_DATA : 측정 자체를 못 했다. 이유는 insufficientReason이 셋으로 나눈다.
+ *
+ * ABSENT와 INSUFFICIENT_DATA를 절대 섞지 않는다 — 앞은 회사에 대한 결론이고 뒤는 우리
+ * 자신에 대한 진술이다. 임계값과 판정 규칙은 이름이 바뀌어도 그대로다.
+ */
+export type MoatSignal = 'PERSISTENT' | 'INTERMITTENT' | 'ABSENT' | 'INSUFFICIENT_DATA'
 
 /**
  * signal이 INSUFFICIENT_DATA일 때 "왜"를 구분한다. 세 원인은 서로 다른 이야기다:
@@ -24,7 +38,7 @@ export type MoatResult = {
   signal: MoatSignal
   periodsEvaluated: number
   periodsClearing: number
-  /** signal이 INSUFFICIENT_DATA일 때만 값이 있다 — WIDE/NARROW/NONE에는 해당 없음(null). */
+  /** signal이 INSUFFICIENT_DATA일 때만 값이 있다 — PERSISTENT/INTERMITTENT/ABSENT에는 해당 없음(null). */
   insufficientReason: MoatInsufficientReason | null
   /** 측정한 것만 말한다 — 전환비용/네트워크효과 같은 원천은 절대 이름 붙이지 않는다. */
   evidence: string[]
@@ -33,7 +47,7 @@ export type MoatResult = {
 /**
  * 다섯 가지 고전적 해자 원천(전환비용, 네트워크효과, 무형자산, 원가우위, 효율적 규모)은
  * XBRL 재무데이터로는 관측할 수 없다 — 그 태그가 없다. 대신 해자의 "경제적 결과", 즉
- * ROIC가 자본비용을 지속적으로 상회하는지를 측정한다. 마진이나 성장률만으로는 WIDE를
+ * ROIC가 자본비용을 지속적으로 상회하는지를 측정한다. 마진이나 성장률만으로는 PERSISTENT를
  * 주지 않는다(제품 오너 지시) — 지속성이 한 해 좋은 실적과 해자를 가르는 기준이다.
  *
  * 연간(annual) 기간을 쓴다: TTM은 분기마다 겹치므로 "몇 개의 뚜렷한 해(年)"를 셌다고
@@ -126,7 +140,11 @@ export function computeMoatSignal(snapshot: CompanySnapshot, cfg: AppConfig): Mo
     clearing.length > 0 ? clearing.reduce((a, b) => a + b, 0) / clearing.length : null
 
   const signal: MoatSignal =
-    ratio >= m.wide_clear_ratio ? 'WIDE' : ratio >= m.narrow_clear_ratio ? 'NARROW' : 'NONE'
+    ratio >= m.persistent_clear_ratio
+      ? 'PERSISTENT'
+      : ratio >= m.intermittent_clear_ratio
+        ? 'INTERMITTENT'
+        : 'ABSENT'
 
   const evidence = [
     `최근 연간 ${spreads.length}개 기간 중 ${clearing.length}개에서 ROIC가 자본비용(WACC ${(wacc * 100).toFixed(1)}%)을 상회`,

@@ -18,6 +18,46 @@ export function getDb(path?: string) {
   return drizzle(getRawDb(path), { schema })
 }
 
+/**
+ * moat_signal·uncertainty_level의 CHECK 목록이 등급 이름을 담고 있어, 이름이 바뀌면
+ * 테이블 정의 자체를 다시 만들어야 한다(SQLite는 CHECK만 따로 고칠 수 없다).
+ * migrateTierNames()가 이 문자열을 그대로 재사용하도록 상수로 분리해 둔다 — 신규 DB의
+ * 정의와 마이그레이션이 만드는 정의가 갈라질 수 없게 하기 위해서다.
+ */
+const VALUATIONS_DDL = `
+CREATE TABLE IF NOT EXISTS valuations (
+  cik INTEGER NOT NULL,
+  as_of TEXT NOT NULL,
+  fair_value_status TEXT NOT NULL CHECK (fair_value_status IN ('OK','INSUFFICIENT_DATA')),
+  fair_value_reason TEXT,
+  fair_value_per_share REAL,
+  fair_value_assumptions TEXT,
+  fair_value_detail TEXT NOT NULL,
+  price_to_fair_value_status TEXT NOT NULL CHECK (price_to_fair_value_status IN ('OK','UNAVAILABLE')),
+  price_to_fair_value_ratio REAL,
+  margin_of_safety REAL,
+  valuation_status TEXT CHECK (valuation_status IN ('UNDERVALUED','FAIRLY_VALUED','OVERVALUED')),
+  moat_signal TEXT NOT NULL CHECK (moat_signal IN ('PERSISTENT','INTERMITTENT','ABSENT','INSUFFICIENT_DATA')),
+  moat_periods_evaluated INTEGER NOT NULL,
+  moat_periods_clearing INTEGER NOT NULL,
+  moat_insufficient_reason TEXT CHECK (moat_insufficient_reason IN ('TOO_FEW_PERIODS','MISSING_FINANCIALS','NOT_APPLICABLE')),
+  moat_evidence TEXT NOT NULL,
+  uncertainty_level TEXT NOT NULL CHECK (uncertainty_level IN ('MINIMAL','MODERATE','ELEVATED','SEVERE')),
+  uncertainty_score REAL NOT NULL,
+  uncertainty_drivers TEXT NOT NULL,
+  engine_version TEXT NOT NULL,
+  PRIMARY KEY (cik, as_of)
+);`
+
+// valuations도 scores와 같은 (cik, as_of) append-only 모양이다 — 같은 "최신 1건" 패턴을
+// 그대로 복제한다. UI는 이 뷰를 LEFT JOIN해서 읽어야 한다(INNER JOIN하면 아직 밸류에이션이
+// 없는 회사가 종목 상세에서 통째로 사라진다).
+const LATEST_VALUATIONS_DDL = `
+CREATE VIEW IF NOT EXISTS latest_valuations AS
+SELECT v.* FROM valuations v
+JOIN (SELECT cik, MAX(as_of) AS as_of FROM valuations GROUP BY cik) m
+  ON v.cik = m.cik AND v.as_of = m.as_of;`
+
 const DDL = `
 CREATE TABLE IF NOT EXISTS companies (
   cik INTEGER PRIMARY KEY,
@@ -142,29 +182,7 @@ CREATE TABLE IF NOT EXISTS red_flags (
   PRIMARY KEY (cik, as_of, code)
 );
 
-CREATE TABLE IF NOT EXISTS valuations (
-  cik INTEGER NOT NULL,
-  as_of TEXT NOT NULL,
-  fair_value_status TEXT NOT NULL CHECK (fair_value_status IN ('OK','INSUFFICIENT_DATA')),
-  fair_value_reason TEXT,
-  fair_value_per_share REAL,
-  fair_value_assumptions TEXT,
-  fair_value_detail TEXT NOT NULL,
-  price_to_fair_value_status TEXT NOT NULL CHECK (price_to_fair_value_status IN ('OK','UNAVAILABLE')),
-  price_to_fair_value_ratio REAL,
-  margin_of_safety REAL,
-  valuation_status TEXT CHECK (valuation_status IN ('UNDERVALUED','FAIRLY_VALUED','OVERVALUED')),
-  moat_signal TEXT NOT NULL CHECK (moat_signal IN ('WIDE','NARROW','NONE','INSUFFICIENT_DATA')),
-  moat_periods_evaluated INTEGER NOT NULL,
-  moat_periods_clearing INTEGER NOT NULL,
-  moat_insufficient_reason TEXT CHECK (moat_insufficient_reason IN ('TOO_FEW_PERIODS','MISSING_FINANCIALS','NOT_APPLICABLE')),
-  moat_evidence TEXT NOT NULL,
-  uncertainty_level TEXT NOT NULL CHECK (uncertainty_level IN ('LOW','MEDIUM','HIGH','VERY_HIGH')),
-  uncertainty_score REAL NOT NULL,
-  uncertainty_drivers TEXT NOT NULL,
-  engine_version TEXT NOT NULL,
-  PRIMARY KEY (cik, as_of)
-);
+${VALUATIONS_DDL}
 
 CREATE TABLE IF NOT EXISTS themes (
   slug TEXT PRIMARY KEY,
@@ -194,13 +212,7 @@ SELECT s.* FROM scores s
 JOIN (SELECT cik, MAX(as_of) AS as_of FROM scores GROUP BY cik) m
   ON s.cik = m.cik AND s.as_of = m.as_of;
 
--- valuations도 scores와 같은 (cik, as_of) append-only 모양이다 — 같은 "최신 1건" 패턴을
--- 그대로 복제한다. UI는 이 뷰를 LEFT JOIN해서 읽어야 한다(INNER JOIN하면 아직 밸류에이션이
--- 없는 회사가 종목 상세에서 통째로 사라진다).
-CREATE VIEW IF NOT EXISTS latest_valuations AS
-SELECT v.* FROM valuations v
-JOIN (SELECT cik, MAX(as_of) AS as_of FROM valuations GROUP BY cik) m
-  ON v.cik = m.cik AND v.as_of = m.as_of;
+${LATEST_VALUATIONS_DDL}
 `
 
 /**
@@ -222,6 +234,60 @@ function ensureColumn(
   }
 }
 
+/**
+ * 등급 이름 변경(WIDE/NARROW/NONE → PERSISTENT/INTERMITTENT/ABSENT,
+ * LOW/MEDIUM/HIGH/VERY_HIGH → MINIMAL/MODERATE/ELEVATED/SEVERE)은 저장된 값과 CHECK
+ * 제약을 동시에 바꾼다. SQLite는 CHECK만 고칠 수 없으므로 테이블을 다시 만들어 옮긴다.
+ *
+ * 이름만 바꾸는 것이므로 **어떤 회사의 등급 소속도 움직이면 안 된다** — 매핑은 1:1 전사
+ * 이고, INSUFFICIENT_DATA와 그 세 사유(moat_insufficient_reason)는 손대지 않는다.
+ * 특히 ABSENT(측정했고 없었다)는 INSUFFICIENT_DATA(측정 못 했다)와 끝까지 별개다.
+ *
+ * 옛 이름이 하나라도 남아 있는지로 판단한다(멱등) — 이미 옮긴 DB에서는 아무 일도 하지
+ * 않는다. 값이 이미 새 이름이라도 CHECK 목록이 옛것이면 다시 만든다.
+ */
+function migrateTierNames(raw: Database.Database): void {
+  const table = raw
+    .prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'valuations'`)
+    .get() as { sql: string } | undefined
+  if (!table || !table.sql.includes("'WIDE'")) return
+
+  const MOAT = `CASE moat_signal
+      WHEN 'WIDE' THEN 'PERSISTENT'
+      WHEN 'NARROW' THEN 'INTERMITTENT'
+      WHEN 'NONE' THEN 'ABSENT'
+      ELSE moat_signal END`
+  const UNCERTAINTY = `CASE uncertainty_level
+      WHEN 'LOW' THEN 'MINIMAL'
+      WHEN 'MEDIUM' THEN 'MODERATE'
+      WHEN 'HIGH' THEN 'ELEVATED'
+      WHEN 'VERY_HIGH' THEN 'SEVERE'
+      ELSE uncertainty_level END`
+
+  raw.transaction(() => {
+    raw.exec(`DROP VIEW IF EXISTS latest_valuations`)
+    raw.exec(`ALTER TABLE valuations RENAME TO valuations_pre_tier_rename`)
+    raw.exec(VALUATIONS_DDL)
+    raw.exec(`
+      INSERT INTO valuations (
+        cik, as_of, fair_value_status, fair_value_reason, fair_value_per_share,
+        fair_value_assumptions, fair_value_detail,
+        price_to_fair_value_status, price_to_fair_value_ratio, margin_of_safety, valuation_status,
+        moat_signal, moat_periods_evaluated, moat_periods_clearing, moat_insufficient_reason, moat_evidence,
+        uncertainty_level, uncertainty_score, uncertainty_drivers, engine_version
+      )
+      SELECT
+        cik, as_of, fair_value_status, fair_value_reason, fair_value_per_share,
+        fair_value_assumptions, fair_value_detail,
+        price_to_fair_value_status, price_to_fair_value_ratio, margin_of_safety, valuation_status,
+        ${MOAT}, moat_periods_evaluated, moat_periods_clearing, moat_insufficient_reason, moat_evidence,
+        ${UNCERTAINTY}, uncertainty_score, uncertainty_drivers, engine_version
+      FROM valuations_pre_tier_rename`)
+    raw.exec(`DROP TABLE valuations_pre_tier_rename`)
+    raw.exec(LATEST_VALUATIONS_DDL)
+  })()
+}
+
 export function runMigrations(raw: Database.Database): void {
   raw.exec(DDL)
   ensureColumn(raw, 'companies', 'state_of_incorporation', 'state_of_incorporation TEXT')
@@ -240,7 +306,7 @@ export function runMigrations(raw: Database.Database): void {
     `shares_basis TEXT CHECK (shares_basis IN ('reported','diluted_fallback'))`,
   )
   // moat_insufficient_reason도 사후 추가된 컬럼이다(moat-reason 과제) — 같은 이유로
-  // 별도로 채운다. NULL 기본값은 CHECK 제약을 위반하지 않는다(WIDE/NARROW/NONE 및
+  // 별도로 채운다. NULL 기본값은 CHECK 제약을 위반하지 않는다(판정이 난 등급 및
   // 엔진 버전 업그레이드 전 기존 행 모두 NULL로 남는다).
   ensureColumn(
     raw,
@@ -248,4 +314,7 @@ export function runMigrations(raw: Database.Database): void {
     'moat_insufficient_reason',
     `moat_insufficient_reason TEXT CHECK (moat_insufficient_reason IN ('TOO_FEW_PERIODS','MISSING_FINANCIALS','NOT_APPLICABLE'))`,
   )
+  // 컬럼 추가가 끝난 뒤에 실행한다 — 테이블을 통째로 다시 만들면서 컬럼 목록을 명시하므로,
+  // 사후 추가 컬럼이 이미 붙어 있어야 한다.
+  migrateTierNames(raw)
 }

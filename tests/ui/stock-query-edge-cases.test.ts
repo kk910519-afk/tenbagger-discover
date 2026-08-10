@@ -326,7 +326,7 @@ describe('getStockDetail 밸류에이션이 INSUFFICIENT_DATA인 회사', () => 
          'INSUFFICIENT_DATA', 'NOT_CASH_GENERATIVE', '잉여현금흐름과 영업이익이 모두 0 이하',
          'UNAVAILABLE',
          'INSUFFICIENT_DATA', 2, 0, 'TOO_FEW_PERIODS', '["보고된 연간 실적이 2개뿐 — 판정에 필요한 최소 4개에 못 미침"]',
-         'VERY_HIGH', 0.9, '[]',
+         'SEVERE', 0.9, '[]',
          'valuation-1.2.0'
        )`,
     ).run()

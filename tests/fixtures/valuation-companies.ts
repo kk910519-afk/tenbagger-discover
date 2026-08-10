@@ -100,7 +100,7 @@ export function eligibleForFairValue(): CompanySnapshot {
 }
 
 /**
- * 추세 성장률이 valuation.max_projectable_growth를 크게 넘는 기업 — CRMD 실사례의 모양
+ * 암시 매출배수가 valuation.max_implied_revenue_multiple을 크게 넘는 기업 — CRMD 실사례의 모양
  * (TTM 매출 $400M, 1년 전 $82.6M → TTM YoY 약 +380%, FCF마진 48.7%). 이런 입력에서
  * 수정 전 엔진은 주당 $545.63(시총의 73배)을 "98.6% 저평가"로 냈다.
  */
@@ -206,10 +206,10 @@ export function noBalanceSheetCompany(): CompanySnapshot {
 
 // --- 해자(Moat) 신호 픽스처 ---------------------------------------------------
 
-/** 연간 8개 기간 중 6개(75%)에서 ROIC가 WACC(9%)를 상회 — WIDE */
+/** 연간 8개 기간 중 6개(75%)에서 ROIC가 WACC(9%)를 상회 — PERSISTENT */
 export function wideMoatCompany(): CompanySnapshot {
   return base({
-    ticker: 'WIDE',
+    ticker: 'PERSIST',
     annual: [
       annualPeriod(2025, 15), annualPeriod(2024, 16), annualPeriod(2023, 14),
       annualPeriod(2022, 15), annualPeriod(2021, 13), annualPeriod(2020, 14),
@@ -218,10 +218,10 @@ export function wideMoatCompany(): CompanySnapshot {
   })
 }
 
-/** 연간 8개 기간 중 4개(50%)에서만 상회 — NARROW */
+/** 연간 8개 기간 중 4개(50%)에서만 상회 — INTERMITTENT */
 export function narrowMoatCompany(): CompanySnapshot {
   return base({
-    ticker: 'NARROW',
+    ticker: 'INTERMIT',
     annual: [
       annualPeriod(2025, 15), annualPeriod(2024, 16), annualPeriod(2023, 1),
       annualPeriod(2022, 15), annualPeriod(2021, 13), annualPeriod(2020, 1),
@@ -230,7 +230,7 @@ export function narrowMoatCompany(): CompanySnapshot {
   })
 }
 
-/** 6개 기간 중 딱 1개만 강했던 해 — "한 해 반짝"으로는 WIDE(는커녕 NARROW도) 얻지 못한다 */
+/** 6개 기간 중 딱 1개만 강했던 해 — "한 해 반짝"으로는 PERSISTENT(는커녕 INTERMITTENT도) 얻지 못한다 */
 export function oneStrongYearCompany(): CompanySnapshot {
   return base({
     ticker: 'ONEYR',
@@ -322,7 +322,7 @@ export function mixedGapCouldFlipMoatCompany(): CompanySnapshot {
 /**
  * 연간 14개 기간: 가장 최근 8개(lookback_periods)는 전부 WACC 미달이고, 그 이전 6개는
  * 전부 크게 상회한다. 최근 8개만 보면 상회 0개 → NONE이지만, 창을 자르지 않고 14개를
- * 다 세면 6/14 = 43%로 narrow_clear_ratio(0.40)를 넘어 NARROW가 된다.
+ * 다 세면 6/14 = 43%로 intermittent_clear_ratio(0.40)를 넘어 INTERMITTENT가 된다.
  * "10년 전의 좋았던 시절은 더 이상 계산에 들어가지 않는다"는 규칙을 관측하는 유일한
  * 픽스처다(테스트 리뷰 F6).
  */
@@ -343,7 +343,7 @@ export function staleGloryMoatCompany(): CompanySnapshot {
 /**
  * 투하자본이 양수이긴 하지만 총액 대비 무시할 만큼 작은 해로만 이뤄진 기업 — Dropbox
  * 실사례의 모양(자사주 매입으로 자본이 음수, 투하자본은 상쇄 잔차). 수정 전에는 모든
- * 기간이 유효 판정을 받아 WIDE(평균 스프레드 +119.6%p)가 나왔다.
+ * 기간이 유효 판정을 받아 PERSISTENT(평균 스프레드 +119.6%p)가 나왔다.
  */
 export function buybackNegativeEquityCompany(): CompanySnapshot {
   const year = (y: number): FinancialPeriod =>

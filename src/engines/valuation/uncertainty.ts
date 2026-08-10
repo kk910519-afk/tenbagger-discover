@@ -5,7 +5,14 @@ import { operatingMargin, debtToEbitda } from '@/domain/metrics'
 import { stdev } from '@/domain/stats'
 import { interpolate } from '@/domain/curve'
 
-export type UncertaintyLevel = 'LOW' | 'MEDIUM' | 'HIGH' | 'VERY_HIGH'
+/**
+ * "내재가치 추정을 얼마나 확신할 수 있는가"의 4단계. Morningstar가 published tier로 쓰는
+ * 어휘(Low / Medium / High / Very High / Extreme)는 쓰지 않는다 — 프레이밍은
+ * Morningstar-Inspired로 남기되 등급 이름은 우리 것이어야 한다(제품 오너 상시 규칙).
+ * MINIMAL → MODERATE → ELEVATED → SEVERE 순으로 불확실성이 커지며, 방향과 임계값은
+ * 이름이 바뀌어도 그대로다.
+ */
+export type UncertaintyLevel = 'MINIMAL' | 'MODERATE' | 'ELEVATED' | 'SEVERE'
 
 export type UncertaintyDriverKey =
   | 'revenue_predictability'
@@ -180,7 +187,7 @@ export function computeUncertainty(snapshot: CompanySnapshot, cfg: AppConfig): U
     (d): d is UncertaintyDriver & { risk: number } => d.status === 'MEASURED' && d.risk !== null,
   )
   // 측정된 것들의 평균만 쓰면 증거가 적을수록 불확실성이 **낮게** 나온다 — 이력이 0개인
-  // 회사가 제품에서 가장 확신 높은 라벨(LOW)을 받는 역전이다. 그래서 측정하지 못한 회사
+  // 회사가 제품에서 가장 확신 높은 라벨(MINIMAL)을 받는 역전이다. 그래서 측정하지 못한 회사
   // 사유 드라이버는 최대 위험(1.0)으로 채운다. "측정 가능한 것이 하나도 없다"는 입력에
   // 대해 이 엔진이 이미 명시해 둔 규칙("판단 불가 = 최고 위험")을 부분 결측까지 연속적으로
   // 확장한 것이며, 커버리지가 1이면 예전과 정확히 같은 값이 나온다.
@@ -192,10 +199,10 @@ export function computeUncertainty(snapshot: CompanySnapshot, cfg: AppConfig): U
 
   const t = u.level_thresholds
   let level: UncertaintyLevel
-  if (score >= t.very_high) level = 'VERY_HIGH'
-  else if (score >= t.high) level = 'HIGH'
-  else if (score >= t.medium) level = 'MEDIUM'
-  else level = 'LOW'
+  if (score >= t.severe) level = 'SEVERE'
+  else if (score >= t.elevated) level = 'ELEVATED'
+  else if (score >= t.moderate) level = 'MODERATE'
+  else level = 'MINIMAL'
 
   return { level, score, drivers }
 }

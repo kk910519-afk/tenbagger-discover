@@ -26,6 +26,12 @@ export type FairValueAssumptions = {
   matureFcfMargin: number
   initialFcfMargin: number
   initialMarginSource: 'fcf' | 'nopat_proxy'
+  /**
+   * 이 투영이 실제로 주장하는 것 — projection_years 뒤 매출이 지금의 몇 배가 되는가.
+   * 페이드 스케줄을 실제로 태운 결과이지 초기 성장률의 재표현이 아니다. 게이트가 보는
+   * 값이 곧 화면에 공개되는 값이어야 하므로 가정에 함께 담는다.
+   */
+  impliedRevenueMultiple: number
   taxRate: number
   netCash: number
   shares: number
@@ -64,9 +70,10 @@ function insufficient(reason: FairValueReason, detail: string): FairValueResult 
  *   4) 희석주식수 또는 발행주식수 — 주당 가치로 나눌 분모가 없으면 숫자를 낼 수 없다
  *   5) 현금과 총부채가 모두 존재 — "순현금 반영"이 공식의 일부이므로, 없는 값을 0으로
  *      대신 채우지 않고 통째로 INSUFFICIENT_DATA 처리한다
- *   6) 초기 성장률이 valuation.max_projectable_growth 이하 — 추세 성장률 하나가 5년간
- *      복리로 곱해지므로, 그 상한을 넘는 값은 상한으로 깎지 않고(깎는 것은 우리가 성장률을
- *      지어내는 일이다) 숫자를 내지 않는다. 근거와 수치는 config.yaml의 주석 참고.
+ *   6) 페이드 스케줄을 실제로 태웠을 때의 **암시 매출배수**가
+ *      valuation.max_implied_revenue_multiple 이하 — 상한을 넘으면 값을 깎지 않고(깎는
+ *      것은 우리가 성장률을 지어내는 일이다) 숫자를 내지 않는다. 근거와 수치는
+ *      config.yaml의 주석 참고.
  */
 export function computeFairValue(snapshot: CompanySnapshot, cfg: AppConfig): FairValueResult {
   const v = cfg.valuation
@@ -152,16 +159,34 @@ export function computeFairValue(snapshot: CompanySnapshot, cfg: AppConfig): Fai
     initialGrowthSource = 'cagr_3y_only'
   }
 
+  const years = v.projection_years
+  const fadeCurve = v.fade_curve
+
   // 페이드 곡선은 초기 성장률을 터미널 성장률로 수렴시킬 뿐 상한을 두지 않는다 — 그래서
-  // 한 번의 극단적 추세치가 5년 복리로 증폭된다(CRMD: +385% → 매출 63배 → 주당 $545.63,
-  // 시총의 73배). 상한을 넘으면 그 값을 상한으로 대체하지 않고 판단을 포기한다: 대체하는
-  // 순간 화면의 숫자는 회사에 대한 측정이 아니라 우리가 고른 가정이 된다.
-  if (initialGrowthRate > v.max_projectable_growth) {
+  // 한 번의 극단적 추세치가 복리로 증폭된다(CRMD: +385% → 매출 63배 → 주당 $545.63,
+  // 시총의 73배). 막아야 할 것은 성장'률'이 아니라 그 투영이 실제로 주장하는 결과이므로,
+  // 페이드를 그대로 태워 매출 경로를 먼저 만들고 그 마지막 해가 지금의 몇 배인지로
+  // 판단한다. 같은 초기 성장률이라도 페이드 스케줄·예측 연차·터미널 성장률이 달라지면
+  // 결과는 크게 달라지는데, 초기 성장률 상한은 그 차이를 보지 못한다.
+  const revenuePath: number[] = []
+  let revenueI = revenue
+  for (let year = 1; year <= years; year++) {
+    const fade = interpolate(fadeCurve, year)
+    const growth = terminalGrowthRate + fade * (initialGrowthRate - terminalGrowthRate)
+    revenueI = revenueI * (1 + growth)
+    revenuePath.push(revenueI)
+  }
+  const impliedRevenueMultiple = revenuePath[revenuePath.length - 1]! / revenue
+
+  // 상한을 넘으면 그 값을 상한으로 대체하지 않고 판단을 포기한다: 대체하는 순간 화면의
+  // 숫자는 회사에 대한 측정이 아니라 우리가 고른 가정이 된다.
+  if (impliedRevenueMultiple > v.max_implied_revenue_multiple) {
     return insufficient(
       'GROWTH_NOT_PROJECTABLE',
-      `추세 성장률 ${(initialGrowthRate * 100).toFixed(1)}%가 투영 상한 ` +
-        `${(v.max_projectable_growth * 100).toFixed(1)}%를 초과 — 이 비율을 ${v.projection_years}년 ` +
-        '복리로 늘리면 측정이 아니라 가정이 되므로 내재가치를 산출하지 않음',
+      `추세 성장률 ${(initialGrowthRate * 100).toFixed(1)}%를 페이드에 태우면 ${years}년 뒤 매출이 ` +
+        `${impliedRevenueMultiple.toFixed(2)}배가 되어 투영 상한 ` +
+        `${v.max_implied_revenue_multiple.toFixed(2)}배를 초과 — 이만큼의 확대를 전제한 값은 ` +
+        '측정이 아니라 가정이므로 내재가치를 산출하지 않음',
     )
   }
 
@@ -181,18 +206,15 @@ export function computeFairValue(snapshot: CompanySnapshot, cfg: AppConfig): Fai
     initialMarginSource = 'nopat_proxy'
   }
 
-  const years = v.projection_years
   const matureFcfMargin = v.mature_fcf_margin
-  const fadeCurve = v.fade_curve
 
-  let revenueI = revenue
+  // 매출 경로는 게이트가 이미 만든 것을 그대로 쓴다 — 게이트가 본 투영과 값을 내는 투영이
+  // 같은 하나여야 한다(두 번 계산하면 둘이 갈라질 수 있다).
   const projectedFcf: number[] = []
   for (let year = 1; year <= years; year++) {
     const fade = interpolate(fadeCurve, year)
-    const growth = terminalGrowthRate + fade * (initialGrowthRate - terminalGrowthRate)
-    revenueI = revenueI * (1 + growth)
     const margin = matureFcfMargin + fade * (initialFcfMargin - matureFcfMargin)
-    projectedFcf.push(revenueI * margin)
+    projectedFcf.push(revenuePath[year - 1]! * margin)
   }
 
   let pv = 0
@@ -214,6 +236,7 @@ export function computeFairValue(snapshot: CompanySnapshot, cfg: AppConfig): Fai
     matureFcfMargin,
     initialFcfMargin,
     initialMarginSource,
+    impliedRevenueMultiple,
     taxRate,
     netCash,
     shares,
@@ -229,6 +252,7 @@ export function computeFairValue(snapshot: CompanySnapshot, cfg: AppConfig): Fai
     detail:
       `${years}년 예측 + 터미널가치, 할인율(WACC) ${(discountRate * 100).toFixed(1)}% · ` +
       `초기성장률 ${(initialGrowthRate * 100).toFixed(1)}% → 터미널 ${(terminalGrowthRate * 100).toFixed(1)}%로 수렴 · ` +
-      `초기 FCF마진 ${(initialFcfMargin * 100).toFixed(1)}% → 성숙마진 ${(matureFcfMargin * 100).toFixed(1)}%로 수렴`,
+      `초기 FCF마진 ${(initialFcfMargin * 100).toFixed(1)}% → 성숙마진 ${(matureFcfMargin * 100).toFixed(1)}%로 수렴 · ` +
+      `${years}년 뒤 매출 ${impliedRevenueMultiple.toFixed(2)}배를 전제`,
   }
 }

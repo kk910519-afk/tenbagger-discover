@@ -382,8 +382,8 @@ describe('valuationConfigHash', () => {
       mutate: (c) => { c.scoring.factors.balance_sheet.leverage_curve[0]![1] += 0.1 } },
     { name: 'valuation.mature_fcf_margin',
       mutate: (c) => { c.valuation.mature_fcf_margin += 0.01 } },
-    { name: 'valuation.max_projectable_growth',
-      mutate: (c) => { c.valuation.max_projectable_growth += 0.05 } },
+    { name: 'valuation.max_implied_revenue_multiple',
+      mutate: (c) => { c.valuation.max_implied_revenue_multiple += 0.5 } },
     { name: 'valuation.uncertainty.coverage_curve',
       mutate: (c) => { c.valuation.uncertainty.coverage_curve[0]![1] += 0.1 } },
   ]

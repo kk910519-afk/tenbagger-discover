@@ -158,9 +158,10 @@ export const configSchema = z
       .object({
         projection_years: z.number().int().positive(),
         terminal_growth_rate: z.number(),
-        // 명시적 예측에 투영할 수 있는 초기 성장률의 상한. 넘으면 값을 깎지 않고
-        // INSUFFICIENT_DATA로 돌린다(리뷰 Finding 1).
-        max_projectable_growth: z.number().positive(),
+        // 명시적 예측이 주장하는 매출 확대 배수(projection_years 뒤 매출 / 현재 매출)의
+        // 상한. 넘으면 값을 깎지 않고 INSUFFICIENT_DATA로 돌린다. 1 이하면 성장하는 어떤
+        // 기업도 값을 낼 수 없으므로 1 초과를 강제한다.
+        max_implied_revenue_multiple: z.number().gt(1),
         // x = 예측 연차(1..projection_years), y = 초기값(성장률/마진)에 남아있는 가중치(1=초기값 그대로,
         // 0=터미널/성숙값으로 완전 수렴). 성장률 페이드와 FCF마진 페이드가 같은 스케줄을 공유한다.
         fade_curve: curve,
@@ -175,8 +176,8 @@ export const configSchema = z
           .object({
             lookback_periods: z.number().int().positive(),
             min_periods_required: z.number().int().positive(),
-            wide_clear_ratio: z.number().min(0).max(1),
-            narrow_clear_ratio: z.number().min(0).max(1),
+            persistent_clear_ratio: z.number().min(0).max(1),
+            intermittent_clear_ratio: z.number().min(0).max(1),
           })
           .strict(),
         uncertainty: z
@@ -191,9 +192,9 @@ export const configSchema = z
             data_completeness_curve: curve,
             level_thresholds: z
               .object({
-                medium: z.number().min(0).max(1),
-                high: z.number().min(0).max(1),
-                very_high: z.number().min(0).max(1),
+                moderate: z.number().min(0).max(1),
+                elevated: z.number().min(0).max(1),
+                severe: z.number().min(0).max(1),
               })
               .strict(),
           })

@@ -22,7 +22,7 @@ const okFairValue: FairValueResult = {
   assumptions: {
     projectionYears: 5, discountRate: 0.09, terminalGrowthRate: 0.025,
     initialGrowthRate: 0.2, initialGrowthSource: 'blend', matureFcfMargin: 0.15,
-    initialFcfMargin: 0.2, initialMarginSource: 'fcf', taxRate: 0.21,
+    initialFcfMargin: 0.2, initialMarginSource: 'fcf', impliedRevenueMultiple: 1.6, taxRate: 0.21,
     netCash: 1e8, shares: 1e8, sharesSource: 'diluted',
   },
   detail: '테스트',
@@ -34,22 +34,22 @@ const okPtfv: PriceToFairValueResult = {
   status: 'OK', ratio: 0.8, marginOfSafety: 0.2, valuationStatus: 'UNDERVALUED',
 }
 const unavailablePtfv: PriceToFairValueResult = { status: 'UNAVAILABLE', reason: '테스트' }
-const wideMoat: MoatResult = {
-  signal: 'WIDE', periodsEvaluated: 8, periodsClearing: 7, insufficientReason: null, evidence: ['a', 'b'],
+const persistentMoat: MoatResult = {
+  signal: 'PERSISTENT', periodsEvaluated: 8, periodsClearing: 7, insufficientReason: null, evidence: ['a', 'b'],
 }
 const insufficientMoat: MoatResult = {
   signal: 'INSUFFICIENT_DATA', periodsEvaluated: 1, periodsClearing: 0,
   insufficientReason: 'TOO_FEW_PERIODS', evidence: ['a'],
 }
-const lowUncertainty: UncertaintyResult = {
-  level: 'LOW', score: 0.1,
+const minimalUncertainty: UncertaintyResult = {
+  level: 'MINIMAL', score: 0.1,
   drivers: [{ key: 'data_completeness', status: 'MEASURED', risk: 0.1, detail: 'x' }],
 }
 
 function row(overrides: Partial<ValuationWrite> = {}): ValuationWrite {
   return {
     cik: 1, asOf: '2026-08-09', fairValue: okFairValue, priceToFairValue: okPtfv,
-    moat: wideMoat, uncertainty: lowUncertainty, engineVersion: 'valuation-1.0.0+test',
+    moat: persistentMoat, uncertainty: minimalUncertainty, engineVersion: 'valuation-1.0.0+test',
     ...overrides,
   }
 }
@@ -61,9 +61,9 @@ describe('writeValuations', () => {
     expect(r.fair_value_status).toBe('OK')
     expect(r.fair_value_per_share).toBe(42)
     expect(r.valuation_status).toBe('UNDERVALUED')
-    expect(r.moat_signal).toBe('WIDE')
+    expect(r.moat_signal).toBe('PERSISTENT')
     expect(r.moat_insufficient_reason).toBeNull()
-    expect(r.uncertainty_level).toBe('LOW')
+    expect(r.uncertainty_level).toBe('MINIMAL')
     expect(JSON.parse(r.moat_evidence as string)).toEqual(['a', 'b'])
   })
 

@@ -18,7 +18,7 @@ function okFairValue(perShare: number): FairValueResult {
     assumptions: {
       projectionYears: 5, discountRate: 0.09, terminalGrowthRate: 0.025,
       initialGrowthRate: 0.1, initialGrowthSource: 'blend', matureFcfMargin: 0.15,
-      initialFcfMargin: 0.15, initialMarginSource: 'fcf', taxRate: 0.21,
+      initialFcfMargin: 0.15, initialMarginSource: 'fcf', impliedRevenueMultiple: 1.3, taxRate: 0.21,
       netCash: 0, shares: 1e8, sharesSource: 'diluted',
     },
     detail: '테스트용',

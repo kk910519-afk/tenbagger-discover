@@ -73,8 +73,8 @@ beforeAll(() => {
        99, '2026-08-09',
        'OK', 500.0, '{}', '5년 예측 + 터미널가치',
        'OK', 0.825, 0.175, 'UNDERVALUED',
-       'WIDE', 8, 7, '["최근 연간 8개 기간 중 7개에서 ROIC가 자본비용을 상회"]',
-       'MEDIUM', 0.4, '[{"key":"revenue_predictability","status":"MEASURED","risk":0.4,"detail":"d"}]',
+       'PERSISTENT', 8, 7, '["최근 연간 8개 기간 중 7개에서 ROIC가 자본비용을 상회"]',
+       'MODERATE', 0.4, '[{"key":"revenue_predictability","status":"MEASURED","risk":0.4,"detail":"d"}]',
        'valuation-1.0.0'
      )`,
   ).run()
@@ -161,7 +161,7 @@ describe('getStockDetail', () => {
   it('밸류에이션이 계산된 회사는 4개 지표를 모두 담는다', () => {
     const v = detail().valuation!
     expect(v).not.toBeNull()
-    expect(v.moatSignal).toBe('WIDE')
+    expect(v.moatSignal).toBe('PERSISTENT')
     expect(v.moatPeriodsEvaluated).toBe(8)
     expect(v.moatPeriodsClearing).toBe(7)
     expect(v.moatEvidence).toEqual(['최근 연간 8개 기간 중 7개에서 ROIC가 자본비용을 상회'])
@@ -171,7 +171,7 @@ describe('getStockDetail', () => {
     expect(v.priceToFairValueRatio).toBeCloseTo(0.825)
     expect(v.marginOfSafety).toBeCloseTo(0.175)
     expect(v.valuationStatus).toBe('UNDERVALUED')
-    expect(v.uncertaintyLevel).toBe('MEDIUM')
+    expect(v.uncertaintyLevel).toBe('MODERATE')
     expect(v.uncertaintyScore).toBeCloseTo(0.4)
     expect(v.uncertaintyDrivers).toHaveLength(1)
     expect(v.uncertaintyDrivers[0]!.key).toBe('revenue_predictability')

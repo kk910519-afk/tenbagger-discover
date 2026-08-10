@@ -12,21 +12,21 @@ import {
 const cfg = parseConfig(readFileSync('config.yaml', 'utf8'))
 
 describe('computeMoatSignal', () => {
-  it('연간 기간의 75% 이상에서 ROIC가 WACC를 지속적으로 상회하면 WIDE', () => {
+  it('연간 기간의 75% 이상에서 ROIC가 WACC를 지속적으로 상회하면 PERSISTENT', () => {
     const r = computeMoatSignal(wideMoatCompany(), cfg)
-    expect(r.signal).toBe('WIDE')
-    expect(r.periodsClearing / r.periodsEvaluated).toBeGreaterThanOrEqual(cfg.valuation.moat.wide_clear_ratio)
+    expect(r.signal).toBe('PERSISTENT')
+    expect(r.periodsClearing / r.periodsEvaluated).toBeGreaterThanOrEqual(cfg.valuation.moat.persistent_clear_ratio)
   })
 
-  it('40~75% 구간이면 NARROW', () => {
+  it('40~75% 구간이면 INTERMITTENT', () => {
     const r = computeMoatSignal(narrowMoatCompany(), cfg)
-    expect(r.signal).toBe('NARROW')
+    expect(r.signal).toBe('INTERMITTENT')
   })
 
-  it('한 해만 반짝 좋았던 기업은 WIDE를 얻지 못한다 (마진·성장만으로 해자를 주지 않는다)', () => {
+  it('한 해만 반짝 좋았던 기업은 PERSISTENT를 얻지 못한다 (마진·성장만으로 해자를 주지 않는다)', () => {
     const r = computeMoatSignal(oneStrongYearCompany(), cfg)
-    expect(r.signal).not.toBe('WIDE')
-    expect(r.signal).toBe('NONE')
+    expect(r.signal).not.toBe('PERSISTENT')
+    expect(r.signal).toBe('ABSENT')
     expect(r.periodsClearing).toBe(1)
   })
 
@@ -68,7 +68,7 @@ describe('computeMoatSignal', () => {
       expect(r.insufficientReason).toBe('MISSING_FINANCIALS')
     })
 
-    it('WIDE/NARROW/NONE 판정에는 insufficientReason이 없다', () => {
+    it('PERSISTENT/INTERMITTENT/ABSENT 판정에는 insufficientReason이 없다', () => {
       expect(computeMoatSignal(wideMoatCompany(), cfg).insufficientReason).toBeNull()
       expect(computeMoatSignal(narrowMoatCompany(), cfg).insufficientReason).toBeNull()
       expect(computeMoatSignal(oneStrongYearCompany(), cfg).insufficientReason).toBeNull()
@@ -81,21 +81,21 @@ describe('computeMoatSignal', () => {
     const r = computeMoatSignal(staleGloryMoatCompany(), cfg)
     expect(r.periodsEvaluated).toBe(cfg.valuation.moat.lookback_periods) // 12개가 아니라 8개
     expect(r.periodsClearing).toBe(0)
-    expect(r.signal).toBe('NONE')
+    expect(r.signal).toBe('ABSENT')
   })
 
-  it('창을 넓히면 같은 기업의 판정이 NONE에서 NARROW로 바뀐다 — 창이 결론을 바꾼다', () => {
+  it('창을 넓히면 같은 기업의 판정이 ABSENT에서 INTERMITTENT로 바뀐다 — 창이 결론을 바꾼다', () => {
     const widened = structuredClone(cfg)
     widened.valuation.moat.lookback_periods = 14
     const r = computeMoatSignal(staleGloryMoatCompany(), widened)
     expect(r.periodsEvaluated).toBe(14)
-    expect(r.periodsClearing).toBe(6) // 6/14 = 43% ≥ narrow_clear_ratio(0.40)
-    expect(r.signal).toBe('NARROW')
+    expect(r.periodsClearing).toBe(6) // 6/14 = 43% ≥ intermittent_clear_ratio(0.40)
+    expect(r.signal).toBe('INTERMITTENT')
   })
 
   // 리뷰 Finding 2: 투하자본이 양수이기만 하면 분모로 인정하던 시절, 자사주 매입으로
-  // 자본이 음수인 기업(DBX 실사례)은 ROIC 374%로 매 기간 WACC를 상회해 WIDE를 받았다.
-  it('투하자본이 상쇄 잔차인 기업은 WIDE가 아니라 NOT_APPLICABLE이다', () => {
+  // 자본이 음수인 기업(DBX 실사례)은 ROIC 374%로 매 기간 WACC를 상회해 PERSISTENT를 받았다.
+  it('투하자본이 상쇄 잔차인 기업은 PERSISTENT가 아니라 NOT_APPLICABLE이다', () => {
     const r = computeMoatSignal(buybackNegativeEquityCompany(), cfg)
     expect(r.signal).toBe('INSUFFICIENT_DATA')
     expect(r.insufficientReason).toBe('NOT_APPLICABLE')
@@ -104,11 +104,11 @@ describe('computeMoatSignal', () => {
     expect(r.evidence.join(' ')).toContain('투하자본')
   })
 
-  it('하한을 0으로 낮추면 같은 기업이 WIDE를 되찾는다 — 하한이 막는 것이 무엇인지 고정한다', () => {
+  it('하한을 0으로 낮추면 같은 기업이 PERSISTENT를 되찾는다 — 하한이 막는 것이 무엇인지 고정한다', () => {
     const loose = structuredClone(cfg)
     loose.scoring.min_invested_capital_ratio = 0
     const r = computeMoatSignal(buybackNegativeEquityCompany(), loose)
-    expect(r.signal).toBe('WIDE')
+    expect(r.signal).toBe('PERSISTENT')
     expect(r.periodsEvaluated).toBe(5)
   })
 

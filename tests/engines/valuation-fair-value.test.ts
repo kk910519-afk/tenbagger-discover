@@ -72,34 +72,63 @@ describe('computeFairValue — 6개 충분성 게이트', () => {
     if (r.status === 'INSUFFICIENT_DATA') expect(r.reason).toBe('NO_BALANCE_SHEET_DATA')
   })
 
-  // 리뷰 Finding 1: 추세 성장률 하나가 5년 복리로 증폭되면 시총 $692M 기업의 내재가치가
-  // $50.7B(주당 $545.63, "98.6% 저평가")으로 나온다. 상한을 넘으면 상한값으로 깎지 않고
-  // 숫자를 내지 않는다 — 깎는 것은 성장률을 우리가 지어내는 일이다.
-  it('추세 성장률이 투영 상한을 넘으면 GROWTH_NOT_PROJECTABLE — 상한으로 깎아서 계산하지 않는다', () => {
+  // 리뷰 Finding 1: 추세 성장률 하나가 5년 복리로 증폭되면 시총 $588M 기업의 내재가치가
+  // $50.7B(주당 $545.63, "98.6% 저평가")으로 나온다. 막는 기준은 성장'률'이 아니라 그
+  // 투영이 실제로 주장하는 매출 확대 배수다. 상한을 넘으면 깎지 않고 숫자를 내지 않는다.
+  it('암시 매출배수가 투영 상한을 넘으면 GROWTH_NOT_PROJECTABLE — 상한으로 깎아서 계산하지 않는다', () => {
     const s = hyperGrowthCompany()
     const r = computeFairValue(s, cfg)
     expect(r.status).toBe('INSUFFICIENT_DATA')
     if (r.status === 'INSUFFICIENT_DATA') {
       expect(r.reason).toBe('GROWTH_NOT_PROJECTABLE')
-      expect(r.detail).toContain('투영 상한')
+      // 사유만이 아니라 "몇 배인지"를 실제로 말한다 — 초기성장률 2.64709901을 이 페이드에
+      // 태우면 26.72배다(CRMD 실사례의 63.41배와 같은 성질).
+      expect(r.detail).toContain('26.72배')
+      expect(r.detail).toContain('3.00배')
     }
   })
 
   it('상한을 올려 주면 같은 기업이 값을 내며, 그 값이 터무니없다는 것이 이 게이트의 근거다', () => {
     const loose = structuredClone(cfg)
-    loose.valuation.max_projectable_growth = 100
+    loose.valuation.max_implied_revenue_multiple = 100
     const r = ok(computeFairValue(hyperGrowthCompany(), loose))
     // 게이트가 없으면 주가 $7.44짜리 회사의 내재가치가 주당 수백 달러로 나온다.
     expect(r.perShare).toBeGreaterThan(100)
+    expect(r.assumptions.impliedRevenueMultiple).toBeCloseTo(26.72255683, 7)
   })
 
-  it('상한 바로 아래 성장률은 그대로 통과한다 (경계는 초과일 때만 막는다)', () => {
+  it('상한 바로 아래 배수는 그대로 통과한다 (경계는 초과일 때만 막는다)', () => {
     const tight = structuredClone(cfg)
-    // 기준 픽스처의 초기 성장률 0.17933864에 정확히 맞춘 상한 — 같은 값은 막지 않는다
-    tight.valuation.max_projectable_growth = 0.17933863656393517
+    // 기준 픽스처의 암시 배수 1.50961028에 정확히 맞춘 상한 — 같은 값은 막지 않는다
+    tight.valuation.max_implied_revenue_multiple = 1.5096102846356103
     expect(computeFairValue(eligibleForFairValue(), tight).status).toBe('OK')
-    tight.valuation.max_projectable_growth = 0.17
+    tight.valuation.max_implied_revenue_multiple = 1.5096
     expect(computeFairValue(eligibleForFairValue(), tight).status).toBe('INSUFFICIENT_DATA')
+  })
+
+  /**
+   * 이 게이트를 초기 성장률 상한이 아니라 **결과** 상한으로 둔 이유 자체를 고정한다.
+   * 같은 회사·같은 초기 성장률(0.17933864)이라도 페이드 스케줄이 달라지면 투영이 주장하는
+   * 결과가 달라진다: 실제 스케줄에서는 1.50961028배지만 페이드를 없애면 2.28135376배다.
+   * 그러므로 상한 2.0은 앞을 통과시키고 뒤를 막아야 한다 — 초기 성장률만 보는 게이트로는
+   * 이 두 경우를 절대 구분할 수 없다.
+   */
+  it('같은 성장률이라도 페이드 스케줄이 바뀌면 판정이 갈린다 — 성장률 상한으로는 낼 수 없는 구분', () => {
+    const capped = structuredClone(cfg)
+    capped.valuation.max_implied_revenue_multiple = 2.0
+
+    const withFade = ok(computeFairValue(eligibleForFairValue(), capped))
+    expect(withFade.assumptions.initialGrowthRate).toBeCloseTo(0.17933864, 8)
+    expect(withFade.assumptions.impliedRevenueMultiple).toBeCloseTo(1.50961028, 8)
+
+    const noFade = structuredClone(capped)
+    noFade.valuation.fade_curve = [[0, 1.0], [5, 1.0]]
+    const r = computeFairValue(eligibleForFairValue(), noFade)
+    expect(r.status).toBe('INSUFFICIENT_DATA')
+    if (r.status === 'INSUFFICIENT_DATA') {
+      expect(r.reason).toBe('GROWTH_NOT_PROJECTABLE')
+      expect(r.detail).toContain('2.28배')
+    }
   })
 })
 
@@ -126,6 +155,15 @@ describe('computeFairValue — 산술 고정', () => {
     expect(r.assumptions.sharesSource).toBe('diluted')
     expect(r.assumptions.shares).toBe(100_000_000)
     expect(r.assumptions.netCash).toBe(400_000_000) // 5e8 − 1e8, 빼는 것이지 더하는 것이 아니다
+  })
+
+  it('암시 매출배수는 페이드를 태운 매출 경로에서 나온다 — 초기 성장률의 재표현이 아니다', () => {
+    // 매출 경로 = 1 × Π(1 + 0.025 + fade_y × (0.17933864 − 0.025)), fade = 0.8/0.6/0.4/0.2/0
+    expect(r.assumptions.impliedRevenueMultiple).toBeCloseTo(1.50961028463561, 10)
+    // 페이드를 무시하고 초기 성장률을 5년 유지하면 2.28135376 — 이 두 값이 다르다는 것이
+    // 페이드가 실제로 적용됐다는 증거다(fade = 1 변이를 잡는다).
+    expect(r.assumptions.impliedRevenueMultiple).not.toBeCloseTo(2.28135375581574, 4)
+    expect(r.detail).toContain('1.51배')
   })
 
   it('기업가치·자기자본가치·주당가치를 정확한 값으로 고정한다', () => {
