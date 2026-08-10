@@ -12,7 +12,8 @@ import { balanceSheetFactor } from './factors/balance-sheet.js'
 import { institutionalInsiderFactor } from './factors/institutional-insider.js'
 
 /** 팩터 구성이나 정규화 규칙을 바꾸면 반드시 올린다. scores.engine_version에 기록된다. */
-export const ENGINE_VERSION = 'tenbagger-1.0.0'
+// 1.1.0: 경쟁우위 커버리지 감쇠(최소 2개 신호) + 매출 규모에 따른 성장 팩터 감쇠
+export const ENGINE_VERSION = 'tenbagger-1.1.0'
 
 const FACTORS: FactorFn[] = [
   revenueGrowthFactor,

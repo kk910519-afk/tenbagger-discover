@@ -37,6 +37,8 @@ scoring:
   wacc_assumption: 0.05             # loadConfig() 경로별 캐싱 테스트용 — 실제 config.yaml(0.09)과 다른 값
   tax_rate: 0.21
   min_industry_candidates: 3
+  revenue_scale_damping:
+    curve: [[5000000, 0.40], [10000000, 0.55], [20000000, 0.70], [35000000, 0.85], [50000000, 1.00]]
   factors:
     revenue_growth:
       weight: 20
@@ -75,6 +77,8 @@ scoring:
         warning_multiplier: 0.5
     competitive_advantage:
       weight: 10
+      min_signals: 2
+      coverage_curve: [[0.50, 0.50], [0.75, 0.75], [1.00, 1.00]]
       signals:
         roic_spread: [[-0.10, 0.00], [0.00, 0.35], [0.05, 0.60], [0.15, 0.85], [0.30, 1.00]]
         gm_stability: [[0.70, 0.00], [0.85, 0.35], [0.92, 0.65], [0.96, 0.90], [0.99, 1.00]]

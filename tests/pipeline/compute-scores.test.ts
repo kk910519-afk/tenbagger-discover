@@ -7,6 +7,7 @@ import { getRawDb, runMigrations } from '@/db/client'
 import { parseConfig } from '@/config'
 import { loadTaxonomy } from '@/taxonomy'
 import { computeScores, configHash, valuationConfigHash } from '@/pipeline/jobs/compute-scores'
+import { ENGINE_VERSION } from '@/engines/tenbagger'
 
 const cfg = parseConfig(readFileSync('config.yaml', 'utf8'))
 const taxonomy = loadTaxonomy()
@@ -208,7 +209,9 @@ describe('computeScores', () => {
     const r = raw
       .prepare('SELECT engine_version FROM scores WHERE cik = 1')
       .get() as { engine_version: string }
-    expect(r.engine_version).toMatch(/^tenbagger-1\.0\.0\+[0-9a-f]{8}$/)
+    // 엔진 버전 자체는 규칙이 바뀔 때마다 올라간다 — 여기서 검증할 것은
+    // "코드 버전 + config 해시" 형태이지 특정 버전 번호가 아니다.
+    expect(r.engine_version).toMatch(new RegExp(`^${ENGINE_VERSION}\\+[0-9a-f]{8}$`))
   })
 
   it('분포 매핑이 없는 팩터는 백분위를 저장하지 않는다', () => {

@@ -132,54 +132,141 @@ describe('competitiveAdvantageFactor', () => {
     expect(r.points!).toBeCloseTo(8.758333, 5)
     expect(r.raw).toBeCloseTo(0.875833, 5)
     expect(r.detail).toContain('ROIC')
+    expect(r.detail).toContain('감쇠 없음')
   })
 
   it('신호가 하나도 없으면 NO_DATA', () => {
     expect(competitiveAdvantageFactor(ctx({ ttm: [], quarterly: [] })).status).toBe('NO_DATA')
   })
 
-  it('일부 신호만 있어도 그 신호로만 정규화한다', () => {
+  it('신호가 1개뿐이면 NO_DATA — 증거 1개짜리 만점을 막는다', () => {
+    // SCYX 사례: R&D 집약도 +145% 하나로 10/10을 받았다. 임상단계 제약사의 현금
+    // 소진이지 경쟁우위가 아니다. 전체 점수는 SCORED 가중치로만 정규화되므로
+    // 이 팩터가 빠져도 왜곡되지 않는다(설계문서 §8.1).
     const r = competitiveAdvantageFactor(
-      ctx({ ttm: [fp('2025-03-31', { revenue: 1000, rdExpense: 200 })] }),
+      ctx({ ttm: [fp('2025-03-31', { revenue: 1000, rdExpense: 1450 })] }),
     )
-    expect(r.status).toBe('SCORED')
-    // R&D 집약도 0.2 → 신호 1개(0.925)만으로 정규화 → 9.25점
-    expect(r.points!).toBeCloseTo(9.25, 5)
-    expect(r.raw).toBeCloseTo(0.925, 5)
-    expect(r.detail).toContain('4개 중 1개')
+    expect(r.status).toBe('NO_DATA')
+    expect(r.points).toBeNull()
+    expect(r.detail).toContain('최소 2개 필요')
+    expect(r.detail).toContain('R&D 집약도')      // 무엇 하나가 있었는지는 밝힌다
   })
 
-  it('산업 후보가 min_industry_candidates 미만이면 산업 대비 마진 신호를 제외한다', () => {
-    // 후보 수 부족한 산업의 중앙값은 무의미하므로 신호 자체를 계산에서 뺀다 —
-    // 3-of-4 평균이어야 하고, 이는 같은 회사가 후보가 충분한 산업에 속했을 때의
-    // 4-of-4 점수와 달라야 한다 (억제되지 않으면 회귀 테스트가 이를 잡아낸다).
+  it('신호 2개는 커버리지 비율(2/4)로 감쇠한다', () => {
+    // ROIC(0.645)와 R&D(0.925)만 계산 가능 — 마진 안정성은 분기 부족, 산업 대비
+    // 마진은 회사 GM 부재. 둘 다 회사 사유이므로 분모는 4다.
+    const r = competitiveAdvantageFactor(
+      ctx({
+        ttm: [fp('2025-03-31', {
+          revenue: 1000, operatingIncome: 400,
+          totalDebt: 500, equity: 2000, cash: 500, rdExpense: 200,
+        })],
+      }),
+    )
+    expect(r.status).toBe('SCORED')
+    // 평균 (0.645+0.925)/2 = 0.785 → ×0.50 = 0.3925
+    expect(r.raw).toBeCloseTo(0.3925, 5)
+    expect(r.points!).toBeCloseTo(3.925, 5)
+    expect(r.detail).toContain('평가 가능 4개 중 2개')
+    expect(r.detail).toContain('×0.50')
+  })
+
+  it('회사 사유로 신호 하나가 빠지면 3/4로 감쇠한다', () => {
+    // 마진 안정성만 빠진다(분기 8개 미만 = 보고 이력이 짧다는 그 회사의 사실).
+    const r = competitiveAdvantageFactor(
+      ctx({
+        ttm: [fp('2025-03-31', {
+          revenue: 1000, grossProfit: 800, operatingIncome: 400,
+          totalDebt: 500, equity: 2000, cash: 500, rdExpense: 200,
+        })],
+        quarterly: stableQuarters(0.80).slice(0, 4),
+      }),
+    )
+    // 평균 (0.645 + 0.93333 + 0.925)/3 = 0.834444 → ×0.75
+    expect(r.points!).toBeCloseTo(6.258333, 5)
+    expect(r.detail).toContain('평가 가능 4개 중 3개')
+    expect(r.detail).toContain('×0.75')
+  })
+
+  it('산업 후보 부족(우리 taxonomy의 한계)은 분모에서 빠져 감쇠하지 않는다 — NVIDIA 케이스', () => {
+    // NVIDIA가 신호 3개인 이유는 AI Infrastructure 산업 후보가 1개뿐이기 때문이다.
+    // 우리 분류 체계가 얇은 것을 회사에서 깎으면 새로운 불공정이 된다. 분모는 3이고
+    // 나머지 3개를 다 계산했으므로 감쇠 없이 만점이 가능해야 한다.
     const ttm = [fp('2025-03-31', {
       revenue: 1000, grossProfit: 800, operatingIncome: 400,
       totalDebt: 500, equity: 2000, cash: 500, rdExpense: 200,
     })]
     const quarterly = stableQuarters(0.80)
 
-    const smallIndustry = competitiveAdvantageFactor(
+    const thinIndustry = competitiveAdvantageFactor(
       ctx({
         ttm, quarterly,
         industryStats: {
-          candidateCount: 2, medianGrossMargin: 0.60,
+          candidateCount: 1, medianGrossMargin: 0.60,
           medianRevenueGrowth: 0.18, distributions: {},
         },
       }),
     )
-    expect(smallIndustry.status).toBe('SCORED')
-    expect(smallIndustry.detail).toContain('4개 중 3개')
-    expect(smallIndustry.detail).not.toContain('산업 대비 마진')
-    // ROIC 0.645 · 마진 안정성 1.00 · R&D 0.925 (산업 대비 마진 신호 제외) → 평균 0.856667
-    expect(smallIndustry.points!).toBeCloseTo(8.566667, 5)
-    expect(smallIndustry.raw).toBeCloseTo(0.856667, 5)
+    expect(thinIndustry.status).toBe('SCORED')
+    expect(thinIndustry.detail).toContain('평가 가능 3개 신호 전부')
+    expect(thinIndustry.detail).toContain('감쇠 없음')
+    expect(thinIndustry.detail).toContain('분모에서 제외')
+    // ROIC 0.645 · 마진 안정성 1.00 · R&D 0.925 → 평균 0.856667, 감쇠 ×1.00
+    expect(thinIndustry.points!).toBeCloseTo(8.566667, 5)
+    expect(thinIndustry.raw).toBeCloseTo(0.856667, 5)
 
-    // 동일 회사가 후보 5개(min_industry_candidates=3 충족) 산업에 속하면
-    // 산업 대비 마진 신호(0.9333)까지 포함한 4-of-4 평균 → 8.758333점
-    const largeIndustry = competitiveAdvantageFactor(ctx({ ttm, quarterly }))
-    expect(largeIndustry.points!).toBeCloseTo(8.758333, 5)
-    expect(smallIndustry.points).not.toBe(largeIndustry.points)
+    // 같은 신호 3개라도 결측이 회사 사유면(후보 5개 산업인데 회사 GM이 없음)
+    // 분모가 4가 되어 ×0.75로 감쇠된다 — 두 케이스가 반드시 달라야 한다.
+    const companyGap = competitiveAdvantageFactor(
+      ctx({
+        ttm: [fp('2025-03-31', {
+          revenue: 1000, operatingIncome: 400,
+          totalDebt: 500, equity: 2000, cash: 500, rdExpense: 200,
+        })],
+        quarterly,
+      }),
+    )
+    expect(companyGap.detail).toContain('×0.75')
+    expect(companyGap.points!).toBeLessThan(thinIndustry.points!)
+  })
+
+  it('산업 중앙값 자체가 없으면 후보 수와 무관하게 분모에서 제외한다', () => {
+    const r = competitiveAdvantageFactor(
+      ctx({
+        ttm: [fp('2025-03-31', {
+          revenue: 1000, grossProfit: 800, operatingIncome: 400,
+          totalDebt: 500, equity: 2000, cash: 500, rdExpense: 200,
+        })],
+        quarterly: stableQuarters(0.80),
+        industryStats: {
+          candidateCount: 12, medianGrossMargin: null,
+          medianRevenueGrowth: 0.18, distributions: {},
+        },
+      }),
+    )
+    expect(r.detail).toContain('평가 가능 3개 신호 전부')
+    expect(r.points!).toBeCloseTo(8.566667, 5)
+  })
+
+  it('신호가 많을수록 유리해야 한다 — 같은 신호 품질이면 4-of-4가 2-of-4를 앞선다', () => {
+    const full = competitiveAdvantageFactor(
+      ctx({
+        ttm: [fp('2025-03-31', {
+          revenue: 1000, grossProfit: 800, operatingIncome: 400,
+          totalDebt: 500, equity: 2000, cash: 500, rdExpense: 200,
+        })],
+        quarterly: stableQuarters(0.80),
+      }),
+    )
+    const partial = competitiveAdvantageFactor(
+      ctx({
+        ttm: [fp('2025-03-31', {
+          revenue: 1000, operatingIncome: 400,
+          totalDebt: 500, equity: 2000, cash: 500, rdExpense: 200,
+        })],
+      }),
+    )
+    expect(full.points!).toBeGreaterThan(partial.points!)
   })
 })
 

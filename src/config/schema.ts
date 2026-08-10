@@ -59,6 +59,8 @@ export const configSchema = z
         wacc_assumption: z.number(),
         tax_rate: z.number(),
         min_industry_candidates: z.number().int(),
+        // x=TTM 매출(USD), y=revenue_growth·revenue_acceleration에 남는 비율.
+        revenue_scale_damping: z.object({ curve }).strict(),
         factors: z
           .object({
             revenue_growth: factorBase
@@ -105,6 +107,9 @@ export const configSchema = z
               .strict(),
             competitive_advantage: factorBase
               .extend({
+                min_signals: z.number().int().min(1),
+                // x=신호 커버리지 비율(계산된 신호 / 평가 가능했어야 할 신호)
+                coverage_curve: curve,
                 signals: z
                   .object({
                     roic_spread: curve,
