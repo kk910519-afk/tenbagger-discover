@@ -452,14 +452,20 @@ describe('resolveStock', () => {
 // 신설됐다 — 아래 첫 describe가 "확장이 순수하게 가산적"임을(기존에 값이 나오던
 // 조합은 하나도 변하지 않음) 명시적으로 못 박는다.
 describe('resolveTotalDebt — 기존 조합은 값이 변하지 않는다 (가산적 확장 회귀)', () => {
-  it('LongTermDebtNoncurrent+Current가 있으면 다른 태그가 있어도 그 합만 쓴다', () => {
+  it('티어 1에서 상품별 롤업 태그는 결과를 건드리지 못한다 (단기차입금만 예외)', () => {
     const r = resolveTotalDebt(new Map([
       ['LongTermDebtNoncurrent', 800], ['LongTermDebtCurrent', 200],
-      // 아래는 전부 이번에 새로 추적하기 시작한 태그들 — 티어 1 결과를 건드리면 안 된다.
-      ['LongTermDebt', 1000], ['ShortTermBorrowings', 400], ['LineOfCredit', 900],
-      ['DebtCurrent', 250], ['DebtLongtermAndShorttermCombinedAmount', 1400],
+      // 상품별/롤업 태그는 티어 1 결과를 건드리면 안 된다.
+      ['LongTermDebt', 1000], ['LineOfCredit', 900],
+      ['DebtLongtermAndShorttermCombinedAmount', 1400],
+      // 단기차입금은 정의상 장기차입금에 포함될 수 없으므로 더해진다(F2).
+      // 유동 부분은 총계 `DebtCurrent`(250)와 구성요소 합(200+400=600) 중 큰 쪽.
+      ['ShortTermBorrowings', 400], ['DebtCurrent', 250],
     ]))
-    expect(r).toEqual({ value: 1000, tag: 'LongTermDebtNoncurrent+LongTermDebtCurrent' })
+    expect(r).toEqual({
+      value: 1400,
+      tag: 'LongTermDebtNoncurrent+LongTermDebtCurrent+ShortTermBorrowings',
+    })
   })
 
   it('비유동만 있어도 그것만 쓴다', () => {

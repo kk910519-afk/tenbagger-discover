@@ -126,7 +126,7 @@ export function selectStaleCiks(
        JOIN company_industry ci ON ci.cik = c.cik
        LEFT JOIN (SELECT cik, MAX(filed_date) AS latest FROM financial_facts GROUP BY cik) f
          ON f.cik = c.cik
-       WHERE f.latest IS NULL OR f.latest < ?
+       WHERE c.is_active = 1 AND (f.latest IS NULL OR f.latest < ?)
        ORDER BY c.cik`,
     )
     .all(cutoff) as { cik: number }[]
@@ -151,6 +151,15 @@ export function selectStaleCiks(
 // 결과가 똑같이 얇을 뿐 — 값을 왜곡하지 않고 API 호출 한 번을 더 쓸 뿐이므로 안전한
 // 방향의 오탐이다. financial_facts 행이 0건인 회사(신규 상장사, 아직 한 번도 못 받은
 // 경우)는 INNER JOIN이 걸러낸다 — 그건 이미 selectStaleCiks의 NULL 분기가 처리한다.
+//
+// 왜 전체 사실이 아니라 `source='api'` 사실만 세는가: 이 그물이 잡으려는 것은 정확히
+// "API 사실이 하나도(혹은 거의) 안 들어온 회사"다. 전체 행을 세면 bulk가 두껍게 쌓인
+// 회사는 API가 0건이어도 임계값을 넘어 그물을 빠져나간다 — 실측(2026-08, 1,200개사):
+// bulk 사실만으로 200건 이상인 회사가 53개(4%)이고, 그 53개는 신고 항목이 가장 많은
+// 대형주, 즉 사용자가 실제로 행동할 가능성이 가장 높은 회사들이다. API 소스만 세면
+// 그 구멍이 정확히 닫힌다. 임계값 자체는 그대로 둔다 — API 사실이 있는 999개 회사의
+// 평균은 876건이고 200 미만은 0.1%(1개)뿐이었으므로, API만 세도 정상 회사가 잘못
+// 뽑히는 비율은 거의 변하지 않는다.
 export function selectThinCoverageCiks(
   raw: Database.Database,
   minFacts: number,
@@ -159,9 +168,11 @@ export function selectThinCoverageCiks(
     .prepare(
       `SELECT c.cik FROM companies c
        JOIN company_industry ci ON ci.cik = c.cik
-       JOIN (SELECT cik, COUNT(*) AS n FROM financial_facts GROUP BY cik) f
+       JOIN (SELECT cik,
+                    SUM(CASE WHEN source = 'api' THEN 1 ELSE 0 END) AS n
+             FROM financial_facts GROUP BY cik) f
          ON f.cik = c.cik
-       WHERE f.n < ?
+       WHERE c.is_active = 1 AND f.n < ?
        ORDER BY c.cik`,
     )
     .all(minFacts) as { cik: number }[]
@@ -189,7 +200,7 @@ export function selectTagSetStaleCiks(
       `SELECT c.cik FROM companies c
        JOIN company_industry ci ON ci.cik = c.cik
        LEFT JOIN ingest_tag_state t ON t.cik = c.cik
-       WHERE t.tags_fingerprint IS NULL OR t.tags_fingerprint <> ?
+       WHERE c.is_active = 1 AND (t.tags_fingerprint IS NULL OR t.tags_fingerprint <> ?)
        ORDER BY c.cik`,
     )
     .all(fingerprint) as { cik: number }[]

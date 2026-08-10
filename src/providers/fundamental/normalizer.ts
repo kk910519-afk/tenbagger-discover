@@ -2,8 +2,12 @@ import type { FieldRejection, FinancialPeriod, PeriodType } from '@/domain/types
 import { sumTTM } from '@/domain/growth'
 import { validatePeriod } from '@/domain/validate'
 import type { RawFact } from '../types.js'
-import { indexFacts, resolveFlow, resolveStock, type FactIndex, type ResolvedFlow } from './resolve.js'
+import {
+  indexFacts, resolveFlow, resolveStock,
+  type FactIndex, type ResolvedFlow, type ResolvedStock,
+} from './resolve.js'
 import { resolveCumulative, FLOW_FIELDS } from './cumulative.js'
+import { BASIC_SHARES_CHAIN } from './tags.js'
 
 export type NormalizeResult = {
   quarterly: FinancialPeriod[]
@@ -45,26 +49,139 @@ function daysBetween(a: string, b: string): number {
 // 값은 null로 남겨 "결측을 0/구식값으로 채우지 않는다" 원칙을 지킨다.
 const INSTANT_STALENESS_LIMIT_DAYS = INSTANT_LOOKBACK_DAYS
 
-/** asOf 이전(포함) 중, 태그별로 가장 최근 시점 값을 독립적으로 찾는다. */
-function pickInstant(idx: FactIndex, asOf: string): Map<string, number> {
-  const result = new Map<string, number>()
-  const bestDateOf = new Map<string, string>()
+/**
+ * asOf 이전(포함) 중, 태그별로 가장 최근 시점 값을 독립적으로 찾는다.
+ *
+ * 각 값이 **어느 일자에서 왔는지**도 함께 돌려준다. 태그별 소급은 표지
+ * 발행주식수에는 반드시 필요하지만 서로 더해지는 대차대조표 구성요소에
+ * 적용되면 어느 대차대조표에도 없던 합계를 만든다 — resolve.ts의
+ * `coherentGroup`이 이 일자를 보고 가산 그룹을 하나의 대차대조표로 고정한다.
+ */
+function pickInstant(idx: FactIndex, asOf: string): {
+  values: Map<string, number>
+  dates: Map<string, string>
+} {
+  const values = new Map<string, number>()
+  const dates = new Map<string, string>()
   for (const [date, tags] of idx.instant) {
     if (date > asOf) continue
     if (daysBetween(date, asOf) > INSTANT_STALENESS_LIMIT_DAYS) continue
     for (const [tag, value] of tags) {
-      const bestDate = bestDateOf.get(tag)
+      const bestDate = dates.get(tag)
       if (bestDate === undefined || date > bestDate) {
-        bestDateOf.set(tag, date)
-        result.set(tag, value)
+        dates.set(tag, date)
+        values.set(tag, value)
       }
     }
   }
-  return result
+  return { values, dates }
 }
 
 function fcfOf(ocf: number | null, capex: number | null): number | null {
   return ocf === null || capex === null ? null : ocf - capex
+}
+
+/**
+ * 표지 발행주식수가 회사 전체 지분을 덮지 못한다고 판정하는 하한.
+ * 근거는 `applyShareCoverageGuard` 주석의 실측 분포 참고.
+ */
+const COVER_SHARES_MIN_FRACTION_OF_BASIC = 0.4
+
+/**
+ * 두 주식수가 이 배율 이상 벌어지면 종류주 문제가 아니라 **단위 스케일 오류**로 본다
+ * (신고자가 천 주 단위로 적은 값이 그대로 들어온 경우). 실측: 회사 자신의 같은
+ * 측정치 이력 중앙값 대비 배율이 500배를 넘는 사실이 표지 75건·희석 860건 있고,
+ * 값은 정확히 1000배 근처에 뭉쳐 있다(예: VERI 2026-03-31 희석 92,899,169,000 —
+ * 직전 분기 63,316,000). 그런 쌍은 어느 쪽이 깨졌는지 이 함수만으로는 알 수 없으므로
+ * 판정을 포기하고 기존 값을 그대로 둔다 — 지금 동작과 같다.
+ */
+const SHARES_SCALE_ERROR_FACTOR = 100
+
+/**
+ * **표지 발행주식수의 주식 종류 커버리지 검증(F3).**
+ *
+ * 최종 리뷰는 이 결함의 원인을 `financial_facts`의
+ * UNIQUE(cik, tag, period_end, qtrs, form) 충돌 — 종류주마다 한 행씩 들어와 첫
+ * 행만 살아남는 것 — 으로 지목했다. **실측으로 그 기전은 성립하지 않는다:**
+ *  - 라이브 DB의 `EntityCommonStockSharesOutstanding` 44,207건은 전부
+ *    `source='api'`다. SEC bulk(num.txt)는 이 dei 개념을 아예 싣지 않으므로
+ *    bulk 쪽에서 종류주 행이 충돌할 여지가 없다.
+ *  - companyfacts는 (end, accn, form) 하나당 항목을 **한 개만** 내보낸다(확인:
+ *    AAPL·NVDA·CRWD·LYFT·MBLY 등, 중복 그룹 0건). 종류주 축(StatementClassOfStockAxis)
+ *    으로 태깅된 사실은 companyfacts가 디멘션을 제거하며 **통째로 빼버리기**
+ *    때문에, GOOGL·META·PLTR·COIN·DASH·ZM·ZG·DDOG는 이 개념 자체가 404다.
+ *
+ * 즉 충돌해서 버려지는 것이 아니라, **다종류주 발행사에서는 companyfacts가
+ * 종류 하나만(혹은 아무것도) 내보낸다.** MBLY(Mobileye)가 정확히 전자다 —
+ * 표지값은 Class A만이고(2026-04-15 244,415,099주), Class B 약 574M주는 API에
+ * 존재하지 않는다. 그 결과 시가총액이 $2.13B로 저장돼 실제 ~$7.1B의 1/3.3이 됐다.
+ *
+ * 검증 수단은 **같은 기간의 기본 가중평균 발행주식수**다(tags.ts
+ * `BASIC_SHARES_CHAIN`). 기본 가중평균은 정의상 그 기간에 실제로 발행돼 있던
+ * 보통주 전 종류의 시간가중 평균이므로 표지값과 같은 것을 센다. 표지값이 그보다
+ * 크게 작으면 세는 대상이 다르다는 뜻 — 종류주 누락이다.
+ *
+ * 하한 0.4의 근거 — 표본 238개사(라이브 DB에서 `표지 < 0.9 × 희석`인 회사 전수 +
+ * 무작위 160개)에 대해 SEC companyconcept로 기본가중평균을 직접 받아 계산한
+ * `표지 / 기본가중평균` 분포(유효 234건):
+ *
+ *   <0.4  0.4–0.5  0.5–0.6  0.6–0.7  0.7–0.8  0.8–0.9  0.9–1.1  1.1–1.5  >=1.5
+ *     11        1        9       10       15       27      145        8       8
+ *
+ * 몸통은 0.9~1.1(62%)이고 p25=0.852다. 아래 꼬리를 값 순으로 늘어놓으면
+ * … IBIO 0.289, **MBLY 0.299**, CELZ 0.338 | PTN 0.453, INAB 0.506 … 로
+ * 0.338과 0.453 사이가 표본에서 가장 넓은 빈 구간이라 0.4를 그 사이에 둔다.
+ * 0.6·0.5로 올리면 전환우선주·워런트가 많은 소형주(TENX 0.521, STEX 0.560 등)가
+ * 함께 걸리는데, 그 회사들의 표지값은 실제 발행 보통주로 맞는 값이다.
+ *
+ * 희석주식수가 아니라 기본가중평균으로 판정하는 이유는 tags.ts
+ * `BASIC_SHARES_CHAIN` 주석 참고.
+ *
+ * 걸러낸 뒤에는 값을 추정하지 않고 **null로 남긴다**. `refresh-prices`의
+ * `pickShares`가 이미 표지값이 없는 회사(=GOOGL·META처럼 이 개념이 아예 없는
+ * 다종류주 발행사)를 희석주식수로 대체하는 경로를 갖고 있으므로, 같은 종류의
+ * 회사가 같은 경로를 타게 된다. MBLY는 이 경로에서 818,000,000주가 되어
+ * 시가총액이 $2.13B → $7.14B가 된다(2026-08-07 종가 8.73).
+ */
+/**
+ * asOf 이전(포함) 중 가장 최근의 기본 가중평균 발행주식수. 모든 누적 길이(qtrs)를
+ * 함께 본다 — 커버리지 판정은 자릿수 비교라 분기 평균이든 연간 평균이든 무방하다.
+ *
+ * 기간별 태그 맵만 보면 안 되는 이유: 누적 차분으로 **유도된** 분기에는 그 기간에
+ * 직접 신고된 태그가 하나도 없다. 실측(MBLY)에서 회계연도 말 유도 분기
+ * 2025-12-27이 정확히 그 상태라, 그 행만 가드를 통과해 Class A 단독 주식수
+ * 216,005,938이 살아남았고 `refresh-prices`가 최신 비결측 행으로 그것을 골랐다.
+ * 시점 값과 같은 소급 상한(400일)을 쓴다.
+ */
+function basicSharesAsOf(idx: FactIndex, asOf: string): number | null {
+  let best: { date: string; value: number } | null = null
+  for (const byPeriod of idx.duration.values()) {
+    for (const [date, tags] of byPeriod) {
+      if (date > asOf) continue
+      if (daysBetween(date, asOf) > INSTANT_STALENESS_LIMIT_DAYS) continue
+      if (best !== null && date < best.date) continue
+      for (const tag of BASIC_SHARES_CHAIN) {
+        const v = tags.get(tag)
+        if (typeof v !== 'number') continue
+        if (best === null || date > best.date || v > best.value) best = { date, value: v }
+        break
+      }
+    }
+  }
+  return best?.value ?? null
+}
+
+function applyShareCoverageGuard(
+  fields: ResolvedStock,
+  used: Record<string, string>,
+  basicShares: number | null,
+): void {
+  const cover = fields.sharesOutstanding
+  if (cover === null || cover <= 0 || basicShares === null || basicShares <= 0) return
+  if (cover >= COVER_SHARES_MIN_FRACTION_OF_BASIC * basicShares) return
+  if (basicShares > SHARES_SCALE_ERROR_FACTOR * cover) return
+  fields.sharesOutstanding = null
+  delete used.sharesOutstanding
 }
 
 function emptyPeriod(periodEnd: string, periodType: PeriodType): FinancialPeriod {
@@ -89,7 +206,9 @@ function buildPeriod(
   const fields: ResolvedFlow = { ...flow.fields }
   const used: Record<string, string> = { ...flow.used }
   adjust?.(fields, used)
-  const stock = resolveStock(pickInstant(idx, periodEnd))
+  const instant = pickInstant(idx, periodEnd)
+  const stock = resolveStock(instant.values, instant.dates)
+  applyShareCoverageGuard(stock.fields, stock.used, basicSharesAsOf(idx, periodEnd))
   sourceTags[`${periodType}:${periodEnd}`] = { ...used, ...stock.used }
   return {
     periodEnd,

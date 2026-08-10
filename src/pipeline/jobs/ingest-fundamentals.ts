@@ -71,16 +71,22 @@ export async function ingestFundamentals(deps: FundamentalsDeps): Promise<JobSta
     for (const cik of toFetch) {
       try {
         const facts = await companyFacts.fetchCompany(cik)
+        if (facts !== null && facts.length === 0) {
+          // 응답은 200인데 추적 태그가 하나도 안 남았다 — companyfacts-cik-report.md가
+          // 막으려던 파서 결함(응답을 통째로 버리는 버그)의 정확한 증상이다. 여기서
+          // 지문을 남기면 이 회사는 `selectTagSetStaleCiks`에서 영구히 빠지고, 그
+          // 코호트를 잡을 수 있는 유일한 그물이 한 번 쓰고 사라진다(자가치유가
+          // 1회성이 된다). 지문을 남기지 않아 다음 실행에서 다시 대상이 되게 한다.
+          apiEmptyParse++
+          apiEmptyParseCiks.push(String(cik))
+          continue
+        }
         // 조회를 마친 회사에만 현재 태그 지문을 남긴다 — 404(신고 이력 없음)도 "이 태그
-        // 집합으로 확인 완료"이므로 기록한다. 던진 회사는 기록하지 않아 다음 실행에서
-        // 다시 대상이 된다(재개 가능).
+        // 집합으로 확인 완료"이므로 기록한다. 던진 회사와 빈 파싱 결과가 나온 회사는
+        // 기록하지 않아 다음 실행에서 다시 대상이 된다(재개 가능).
         markTagSetFetched(raw, cik, TRACKED_TAGS_FINGERPRINT, asOf)
         if (facts === null) continue
         apiFacts += insertFacts(raw, facts)
-        if (facts.length === 0) {
-          apiEmptyParse++
-          apiEmptyParseCiks.push(String(cik))
-        }
       } catch {
         apiFailed++
         apiFailedCiks.push(String(cik))

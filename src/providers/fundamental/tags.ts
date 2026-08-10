@@ -100,6 +100,25 @@ export const SHORT_TERM_BORROWING_TAGS: readonly string[] = [
 ]
 
 /**
+ * 기본(희석 전) 가중평균 발행주식수. `resolveStock`이 표지 발행주식수
+ * (`EntityCommonStockSharesOutstanding`)의 **주식 종류 커버리지**를 검증하는 데
+ * 쓴다 — 근거는 normalizer.ts의 `applyShareCoverageGuard` 주석 참고.
+ *
+ * 희석주식수가 아니라 기본주식수를 쓰는 이유: 기본 가중평균은 정의상 그 기간에
+ * 실제로 발행돼 있던 보통주(전 종류)의 시간가중 평균이라 표지 발행주식수와 같은
+ * 것을 세지만, 희석주식수는 전환우선주·워런트·옵션까지 포함해 실제 발행주식수보다
+ * 훨씬 클 수 있다. 실측(TENX, Tenax Therapeutics 2025-09-30): 표지 4,562,500주에
+ * 희석 39,741,404주 — 전환우선주 때문이지 종류주 누락이 아니다. 희석주식수로
+ * 판정했다면 이 회사를 잘못 걸러냈을 것이다.
+ *
+ * 두 번째 태그는 기본과 희석이 같을 때(반희석 상황) 하나로 신고하는 변형이다.
+ */
+export const BASIC_SHARES_CHAIN: readonly string[] = [
+  'WeightedAverageNumberOfSharesOutstandingBasic',
+  'WeightedAverageNumberOfShareOutstandingBasicAndDiluted',
+]
+
+/**
  * 차입금 개념 전체. "이 회사가 차입금이라는 개념을 이력 어디에서든 태깅한 적이
  * 있는가"를 판정하는 데 쓴다(무차입 추론 자격 — normalizer.ts 참고).
  */
@@ -178,6 +197,7 @@ export const TRACKED_TAGS = new Set<string>([
   ...LIABILITIES_ANCHOR_TAGS,
   // 주식수
   'WeightedAverageNumberOfDilutedSharesOutstanding',
+  ...BASIC_SHARES_CHAIN,
   'EntityCommonStockSharesOutstanding',
 ])
 

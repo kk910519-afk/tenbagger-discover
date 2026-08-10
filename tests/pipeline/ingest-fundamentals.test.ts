@@ -229,10 +229,12 @@ describe('selectThinCoverageCiks', () => {
   const FRESH_THIN_CIK = 5000000
   const FRESH_RICH_CIK = 5000001
   const NO_FACTS_CIK = 5000002
+  const BULK_ONLY_CIK = 5000003
 
   beforeAll(() => {
     for (const [cik, ticker] of [
       [FRESH_THIN_CIK, 'THIN'], [FRESH_RICH_CIK, 'RICH'], [NO_FACTS_CIK, 'NONE'],
+      [BULK_ONLY_CIK, 'BONLY'],
     ] as const) {
       raw.prepare(
         `INSERT INTO companies (cik, ticker, name, is_active, first_seen, last_updated)
@@ -253,14 +255,32 @@ describe('selectThinCoverageCiks', () => {
     for (let i = 0; i < 3; i++) {
       insertFact.run(FRESH_THIN_CIK, `Tag${i}`, `2026-0${i + 1}-01`, `thin-${i}`)
     }
-    // FRESH_RICH_CIK: 사실이 충분히 많다 (임계값 이상) — 재조회 대상이 아니어야 한다.
+    // FRESH_RICH_CIK: API 사실이 충분히 많다 (임계값 이상) — 재조회 대상이 아니어야 한다.
+    const insertApiFact = raw.prepare(
+      `INSERT INTO financial_facts
+         (cik, tag, unit, period_start, period_end, qtrs, value, form, filed_date, accession, source)
+       VALUES (?, ?, 'USD', NULL, ?, 1, 1, '10-Q', '2026-08-01', ?, 'api')`,
+    )
     for (let i = 0; i < 10; i++) {
-      insertFact.run(FRESH_RICH_CIK, `Tag${i}`, `2026-0${(i % 9) + 1}-01`, `rich-${i}`)
+      insertApiFact.run(FRESH_RICH_CIK, `Tag${i}`, `2026-0${(i % 9) + 1}-01`, `rich-${i}`)
+    }
+    // BULK_ONLY_CIK: bulk만으로는 임계값을 훌쩍 넘지만 API 사실이 하나도 없다.
+    // 리뷰 F6이 지적한 구멍 — 전체 행을 세면 이 회사가 그물을 빠져나간다.
+    for (let i = 0; i < 20; i++) {
+      insertFact.run(BULK_ONLY_CIK, `Tag${i}`, `2026-0${(i % 9) + 1}-01`, `bulkonly-${i}`)
     }
   })
 
   it('filed_date는 최신이지만 사실 수가 임계값 미만인 회사를 포함한다', () => {
     expect(selectThinCoverageCiks(raw, 5)).toContain(FRESH_THIN_CIK)
+  })
+
+  it('bulk로만 두껍게 채워진 회사(API 사실 0건)도 포함한다 — 전체 행을 세면 놓친다', () => {
+    expect(
+      raw.prepare('SELECT COUNT(*) AS n FROM financial_facts WHERE cik = ?')
+        .get(BULK_ONLY_CIK),
+    ).toEqual({ n: 20 })
+    expect(selectThinCoverageCiks(raw, 5)).toContain(BULK_ONLY_CIK)
   })
 
   it('임계값 이상으로 채워진 회사는 제외한다', () => {
@@ -378,12 +398,12 @@ describe('selectTagSetStaleCiks — 태그 집합 변경 감지', () => {
       `INSERT INTO company_industry (cik, industry_slug, theme_slug, is_primary, source)
        VALUES (?, 'ai-infrastructure', 'ai-software-semi', 1, 'override')`,
     ).run(CIK)
-    // 신고일은 오늘, 사실 수는 임계값을 넉넉히 넘긴다 — 기존 두 기준으로는 절대
-    // 재조회 대상이 되지 않는 상태를 만든다.
+    // 신고일은 오늘, API 사실 수는 임계값을 넉넉히 넘긴다 — 기존 두 기준으로는 절대
+    // 재조회 대상이 되지 않는 상태를 만든다(thin-coverage는 API 소스 사실만 센다).
     const insertFact = tagRaw.prepare(
       `INSERT INTO financial_facts
          (cik, tag, unit, period_start, period_end, qtrs, value, form, filed_date, accession, source)
-       VALUES (?, ?, 'USD', NULL, ?, 1, 1, '10-Q', '2026-08-08', ?, 'bulk')`,
+       VALUES (?, ?, 'USD', NULL, ?, 1, 1, '10-Q', '2026-08-08', ?, 'api')`,
     )
     for (let i = 0; i < cfg.ingest.thin_coverage_min_facts + 10; i++) {
       insertFact.run(CIK, `Tag${i}`, '2026-06-30', `tag-${i}`)
@@ -436,7 +456,7 @@ describe('ingestFundamentals — 태그 집합이 바뀌면 실제로 재조회�
     const insertFact = changedRaw.prepare(
       `INSERT INTO financial_facts
          (cik, tag, unit, period_start, period_end, qtrs, value, form, filed_date, accession, source)
-       VALUES (?, ?, 'USD', NULL, '2026-06-30', 1, 1, '10-Q', '2026-08-08', ?, 'bulk')`,
+       VALUES (?, ?, 'USD', NULL, '2026-06-30', 1, 1, '10-Q', '2026-08-08', ?, 'api')`,
     )
     for (let i = 0; i < cfg.ingest.thin_coverage_min_facts + 10; i++) {
       insertFact.run(CIK, `Tag${i}`, `tag-${i}`)
@@ -462,12 +482,49 @@ describe('ingestFundamentals — 태그 집합이 바뀌면 실제로 재조회�
     called = []
     const stats = await ingestFundamentals({
       raw: changedRaw, cfg, bulk: { fetchQuarter: async () => [] },
-      companyFacts: { fetchCompany: async (cik) => { called.push(cik); return [] } },
+      companyFacts: {
+        fetchCompany: async (cik) => {
+          called.push(cik)
+          return [{
+            cik, tag: 'Revenues', unit: 'USD', periodStart: null, periodEnd: '2026-06-30',
+            qtrs: 1, value: 42, form: '10-Q', filedDate: '2026-08-08',
+            accession: 'tagrun-1', source: 'api',
+          }]
+        },
+      },
       asOf: '2026-08-09',
     })
     expect(called).toContain(CIK)
     expect(stats.tagSetStaleCompanies).toBe(1)
     expect(stats.tagsFingerprint).toBe(TRACKED_TAGS_FINGERPRINT)
+    expect(selectTagSetStaleCiks(changedRaw, TRACKED_TAGS_FINGERPRINT)).not.toContain(CIK)
+  })
+
+  // F6: 파싱 결과가 빈 회사에 지문을 찍으면 `selectTagSetStaleCiks`에서 영구히
+  // 빠진다 — 지문 그물이 태그 집합 변경당 딱 한 번만 발동하고, 정작 그 그물이
+  // 필요한 코호트(파서가 응답을 통째로 버린 회사)를 스스로 제외해 버린다.
+  it('파싱 결과가 비면(200이지만 추적 태그 0건) 지문을 찍지 않아 다음 실행에서 다시 대상이 된다', async () => {
+    markTagSetFetched(changedRaw, CIK, 'stale-fingerprint-2', '2026-08-08')
+    called = []
+    const stats = await ingestFundamentals({
+      raw: changedRaw, cfg, bulk: { fetchQuarter: async () => [] },
+      companyFacts: { fetchCompany: async (cik) => { called.push(cik); return [] } },
+      asOf: '2026-08-09',
+    })
+    expect(called).toContain(CIK)
+    expect(stats.apiEmptyParse).toBe(1)
+    // 수정 전에는 지문이 찍혀 이 단언이 실패했다(=회사가 그물에서 사라졌다).
+    expect(selectTagSetStaleCiks(changedRaw, TRACKED_TAGS_FINGERPRINT)).toContain(CIK)
+  })
+
+  it('404(신고 이력 없음)는 확인 완료로 보고 지문을 찍는다 — 빈 파싱과 구분된다', async () => {
+    markTagSetFetched(changedRaw, CIK, 'stale-fingerprint-3', '2026-08-08')
+    const stats = await ingestFundamentals({
+      raw: changedRaw, cfg, bulk: { fetchQuarter: async () => [] },
+      companyFacts: { fetchCompany: async () => null },
+      asOf: '2026-08-09',
+    })
+    expect(stats.apiEmptyParse).toBe(0)
     expect(selectTagSetStaleCiks(changedRaw, TRACKED_TAGS_FINGERPRINT)).not.toContain(CIK)
   })
 })
