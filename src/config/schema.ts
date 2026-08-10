@@ -60,6 +60,9 @@ export const configSchema = z
         wacc_assumption: z.number(),
         tax_rate: z.number(),
         min_industry_candidates: z.number().int(),
+        // 투하자본이 |총부채|+|자본|+|현금| 대비 최소로 차지해야 하는 비율. 0이면 부호
+        // 검사만 남아 큰 수들의 상쇄 잔차가 ROIC 분모로 인정된다(리뷰 Finding 2).
+        min_invested_capital_ratio: z.number().min(0).max(1),
         // x=TTM 매출(USD), y=revenue_growth·revenue_acceleration에 남는 비율.
         revenue_scale_damping: z.object({ curve }).strict(),
         factors: z
@@ -123,6 +126,9 @@ export const configSchema = z
               .strict(),
             balance_sheet: factorBase
               .extend({
+                min_signals: z.number().int().min(1),
+                // x=신호 커버리지 비율(계산된 신호 / 평가 가능했어야 할 신호)
+                coverage_curve: curve,
                 profitable_blend: z
                   .object({ net_cash: z.number(), leverage: z.number() })
                   .strict(),
@@ -152,6 +158,9 @@ export const configSchema = z
       .object({
         projection_years: z.number().int().positive(),
         terminal_growth_rate: z.number(),
+        // 명시적 예측에 투영할 수 있는 초기 성장률의 상한. 넘으면 값을 깎지 않고
+        // INSUFFICIENT_DATA로 돌린다(리뷰 Finding 1).
+        max_projectable_growth: z.number().positive(),
         // x = 예측 연차(1..projection_years), y = 초기값(성장률/마진)에 남아있는 가중치(1=초기값 그대로,
         // 0=터미널/성숙값으로 완전 수렴). 성장률 페이드와 FCF마진 페이드가 같은 스케줄을 공유한다.
         fade_curve: curve,
@@ -174,6 +183,9 @@ export const configSchema = z
           .object({
             growth_lookback_quarters: z.number().int().positive(),
             min_periods: z.number().int().positive(),
+            // x=측정된 드라이버 / 측정 가능했어야 할 드라이버, y=측정 평균에 주는 가중치.
+            // 나머지 (1−y)는 최대 위험(1.0)으로 채운다(리뷰 Finding 4).
+            coverage_curve: curve,
             revenue_predictability_curve: curve,
             operating_margin_volatility_curve: curve,
             data_completeness_curve: curve,

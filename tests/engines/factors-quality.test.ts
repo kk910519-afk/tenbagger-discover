@@ -100,6 +100,33 @@ describe('marketCapOpportunityFactor', () => {
     expect(r.detail).toContain('WARNING')
   })
 
+  // 리뷰 Finding 5: 두 게이트 조건이 모두 매출을 근거로 하므로, 매출이 null이면
+  // 게이트를 평가할 수 없다. 통과시키면 아무것도 보고하지 않은 회사가 만점을 받고
+  // $9M을 정직하게 보고한 회사는 0점이 되는 역전이 생긴다.
+  it('TTM 매출이 없으면 게이트를 평가할 수 없으므로 만점이 아니라 NO_DATA', () => {
+    const noRevenue = [
+      fp('2025-03-31'), fp('2024-12-31'), fp('2024-09-30'),
+      fp('2024-06-30'), fp('2024-03-31'),
+    ]
+    const r = marketCapOpportunityFactor(ctx({ marketCap: 5e8, ttm: noRevenue }))
+    expect(r.status).toBe('NO_DATA')
+    expect(r.points).toBeNull()
+    expect(r.detail).toContain('매출')
+  })
+
+  it('매출 $9M을 보고한 회사(0점)가 아무것도 보고하지 않은 회사보다 불리하지 않다', () => {
+    const tiny = growingTtm({ revenue: 9_000_000 })
+    tiny[4] = fp('2024-03-31', { revenue: 8_000_000 })
+    const reported = marketCapOpportunityFactor(ctx({ marketCap: 5e8, ttm: tiny }))
+    const silent = marketCapOpportunityFactor(
+      ctx({ marketCap: 5e8, ttm: [fp('2025-03-31'), fp('2024-03-31')] }),
+    )
+    expect(reported.points).toBe(0)
+    // 수정 전에는 silent가 15점(만점)이었다 — 보고하지 않는 쪽이 이득이었다.
+    expect(silent.points).toBeNull()
+    expect(silent.status).toBe('NO_DATA')
+  })
+
   it('시가총액이 없으면 NO_DATA', () => {
     expect(marketCapOpportunityFactor(ctx({ marketCap: null, ttm: growingTtm() })).status)
       .toBe('NO_DATA')
@@ -327,7 +354,7 @@ describe('balanceSheetFactor', () => {
   // "흑자 기업" 테스트는 둘 다 있는 경우만 다루므로, 레버리지가 없을 때
   // net_cash_curve 단독으로, 순현금이 없을 때 leverage_curve 단독으로
   // 점수화되는지 별도로 확인한다.
-  it('순현금만 산출 가능하면 net_cash_curve만으로 채점한다 (영업이익 없음)', () => {
+  it('순현금만 산출 가능하면 커버리지 감쇠를 받는다 (영업이익 없음)', () => {
     const r = balanceSheetFactor(
       ctx({
         marketCap: 1e10,
@@ -335,21 +362,67 @@ describe('balanceSheetFactor', () => {
       }),
     )
     expect(r.raw).toBeCloseTo(0.25, 5)
-    expect(r.points!).toBeCloseTo(5, 5)
+    // 순현금 0.25 → 1.00, 평가 가능 2개 중 1개 → 감쇠 ×0.50 → 5 × 1.00 × 0.50 = 2.5
+    expect(r.points!).toBeCloseTo(2.5, 5)
     expect(r.detail).toContain('순현금')
     expect(r.detail).toContain('레버리지 산출 불가')
+    expect(r.detail).toContain('커버리지 감쇠 ×0.50')
   })
 
-  it('레버리지만 산출 가능하면 leverage_curve만으로 채점한다 (현금 없음)', () => {
+  it('레버리지만 산출 가능하면 커버리지 감쇠를 받는다 (현금 없음)', () => {
     const r = balanceSheetFactor(
       ctx({
         ttm: [fp('2025-03-31', { operatingIncome: 3e8, totalDebt: 5e8 })],
       }),
     )
     expect(r.raw).toBeCloseTo(1.666667, 5)
-    expect(r.points!).toBeCloseTo(3.416667, 5)
+    // 레버리지 1.667배 → 0.68333, 감쇠 ×0.50 → 5 × 0.68333 × 0.50 = 1.708333
+    expect(r.points!).toBeCloseTo(1.708333, 5)
     expect(r.detail).toContain('부채/영업이익')
     expect(r.detail).toContain('순현금 산출 불가')
+  })
+
+  // 리뷰 Finding 3의 핵심: debtToEbitda는 영업이익 ≤ 0이면 null이므로, 레버리지 신호가
+  // 빠지는 조건은 곧 "영업 적자"다. 감쇠가 없으면 적자라는 이유로 감점을 면제받아
+  // 완전한 증거를 가진 흑자 기업을 앞지른다(CLFD 실사례: 5/5 만점).
+  it('증거가 적은 쪽(영업 적자로 레버리지 산출 불가)이 완전한 증거를 앞지르지 못한다', () => {
+    const partial = balanceSheetFactor(
+      ctx({
+        marketCap: 1e10,
+        // 영업손실 — debtToEbitda가 null이 된다. FCF는 양수라 런웨이 경로로 가지 않는다.
+        ttm: [fp('2025-03-31', {
+          revenue: 1e9, operatingIncome: -1e6, fcf: 1e7, cash: 3e9, totalDebt: 5e8,
+        })],
+      }),
+    )
+    const full = balanceSheetFactor(
+      ctx({
+        marketCap: 1e10,
+        // 순현금은 동일하고 레버리지만 추가로 산출되는 흑자 기업(부채/영업이익 2.0배)
+        ttm: [fp('2025-03-31', {
+          revenue: 1e9, operatingIncome: 2.5e8, fcf: 2e8, cash: 3e9, totalDebt: 5e8,
+        })],
+      }),
+    )
+    expect(partial.status).toBe('SCORED')
+    expect(full.status).toBe('SCORED')
+    // 수정 전에는 partial 5.00 > full 4.20으로 뒤집혀 있었다.
+    expect(partial.points!).toBeLessThan(full.points!)
+    expect(partial.points!).toBeCloseTo(2.5, 5)
+    expect(full.points!).toBeCloseTo(5 * (0.6 * 1.0 + 0.4 * 0.6), 5) // = 4.2
+  })
+
+  it('시가총액이 없어 순현금을 못 구하는 것은 회사 사유가 아니므로 감쇠하지 않는다', () => {
+    const r = balanceSheetFactor(
+      ctx({
+        marketCap: null,
+        ttm: [fp('2025-03-31', { operatingIncome: 3e8, totalDebt: 5e8, cash: 3e9 })],
+      }),
+    )
+    // 평가 가능 신호는 레버리지 1개뿐 → 커버리지 1.0 → 감쇠 없음 → 5 × 0.68333
+    expect(r.points!).toBeCloseTo(3.416667, 5)
+    expect(r.detail).toContain('감쇠 없음')
+    expect(r.detail).toContain('시가총액 없음')
   })
 })
 

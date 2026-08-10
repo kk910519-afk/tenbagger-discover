@@ -27,11 +27,22 @@ const PERCENTILE_SOURCE: Record<string, string> = {
 }
 
 // engine_version은 "회사가 바뀌었나"와 "채점 규칙이 바뀌었나"를 구분하기 위한 필드다.
-// scoring/classification 밖의 설정(ingest, universe, staleness 등)이 바뀌어도 점수 산출
-// 로직 자체는 그대로이므로, 그런 변경까지 해시에 섞으면 "규칙이 바뀌었다"는 잘못된
-// 신호를 점수 이력에 남기게 된다. category는 classification에서 나오므로 함께 포함한다.
+// 그러므로 해시가 덮어야 할 범위는 "그 엔진이 실제로 읽는 설정 전부"이고, 그 밖은
+// 하나도 포함하면 안 된다. 빠뜨리면 잣대가 바뀌었는데 버전이 그대로여서 점수 이력이
+// 그 변화를 회사 탓으로 돌리고, 넘치면 무관한 설정 변경이 "규칙이 바뀌었다"는 잘못된
+// 신호를 남긴다.
+//
+// tenbagger가 읽는 것: scoring(모든 팩터 곡선·가중치·공용 상수), classification(category가
+// 여기서 나온다), 그리고 quality_gate — market_cap_opportunity의 게이트 배수가
+// evaluateQuality가 만든 WARNING 등급 Red Flag를 참조하므로, dilution_warning 같은
+// 임계값 하나가 그 팩터의 점수를 절반으로 만든다. ingest·universe·staleness는 점수 산출
+// 로직에 들어가지 않으므로 제외한다.
 export function configHash(cfg: AppConfig): string {
-  const scored = { scoring: cfg.scoring, classification: cfg.classification }
+  const scored = {
+    scoring: cfg.scoring,
+    classification: cfg.classification,
+    quality_gate: cfg.quality_gate,
+  }
   return createHash('sha256').update(JSON.stringify(scored)).digest('hex').slice(0, 8)
 }
 
@@ -39,8 +50,28 @@ export function configHash(cfg: AppConfig): string {
 // 이력을 갖는다 — tenbagger의 곡선을 조정해도 valuation의 engine_version은 바뀌지
 // 않아야 하고, 그 반대도 마찬가지다. 두 엔진을 하나의 해시로 묶으면 "성장 채점 규칙이
 // 바뀌었다"와 "밸류에이션 가정이 바뀌었다"를 구분할 수 없게 된다.
+//
+// 다만 valuation 엔진은 cfg.valuation만 읽지 않는다. 아래 다섯 값은 scoring 아래에 있지만
+// 이 엔진이 직접 읽으며, 하나만 바뀌어도 모든 fair_value_per_share·valuation_status·
+// moat_signal·uncertainty_score가 움직인다. 그래서 scoring 전체가 아니라 **실제로 읽는
+// 부분집합**을 해시에 넣는다 — gross_margin 곡선을 손봤다고 밸류에이션 버전이 올라가면
+// 축 분리가 무너진다.
 export function valuationConfigHash(cfg: AppConfig): string {
-  return createHash('sha256').update(JSON.stringify(cfg.valuation)).digest('hex').slice(0, 8)
+  const s = cfg.scoring
+  const read = {
+    valuation: cfg.valuation,
+    // DCF 할인율이자 Moat의 자본비용 문턱
+    wacc_assumption: s.wacc_assumption,
+    // ROIC의 NOPAT 세율이자 nopat_proxy 마진의 세율
+    tax_rate: s.tax_rate,
+    // ROIC 분모의 유효성 하한 (Moat)
+    min_invested_capital_ratio: s.min_invested_capital_ratio,
+    // 모든 예측의 초기 성장률 혼합 비중
+    revenue_growth_blend: s.factors.revenue_growth.blend,
+    // financial_leverage 불확실성 드라이버가 그대로 재사용하는 곡선
+    balance_sheet_leverage_curve: s.factors.balance_sheet.leverage_curve,
+  }
+  return createHash('sha256').update(JSON.stringify(read)).digest('hex').slice(0, 8)
 }
 
 export type ScoreDeps = {

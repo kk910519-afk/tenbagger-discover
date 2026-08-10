@@ -52,17 +52,97 @@ function annualPeriod(year: number, operatingIncome: number): FinancialPeriod {
 
 // --- Fair Value 게이트 픽스처 -------------------------------------------------
 
-/** 5개 게이트를 모두 통과 — OK가 나와야 하는 기준 픽스처. */
-export function eligibleForFairValue(): CompanySnapshot {
-  const shape = (rev: number) => ({
-    grossProfit: rev * 0.7, operatingIncome: rev * 0.2, fcf: rev * 0.15,
+/**
+ * 분기 성장률이 두 구간으로 나뉘는 TTM 계열(최근순). recentGrowth는 최근 recentCount개
+ * 간격에, olderGrowth는 그 이전 간격에 적용한다.
+ *
+ * 왜 두 구간인가: 성장률이 한 값으로 일정하면 TTM YoY와 3Y CAGR이 정확히 같아져서
+ * `blend`의 두 가중치를 서로 바꿔도 결과가 변하지 않는다 — 즉 그 규칙이 관측 불가능해진다
+ * (테스트 리뷰 F1). 두 구간으로 나누면 두 지표가 실제로 달라진다.
+ */
+function phasedTtmSeries(
+  n: number, latestRevenue: number, recentCount: number,
+  recentGrowth: number, olderGrowth: number,
+  shape: (revenue: number) => Partial<FinancialPeriod>,
+): FinancialPeriod[] {
+  const revenues = [latestRevenue]
+  for (let i = 1; i < n; i++) {
+    const g = i <= recentCount ? recentGrowth : olderGrowth
+    revenues.push(revenues[i - 1]! / (1 + g))
+  }
+  return revenues.map((rev, i) =>
+    period(`2025-${String(40 - i).padStart(2, '0')}`, 'TTM', { revenue: rev, ...shape(rev) }),
+  )
+}
+
+/** eligibleForFairValue의 재무 구조 — 게이트 픽스처들이 공유한다. */
+function eligibleShape(rev: number): Partial<FinancialPeriod> {
+  return {
+    grossProfit: rev * 0.7, operatingIncome: rev * 0.3, fcf: rev * 0.25,
     cash: 500_000_000, totalDebt: 100_000_000, sharesDiluted: 100_000_000,
     equity: 800_000_000,
-  })
+  }
+}
+
+/**
+ * 게이트를 모두 통과 — OK가 나와야 하는 기준 픽스처. 모든 중간값이 결정적이다:
+ *   TTM YoY  = 1.05^4 − 1                        = 0.21550625
+ *   3Y CAGR  = (1.05^4 · 1.02^8)^(1/3) − 1       = 0.12508722
+ *   초기성장률 = 0.6·YoY + 0.4·CAGR               = 0.17933864  (가중치를 바꾸면 0.16125483)
+ *   초기 FCF마진 = 0.25 (성숙마진 0.15와 달라 마진 페이드가 관측된다)
+ *   순현금 = 5e8 − 1e8 = 4e8, 희석주식수 1e8
+ */
+export function eligibleForFairValue(): CompanySnapshot {
   return base({
     ticker: 'GOOD', price: 20,
-    ttm: ttmSeries(13, 1_000_000_000, 0.05, shape),
+    ttm: phasedTtmSeries(13, 1_000_000_000, 4, 0.05, 0.02, eligibleShape),
   })
+}
+
+/**
+ * 추세 성장률이 valuation.max_projectable_growth를 크게 넘는 기업 — CRMD 실사례의 모양
+ * (TTM 매출 $400M, 1년 전 $82.6M → TTM YoY 약 +380%, FCF마진 48.7%). 이런 입력에서
+ * 수정 전 엔진은 주당 $545.63(시총의 73배)을 "98.6% 저평가"로 냈다.
+ */
+export function hyperGrowthCompany(): CompanySnapshot {
+  return base({
+    ticker: 'HYPER', price: 7.44,
+    ttm: phasedTtmSeries(13, 400_054_000, 4, 0.48, 0.05, (rev) => ({
+      grossProfit: rev * 0.8, operatingIncome: rev * 0.4, fcf: rev * 0.4867,
+      cash: 178_087_000, totalDebt: 144_626, sharesDiluted: 92_985_000,
+      equity: 300_000_000,
+    })),
+  })
+}
+
+/**
+ * FCF는 적자지만 영업이익이 흑자라 게이트를 통과하는 자본지출 집약 성장기업 —
+ * 초기 마진이 nopat_proxy(영업이익률 × (1 − 세율))로 잡히는 유일한 분기.
+ */
+export function capexHeavyCompany(): CompanySnapshot {
+  return base({
+    ticker: 'CAPEX', price: 20,
+    ttm: phasedTtmSeries(13, 1_000_000_000, 4, 0.05, 0.02, (rev) => ({
+      grossProfit: rev * 0.7, operatingIncome: rev * 0.3, fcf: -rev * 0.05,
+      cash: 500_000_000, totalDebt: 100_000_000, sharesDiluted: 100_000_000,
+      equity: 800_000_000,
+    })),
+  })
+}
+
+/** TTM 5개 구간뿐 — 3Y CAGR은 못 구하고 TTM YoY만 산출된다(ttm_yoy_only). */
+export function ttmYoyOnlyCompany(): CompanySnapshot {
+  return base({
+    ticker: 'YOYONLY', price: 20,
+    ttm: phasedTtmSeries(5, 1_000_000_000, 4, 0.05, 0.02, eligibleShape),
+  })
+}
+
+/** 13개 구간이지만 1년 전 구간의 매출만 결측 — TTM YoY는 못 구하고 3Y CAGR만 남는다. */
+export function cagr3yOnlyCompany(): CompanySnapshot {
+  const ttm = phasedTtmSeries(13, 1_000_000_000, 4, 0.05, 0.02, eligibleShape)
+  ttm[4] = { ...ttm[4]!, revenue: null }
+  return base({ ticker: 'CAGRONLY', price: 20, ttm })
 }
 
 /** 최근 TTM 매출이 0 이하 — NON_POSITIVE_REVENUE */
@@ -236,6 +316,44 @@ export function mixedGapCouldFlipMoatCompany(): CompanySnapshot {
       missing(2024), missing(2023), missing(2022), missing(2021), // 결측 (4개)
       cashRich(2020), cashRich(2019), // 투하자본 ≤ 0 (2개)
     ],
+  })
+}
+
+/**
+ * 연간 14개 기간: 가장 최근 8개(lookback_periods)는 전부 WACC 미달이고, 그 이전 6개는
+ * 전부 크게 상회한다. 최근 8개만 보면 상회 0개 → NONE이지만, 창을 자르지 않고 14개를
+ * 다 세면 6/14 = 43%로 narrow_clear_ratio(0.40)를 넘어 NARROW가 된다.
+ * "10년 전의 좋았던 시절은 더 이상 계산에 들어가지 않는다"는 규칙을 관측하는 유일한
+ * 픽스처다(테스트 리뷰 F6).
+ */
+export function staleGloryMoatCompany(): CompanySnapshot {
+  return base({
+    ticker: 'STALE',
+    annual: [
+      annualPeriod(2025, 1), annualPeriod(2024, 1), annualPeriod(2023, 1),
+      annualPeriod(2022, 1), annualPeriod(2021, 1), annualPeriod(2020, 1),
+      annualPeriod(2019, 1), annualPeriod(2018, 1),
+      // 창 밖 — 여기만 보면 WIDE다
+      annualPeriod(2017, 30), annualPeriod(2016, 30), annualPeriod(2015, 30),
+      annualPeriod(2014, 30), annualPeriod(2013, 30), annualPeriod(2012, 30),
+    ],
+  })
+}
+
+/**
+ * 투하자본이 양수이긴 하지만 총액 대비 무시할 만큼 작은 해로만 이뤄진 기업 — Dropbox
+ * 실사례의 모양(자사주 매입으로 자본이 음수, 투하자본은 상쇄 잔차). 수정 전에는 모든
+ * 기간이 유효 판정을 받아 WIDE(평균 스프레드 +119.6%p)가 나왔다.
+ */
+export function buybackNegativeEquityCompany(): CompanySnapshot {
+  const year = (y: number): FinancialPeriod =>
+    period(`${y}-12-31`, 'A', {
+      revenue: 2_500_000_000, operatingIncome: 689_100_000,
+      totalDebt: 2_834_000_000, equity: -1_797_200_000, cash: 891_300_000,
+    })
+  return base({
+    ticker: 'BUYBK',
+    annual: [year(2025), year(2024), year(2023), year(2022), year(2021)],
   })
 }
 

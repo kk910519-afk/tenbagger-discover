@@ -38,6 +38,7 @@ scoring:
   wacc_assumption: 0.05             # loadConfig() 경로별 캐싱 테스트용 — 실제 config.yaml(0.09)과 다른 값
   tax_rate: 0.21
   min_industry_candidates: 3
+  min_invested_capital_ratio: 0.10
   revenue_scale_damping:
     curve: [[5000000, 0.40], [10000000, 0.55], [20000000, 0.70], [35000000, 0.85], [50000000, 1.00]]
   factors:
@@ -87,6 +88,8 @@ scoring:
         rd_intensity: [[0.00, 0.00], [0.03, 0.25], [0.08, 0.55], [0.15, 0.85], [0.25, 1.00]]
     balance_sheet:
       weight: 5
+      min_signals: 1
+      coverage_curve: [[0.50, 0.50], [1.00, 1.00]]
       profitable_blend: { net_cash: 0.6, leverage: 0.4 }
       net_cash_curve: [[-0.50, 0.00], [-0.20, 0.25], [0.00, 0.50], [0.10, 0.75], [0.25, 1.00]]
       leverage_curve: [[0, 1.00], [1, 0.85], [2, 0.60], [4, 0.30], [6, 0.00]]
@@ -108,6 +111,7 @@ quality_gate:
 valuation:
   projection_years: 5
   terminal_growth_rate: 0.025
+  max_projectable_growth: 0.60
   fade_curve: [[0, 1.00], [1, 0.80], [2, 0.60], [3, 0.40], [4, 0.20], [5, 0.00]]
   mature_fcf_margin: 0.15
   price_to_fair_value:
@@ -121,6 +125,7 @@ valuation:
   uncertainty:
     growth_lookback_quarters: 8
     min_periods: 4
+    coverage_curve: [[0.00, 0.00], [1.00, 1.00]]
     revenue_predictability_curve: [[0.00, 0.00], [0.08, 0.20], [0.15, 0.45], [0.30, 0.75], [0.50, 1.00]]
     operating_margin_volatility_curve: [[0.00, 0.00], [0.02, 0.20], [0.05, 0.45], [0.10, 0.75], [0.20, 1.00]]
     data_completeness_curve: [[0.00, 1.00], [0.50, 0.75], [0.70, 0.45], [0.85, 0.20], [1.00, 0.00]]

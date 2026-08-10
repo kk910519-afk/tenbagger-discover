@@ -93,6 +93,16 @@ describe('grossMarginSeries / grossMarginTrendBps', () => {
   })
 })
 
+const MIN_INVESTED = 0.10
+
+/** Dropbox 2025-12-31 실사례 — 자사주 매입으로 자본이 −$1.797B, 투하자본은 상쇄 잔차 $145.5M. */
+function dropbox2025() {
+  return p({
+    periodEnd: '2025-12-31', operatingIncome: 689_100_000,
+    totalDebt: 2_834_000_000, equity: -1_797_200_000, cash: 891_300_000,
+  })
+}
+
 describe('roic', () => {
   it('NOPAT을 투하자본으로 나눈다', () => {
     const per = p({
@@ -100,37 +110,67 @@ describe('roic', () => {
       totalDebt: 2000, equity: 6000, cash: 1000,
     })
     // NOPAT = 1000 * 0.79 = 790, 투하자본 = 2000 + 6000 - 1000 = 7000
-    expect(roic(per, 0.21)).toBeCloseTo(0.1129, 4)
+    expect(roic(per, 0.21, MIN_INVESTED)).toBeCloseTo(0.1129, 4)
   })
   it('투하자본이 0 이하면 null', () => {
     const per = p({ periodEnd: 'x', operatingIncome: 100, totalDebt: 0, equity: 100, cash: 500 })
-    expect(roic(per, 0.21)).toBeNull()
+    expect(roic(per, 0.21, MIN_INVESTED)).toBeNull()
+  })
+
+  // 리뷰 Finding 2: 부호 검사만으로는 부족하다 — 투하자본이 큰 수들의 상쇄 잔차이면
+  // ROIC는 사업의 자본생산성이 아니라 자본구조의 산물이다.
+  it('투하자본이 양수여도 총액 대비 무시할 만큼 작으면 null (DBX 실사례)', () => {
+    const per = dropbox2025()
+    // 투하자본 = 2,834 − 1,797.2 − 891.3 = 145.5M, 총액(절댓값 합) = 5,522.5M → 2.63%
+    expect(roic(per, 0.21, MIN_INVESTED)).toBeNull()
+  })
+
+  it('하한이 없으면 같은 기간이 ROIC 374%를 낸다 — 하한이 막는 것이 무엇인지 고정한다', () => {
+    // 하한을 0으로 두면(=수정 전 동작) 자본구조의 산물이 그대로 지표가 된다.
+    expect(roic(dropbox2025(), 0.21, 0)).toBeCloseTo(3.7418, 3)
+  })
+
+  it('현금이 부채+자본을 거의 다 상쇄해도 걸린다 (분모가 양수이기만 한 경우)', () => {
+    // 부채 100 + 자본 100 − 현금 190 = 10, 총액 390 → 2.6%
+    const per = p({ periodEnd: 'x', operatingIncome: 50, totalDebt: 100, equity: 100, cash: 190 })
+    expect(roic(per, 0.21, MIN_INVESTED)).toBeNull()
+    // 하한을 넘기면(현금 100 → 잔차 100/300 = 33%) 정상적으로 값이 나온다
+    const ok = p({ periodEnd: 'x', operatingIncome: 50, totalDebt: 100, equity: 100, cash: 100 })
+    expect(roic(ok, 0.21, MIN_INVESTED)).toBeCloseTo(0.395, 4)
   })
 })
 
 describe('roicGap — roic()가 null인 이유를 구분한다(roic() 자체의 조건과 정확히 대응해야 함)', () => {
   it('재무 항목이 결측이면 MISSING_FIELDS', () => {
     const per = p({ periodEnd: 'x', operatingIncome: 100, totalDebt: 0, equity: 100, cash: null })
-    expect(roic(per, 0.21)).toBeNull()
-    expect(roicGap(per)).toBe('MISSING_FIELDS')
+    expect(roic(per, 0.21, MIN_INVESTED)).toBeNull()
+    expect(roicGap(per, MIN_INVESTED)).toBe('MISSING_FIELDS')
   })
 
   it('기간 자체가 없으면(undefined) MISSING_FIELDS', () => {
-    expect(roicGap(undefined)).toBe('MISSING_FIELDS')
+    expect(roicGap(undefined, MIN_INVESTED)).toBe('MISSING_FIELDS')
   })
 
   it('항목은 다 있는데 투하자본이 0 이하면 NON_POSITIVE_INVESTED_CAPITAL', () => {
     const per = p({ periodEnd: 'x', operatingIncome: 100, totalDebt: 0, equity: 100, cash: 500 })
-    expect(roic(per, 0.21)).toBeNull()
-    expect(roicGap(per)).toBe('NON_POSITIVE_INVESTED_CAPITAL')
+    expect(roic(per, 0.21, MIN_INVESTED)).toBeNull()
+    expect(roicGap(per, MIN_INVESTED)).toBe('NON_POSITIVE_INVESTED_CAPITAL')
+  })
+
+  it('투하자본이 양수지만 규모 하한 미만이면 IMMATERIAL_INVESTED_CAPITAL', () => {
+    const per = dropbox2025()
+    expect(roic(per, 0.21, MIN_INVESTED)).toBeNull()
+    expect(roicGap(per, MIN_INVESTED)).toBe('IMMATERIAL_INVESTED_CAPITAL')
+    // 결측이 아니다 — 재무 항목은 넷 다 보고돼 있다
+    expect(roicGap(per, 0)).toBeNull()
   })
 
   it('roic()가 값을 낼 수 있으면 null(간극 없음)', () => {
     const per = p({
       periodEnd: '2025-12-31', operatingIncome: 1000, totalDebt: 2000, equity: 6000, cash: 1000,
     })
-    expect(roic(per, 0.21)).not.toBeNull()
-    expect(roicGap(per)).toBeNull()
+    expect(roic(per, 0.21, MIN_INVESTED)).not.toBeNull()
+    expect(roicGap(per, MIN_INVESTED)).toBeNull()
   })
 })
 

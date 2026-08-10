@@ -24,10 +24,26 @@ export type UncertaintyDriver = {
 
 export type UncertaintyResult = {
   level: UncertaintyLevel
-  /** MEASURED 드라이버들의 risk 평균 (0~1) */
+  /** MEASURED 드라이버들의 risk 평균에 커버리지 가중을 적용한 값 (0~1) */
   score: number
   drivers: UncertaintyDriver[]
 }
+
+/**
+ * 커버리지 분모 — "그 회사에 대해 측정 가능했어야 할 드라이버".
+ *
+ * business_concentration은 빠진다: 10-K 서술 텍스트 파싱이 미구현이라 모든 회사에서
+ * 동일하게 UNAVAILABLE이다. 우리가 아직 만들지 않은 신호를 회사의 불확실성으로 청구하면
+ * 안 된다(competitive_advantage가 taxonomy 한계로 빠진 신호를 분모에서 빼는 것과 같은
+ * 원칙). 나머지 넷은 전부 회사 사유다 — 이력이 짧다, 부채·영업이익이 없다는 것은 그
+ * 회사에 대해 우리가 확신할 근거가 실제로 없다는 뜻이다.
+ */
+const APPLICABLE_DRIVERS: UncertaintyDriverKey[] = [
+  'revenue_predictability',
+  'operating_leverage',
+  'financial_leverage',
+  'data_completeness',
+]
 
 /** 내재가치 산출에 실제로 쓰이는 핵심 필드들 — data_completeness 드라이버의 분모다. */
 const CORE_FIELDS: (keyof FinancialPeriod)[] = [
@@ -163,12 +179,16 @@ export function computeUncertainty(snapshot: CompanySnapshot, cfg: AppConfig): U
   const measured = drivers.filter(
     (d): d is UncertaintyDriver & { risk: number } => d.status === 'MEASURED' && d.risk !== null,
   )
-  // data_completeness는 항상 MEASURED이므로 실무에서는 도달하지 않지만, 순수 함수로서
-  // "측정 가능한 것이 하나도 없다"는 입력에도 안전해야 한다 — 그 경우 확신할 근거가
-  // 전혀 없다는 뜻이므로 최댓값(불확실성 최고)으로 처리한다. 조작된 중립값이 아니라
-  // "판단 불가 = 최고 위험"이라는 명시적 규칙이다.
-  const score =
+  // 측정된 것들의 평균만 쓰면 증거가 적을수록 불확실성이 **낮게** 나온다 — 이력이 0개인
+  // 회사가 제품에서 가장 확신 높은 라벨(LOW)을 받는 역전이다. 그래서 측정하지 못한 회사
+  // 사유 드라이버는 최대 위험(1.0)으로 채운다. "측정 가능한 것이 하나도 없다"는 입력에
+  // 대해 이 엔진이 이미 명시해 둔 규칙("판단 불가 = 최고 위험")을 부분 결측까지 연속적으로
+  // 확장한 것이며, 커버리지가 1이면 예전과 정확히 같은 값이 나온다.
+  const mean =
     measured.length > 0 ? measured.reduce((s, d) => s + d.risk, 0) / measured.length : 1
+  const coverage = measured.length / APPLICABLE_DRIVERS.length
+  const confidence = interpolate(u.coverage_curve, coverage)
+  const score = mean * confidence + 1 * (1 - confidence)
 
   const t = u.level_thresholds
   let level: UncertaintyLevel

@@ -115,6 +115,32 @@ describe('resolveCumulative — 신고 분기를 덮어쓸 수 있는 필드는 
     expect(q1 + q2).toBeCloseTo(-8.46 * M, -3) // 반기 누적 -11.91M을 따르지 않는다
   })
 
+  // 위 두 테스트는 규칙이 아니라 이 픽스처의 산술을 관측한다: 가드를 열어 모든 필드가
+  // 신고 분기를 덮어쓸 수 있게 해도, 이 숫자들에서는 매출용 tie-break가 우연히 같은 해를
+  // 고른다(테스트 리뷰 F3). 아래는 매출 픽스처를 그대로 옮겨와 두 규칙이 실제로 갈리는
+  // 지점을 만든다 — 같은 입력에서 매출은 누적을 따르고 매출총이익·영업이익은 따르지 않는다.
+  const discriminating = (tag: string) => [
+    f(tag, 1, '2025-03-31', 100 * M),
+    f(tag, 1, '2025-06-30', 3 * M),
+    f(tag, 2, '2025-06-30', 210 * M),
+  ]
+
+  it('같은 숫자라도 매출총이익은 신고 분기를 지키고 누적을 버린다', () => {
+    const gp = discriminating('GrossProfit')
+    // 가드가 열리면 "1분기가 오염됐다"는 해(q1 = 207M)가 선택되어 두 값이 모두 달라진다.
+    expect(quarterOf(gp, '2025-03-31', 'grossProfit')).toEqual({ value: 100 * M, derived: false })
+    expect(quarterOf(gp, '2025-06-30', 'grossProfit')).toEqual({ value: 3 * M, derived: false })
+    const sum = quarterOf(gp, '2025-03-31', 'grossProfit')!.value!
+      + quarterOf(gp, '2025-06-30', 'grossProfit')!.value!
+    expect(sum).toBe(103 * M) // 누적 210M을 따르지 않는다
+  })
+
+  it('영업이익도 마찬가지다 (Alphabet 사건이 실제로 다룬 필드)', () => {
+    const oi = discriminating('OperatingIncomeLoss')
+    expect(quarterOf(oi, '2025-03-31', 'operatingIncome')).toEqual({ value: 100 * M, derived: false })
+    expect(quarterOf(oi, '2025-06-30', 'operatingIncome')).toEqual({ value: 3 * M, derived: false })
+  })
+
   it('매출은 반대로 누적 쪽을 채택해 두 분기 합이 반기 누적과 같아진다', () => {
     // 어느 분기가 오염됐는지는 두 rung만으로 가릴 수 없지만, 합계(=TTM에 들어가는
     // 값)는 누적 사실을 따른다.
@@ -130,16 +156,47 @@ describe('resolveCumulative — 신고 분기를 덮어쓸 수 있는 필드는 
 })
 
 describe('resolveCumulative — 반올림 잡음은 충돌이 아니다 (NVIDIA 실사례)', () => {
+  // 실 DB: NVIDIA의 "충돌" 28건은 대부분 1,000,000 단위 반올림 차이였다.
+  const facts = [
+    f('GrossProfit', 1, '2025-04-27', 22_574 * M),
+    f('GrossProfit', 1, '2025-07-27', 20_406 * M),
+    f('GrossProfit', 2, '2025-07-27', 42_979 * M), // 합계는 42,980M
+  ]
+
   it('백만 단위 반올림 차이(0.08%)는 그대로 통과한다', () => {
-    // 실 DB: NVIDIA의 "충돌" 28건은 대부분 1,000,000 단위 반올림 차이였다.
-    const facts = [
-      f('GrossProfit', 1, '2025-04-27', 22_574 * M),
-      f('GrossProfit', 1, '2025-07-27', 20_406 * M),
-      f('GrossProfit', 2, '2025-07-27', 42_979 * M), // 합계는 42,980M
-    ]
     expect(quarterOf(facts, '2025-07-27', 'grossProfit')).toEqual({
       value: 20_406 * M, derived: false,
     })
+  })
+
+  it('반올림 잡음은 오염으로 기록되지 않는다 — 값만 보면 두 경로를 구분할 수 없다', () => {
+    // 허용오차가 잡음을 흡수하지 못하면 반기 누적이 모순으로 판정돼 버려진다. 그때도
+    // grossProfit은 신고 분기를 덮어쓸 수 없으므로 **같은 값·같은 derived**가 남는다 —
+    // 두 경로가 갈리는 유일한 관측점이 rejected다(테스트 리뷰 F4).
+    expect(resolveCumulative(indexFacts(facts)).rejected.size).toBe(0)
+  })
+})
+
+describe('resolveCumulative — 분기 인접 판정 창', () => {
+  it('보고 간격이 분기 창을 벗어나면 연속한 분기로 묶지 않는다', () => {
+    // 45일 · 137일 간격 — 개별 간격은 분기(60~120일)가 아니지만 양끝 합계(182일)는
+    // 우연히 2분기 길이(182.6일)와 맞아떨어져 구간 길이 검증만으로는 걸러지지 않는다.
+    // 인접 창 자체가 없으면 span=3 누적이 그대로 채택돼 없는 분기가 유도된다.
+    const facts = [
+      f('Revenues', 1, '2025-01-15', 10 * M),
+      f('Revenues', 1, '2025-03-01', 20 * M),
+      f('Revenues', 3, '2025-07-16', 100 * M),
+    ]
+    expect(quarterOf(facts, '2025-07-16', 'revenue')).toBeUndefined()
+  })
+
+  it('간격이 정상 분기면 같은 모양의 누적을 정상적으로 쓴다 (음성 대조군)', () => {
+    const facts = [
+      f('Revenues', 1, '2025-01-15', 10 * M),
+      f('Revenues', 1, '2025-04-16', 20 * M),
+      f('Revenues', 3, '2025-07-16', 100 * M),
+    ]
+    expect(quarterOf(facts, '2025-07-16', 'revenue')).toEqual({ value: 70 * M, derived: true })
   })
 })
 

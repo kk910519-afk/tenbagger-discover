@@ -13,8 +13,9 @@ export type MoatSignal = 'WIDE' | 'NARROW' | 'NONE' | 'INSUFFICIENT_DATA'
  *     있었다"는 가능성을 배제할 수 없다. 이것도 "모른다".
  *   - NOT_APPLICABLE: 결측 기간을 전부 낙관적으로 되돌려도 여전히 최소 요건에 못 미치고
  *     (그러니 결측 자체는 결론을 바꿀 수 없었다), 실패한 기간 중 하나 이상이 투하자본
- *     (부채+자본−현금) 0 이하 때문이다. 이건 결측이 아니다 — 보유 현금이 투입 자본보다
- *     많은 회사(초기 성장·현금부자 기업)에는 ROIC라는 지표 자체가 정의되지 않는다는,
+ *     (부채+자본−현금)이 0 이하이거나 총액 대비 무시할 만큼 작기 때문이다. 이건 결측이
+ *     아니다 — 보유 현금이 투입 자본보다 많은 회사(초기 성장·현금부자 기업)나 자사주
+ *     매입으로 자본이 음수가 된 회사에는 ROIC라는 지표 자체가 정의되지 않는다는,
  *     데이터를 더 모아도 바뀌지 않는 완결된 사실이다.
  */
 export type MoatInsufficientReason = 'TOO_FEW_PERIODS' | 'MISSING_FINANCIALS' | 'NOT_APPLICABLE'
@@ -44,14 +45,16 @@ export function computeMoatSignal(snapshot: CompanySnapshot, cfg: AppConfig): Mo
   const wacc = cfg.scoring.wacc_assumption
   const periods: FinancialPeriod[] = snapshot.annual.slice(0, m.lookback_periods)
 
+  const minInvested = cfg.scoring.min_invested_capital_ratio
+
   const spreads: number[] = []
   const gaps: RoicGap[] = []
   for (const p of periods) {
-    const r = roic(p, cfg.scoring.tax_rate)
+    const r = roic(p, cfg.scoring.tax_rate, minInvested)
     if (r !== null) {
       spreads.push(r - wacc)
     } else {
-      const gap = roicGap(p)
+      const gap = roicGap(p, minInvested)
       if (gap !== null) gaps.push(gap)
     }
   }
@@ -83,11 +86,15 @@ export function computeMoatSignal(snapshot: CompanySnapshot, cfg: AppConfig): Mo
     //     없었던 것이므로 무죄다. 이때 투하자본 0 이하 기간이 하나라도 있으면 그게 진짜
     //     병목이었다는 뜻이므로 NOT_APPLICABLE로 확정한다.
     const missingCount = gaps.filter((g) => g === 'MISSING_FIELDS').length
-    const nonPositiveCount = gaps.filter((g) => g === 'NON_POSITIVE_INVESTED_CAPITAL').length
+    // 투하자본이 0 이하인 기간과 총액 대비 무시할 만큼 작은 기간은 같은 성격이다 —
+    // 둘 다 결측이 아니라 "이 회사·이 해에는 ROIC가 정의되지 않는다"는 완결된 사실이다.
+    const notApplicableCount = gaps.filter(
+      (g) => g === 'NON_POSITIVE_INVESTED_CAPITAL' || g === 'IMMATERIAL_INVESTED_CAPITAL',
+    ).length
     const missingCouldHaveClearedThreshold =
       spreads.length + missingCount >= m.min_periods_required
 
-    if (nonPositiveCount === 0 || missingCouldHaveClearedThreshold) {
+    if (notApplicableCount === 0 || missingCouldHaveClearedThreshold) {
       return {
         signal: 'INSUFFICIENT_DATA',
         periodsEvaluated: spreads.length,
@@ -106,8 +113,9 @@ export function computeMoatSignal(snapshot: CompanySnapshot, cfg: AppConfig): Mo
       periodsClearing: 0,
       insufficientReason: 'NOT_APPLICABLE',
       evidence: [
-        `보유 현금이 부채와 자본을 합친 금액보다 많아 ROIC를 정의할 수 없는 연간 기간이 있음 — ` +
-          `데이터 부족이 아니라 이 지표가 적용되지 않는 경우 (유효 기간 ${spreads.length}개, 최소 ${m.min_periods_required}개 필요)`,
+        `투하자본(부채+자본−현금)이 0 이하이거나 그 셋을 합친 규모에 비해 무시할 만큼 작아 ` +
+          `ROIC를 정의할 수 없는 연간 기간이 있음 — 데이터 부족이 아니라 이 지표가 적용되지 ` +
+          `않는 경우 (유효 기간 ${spreads.length}개, 최소 ${m.min_periods_required}개 필요)`,
       ],
     }
   }

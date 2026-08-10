@@ -13,6 +13,7 @@ export type FairValueReason =
   | 'NOT_CASH_GENERATIVE'
   | 'NO_SHARE_COUNT'
   | 'NO_BALANCE_SHEET_DATA'
+  | 'GROWTH_NOT_PROJECTABLE'
   | 'INVALID_ASSUMPTIONS'
 
 /** UI가 "이 숫자가 어떻게 나왔는지"를 공개할 수 있도록, 계산에 실제로 쓰인 가정을 모두 담는다. */
@@ -56,13 +57,16 @@ function insufficient(reason: FairValueReason, detail: string): FairValueResult 
  * 리터럴은 없다.
  *
  * 게이트가 이 함수의 핵심이다: 사전매출 단계이거나 현금을 태우기만 하는 기업에 마진을
- * 투영하는 것은 밸류에이션이 아니라 저작(authorship)이다. 다섯 가지를 최소 요건으로 둔다.
+ * 투영하는 것은 밸류에이션이 아니라 저작(authorship)이다. 여섯 가지를 최소 요건으로 둔다.
  *   1) 최근 TTM 매출이 양수 — 매출이 없으면 애초에 밸류에이션 대상이 아니다
  *   2) 성장률을 추정할 매출 이력(TTM YoY 또는 3Y CAGR 중 하나) — 없으면 초기 성장률 자체가 조작
  *   3) 매출을 현금으로 전환한다는 증거(FCF>0 또는 영업이익>0) — 적자 소각 기업을 배제
  *   4) 희석주식수 또는 발행주식수 — 주당 가치로 나눌 분모가 없으면 숫자를 낼 수 없다
  *   5) 현금과 총부채가 모두 존재 — "순현금 반영"이 공식의 일부이므로, 없는 값을 0으로
  *      대신 채우지 않고 통째로 INSUFFICIENT_DATA 처리한다
+ *   6) 초기 성장률이 valuation.max_projectable_growth 이하 — 추세 성장률 하나가 5년간
+ *      복리로 곱해지므로, 그 상한을 넘는 값은 상한으로 깎지 않고(깎는 것은 우리가 성장률을
+ *      지어내는 일이다) 숫자를 내지 않는다. 근거와 수치는 config.yaml의 주석 참고.
  */
 export function computeFairValue(snapshot: CompanySnapshot, cfg: AppConfig): FairValueResult {
   const v = cfg.valuation
@@ -146,6 +150,19 @@ export function computeFairValue(snapshot: CompanySnapshot, cfg: AppConfig): Fai
   } else {
     initialGrowthRate = cagr3y!
     initialGrowthSource = 'cagr_3y_only'
+  }
+
+  // 페이드 곡선은 초기 성장률을 터미널 성장률로 수렴시킬 뿐 상한을 두지 않는다 — 그래서
+  // 한 번의 극단적 추세치가 5년 복리로 증폭된다(CRMD: +385% → 매출 63배 → 주당 $545.63,
+  // 시총의 73배). 상한을 넘으면 그 값을 상한으로 대체하지 않고 판단을 포기한다: 대체하는
+  // 순간 화면의 숫자는 회사에 대한 측정이 아니라 우리가 고른 가정이 된다.
+  if (initialGrowthRate > v.max_projectable_growth) {
+    return insufficient(
+      'GROWTH_NOT_PROJECTABLE',
+      `추세 성장률 ${(initialGrowthRate * 100).toFixed(1)}%가 투영 상한 ` +
+        `${(v.max_projectable_growth * 100).toFixed(1)}%를 초과 — 이 비율을 ${v.projection_years}년 ` +
+        '복리로 늘리면 측정이 아니라 가정이 되므로 내재가치를 산출하지 않음',
+    )
   }
 
   // 초기 FCF마진: 실제 FCF마진이 양수면 그것을 쓴다. FCF가 없거나 음수인데 영업이익이

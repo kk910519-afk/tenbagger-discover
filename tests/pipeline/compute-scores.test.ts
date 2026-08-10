@@ -365,18 +365,47 @@ describe('computeScores — valuations', () => {
 })
 
 describe('valuationConfigHash', () => {
-  it('valuation 섹션과 무관한 설정이 달라도 해시는 같다', () => {
-    const a = structuredClone(cfg)
-    const b = structuredClone(cfg)
-    b.scoring.wacc_assumption = a.scoring.wacc_assumption + 0.01
-    expect(valuationConfigHash(b)).toBe(valuationConfigHash(a))
-  })
+  // 해시가 덮어야 할 범위는 "이 엔진이 실제로 읽는 설정"이다. valuation 섹션만 해시하면
+  // scoring 아래에 있는 할인율·세율 등이 바뀌어도 engine_version이 그대로여서, 모든
+  // fair_value_per_share가 움직인 것을 "회사가 바뀌었다"로 읽게 된다 (리뷰 Finding 7 /
+  // 테스트 리뷰 F5 — 이전 테스트는 그 결함을 불변식으로 못박고 있었다).
+  const READS: { name: string; mutate: (c: typeof cfg) => void }[] = [
+    { name: 'scoring.wacc_assumption (DCF 할인율 · Moat 자본비용)',
+      mutate: (c) => { c.scoring.wacc_assumption += 0.01 } },
+    { name: 'scoring.tax_rate (ROIC/NOPAT 세율)',
+      mutate: (c) => { c.scoring.tax_rate += 0.01 } },
+    { name: 'scoring.min_invested_capital_ratio (ROIC 분모 유효성 하한)',
+      mutate: (c) => { c.scoring.min_invested_capital_ratio += 0.01 } },
+    { name: 'scoring.factors.revenue_growth.blend (모든 예측의 초기 성장률)',
+      mutate: (c) => { c.scoring.factors.revenue_growth.blend.ttm_yoy += 0.1 } },
+    { name: 'scoring.factors.balance_sheet.leverage_curve (financial_leverage 드라이버)',
+      mutate: (c) => { c.scoring.factors.balance_sheet.leverage_curve[0]![1] += 0.1 } },
+    { name: 'valuation.mature_fcf_margin',
+      mutate: (c) => { c.valuation.mature_fcf_margin += 0.01 } },
+    { name: 'valuation.max_projectable_growth',
+      mutate: (c) => { c.valuation.max_projectable_growth += 0.05 } },
+    { name: 'valuation.uncertainty.coverage_curve',
+      mutate: (c) => { c.valuation.uncertainty.coverage_curve[0]![1] += 0.1 } },
+  ]
 
-  it('valuation 섹션 값이 다르면 해시도 다르다', () => {
-    const a = structuredClone(cfg)
+  for (const { name, mutate } of READS) {
+    it(`${name}가 바뀌면 해시도 바뀐다`, () => {
+      const b = structuredClone(cfg)
+      mutate(b)
+      expect(valuationConfigHash(b)).not.toBe(valuationConfigHash(cfg))
+    })
+  }
+
+  it('valuation 엔진이 읽지 않는 설정이 달라도 해시는 같다', () => {
     const b = structuredClone(cfg)
-    b.valuation.mature_fcf_margin = a.valuation.mature_fcf_margin + 0.01
-    expect(valuationConfigHash(b)).not.toBe(valuationConfigHash(a))
+    b.ingest.bulk_quarters += 1
+    b.staleness.price_days += 1
+    b.universe.min_market_cap += 1
+    // scoring 안에 있어도 이 엔진이 읽지 않는 값은 포함되면 안 된다 — 두 축의 버전
+    // 이력이 서로 섞이지 않아야 한다.
+    b.scoring.factors.gross_margin.level_curve[0]![1] += 0.1
+    b.scoring.factors.market_cap_opportunity.gate.warning_multiplier += 0.1
+    expect(valuationConfigHash(b)).toBe(valuationConfigHash(cfg))
   })
 })
 
@@ -405,5 +434,14 @@ describe('configHash', () => {
     const b = structuredClone(cfg)
     b.classification.leader_ratio_of_max = a.classification.leader_ratio_of_max + 0.01
     expect(configHash(b)).not.toBe(configHash(a))
+  })
+
+  // quality_gate는 채점과 무관해 보이지만 실제로는 읽힌다: market_cap_opportunity의
+  // 게이트 배수가 evaluateQuality의 WARNING 등급 Red Flag를 참조하므로, dilution_warning
+  // 하나가 그 팩터를 절반으로 만든다 (리뷰 Finding 7 — 해시는 엔진이 읽는 것을 덮어야 한다).
+  it('quality_gate 임계값이 다르면 해시도 다르다 (게이트 배수를 통해 점수에 들어간다)', () => {
+    const b = structuredClone(cfg)
+    b.quality_gate.dilution_warning += 0.01
+    expect(configHash(b)).not.toBe(configHash(cfg))
   })
 })

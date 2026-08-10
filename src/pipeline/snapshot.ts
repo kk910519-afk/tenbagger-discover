@@ -109,7 +109,7 @@ export function buildSnapshots(deps: SnapshotDeps): CompanySnapshot[] {
       push('gross_margin', grossMargin(s.ttm[0]))
       push('fcf_margin', fcfMargin(s.ttm[0]))
       push('market_cap', s.marketCap)
-      push('roic', roic(s.ttm[0], cfg.scoring.tax_rate))
+      push('roic', roic(s.ttm[0], cfg.scoring.tax_rate, cfg.scoring.min_invested_capital_ratio))
     }
     for (const key of DISTRIBUTION_KEYS) values[key]!.sort((a, b) => a - b)
 

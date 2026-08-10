@@ -64,32 +64,63 @@ export function grossMarginTrendBps(
   return slope === null ? null : slope * QUARTERS_PER_YEAR * 10_000
 }
 
-export function roic(p: FinancialPeriod | undefined, taxRate: number): number | null {
+/**
+ * 투하자본이 "그 자체를 이루는 총액"에서 차지하는 비중. 0 근처면 투하자본은 큰 수들이
+ * 상쇄되고 남은 잔차이며, 그것을 분모로 쓴 ROIC는 사업의 자본생산성이 아니라 자본구조의
+ * 산물이다 — 자사주 매입으로 자본이 음수가 된 기업(DBX)과 현금이 부채+자본을 넘는
+ * 기업(NTAP)이 같은 이유로 여기에 걸린다. 부호가 아니라 상쇄의 정도를 보므로 총액은
+ * 절댓값 합으로 잡는다.
+ */
+function investedCapitalRatio(totalDebt: number, equity: number, cash: number): number | null {
+  const gross = Math.abs(totalDebt) + Math.abs(equity) + Math.abs(cash)
+  if (gross <= 0) return null
+  return (totalDebt + equity - cash) / gross
+}
+
+export function roic(
+  p: FinancialPeriod | undefined,
+  taxRate: number,
+  minInvestedCapitalRatio: number,
+): number | null {
   if (!p || p.operatingIncome === null) return null
   if (p.totalDebt === null || p.equity === null || p.cash === null) return null
   const invested = p.totalDebt + p.equity - p.cash
   if (invested <= 0) return null
+  const ratio = investedCapitalRatio(p.totalDebt, p.equity, p.cash)
+  if (ratio === null || ratio < minInvestedCapitalRatio) return null
   return (p.operatingIncome * (1 - taxRate)) / invested
 }
 
 /**
- * roic()가 null인 이유를 둘로 구분한다: 재무 항목 자체가 없는 것(MISSING_FIELDS, 진짜
+ * roic()가 null인 이유를 셋으로 구분한다: 재무 항목 자체가 없는 것(MISSING_FIELDS, 진짜
  * "모른다")과, 항목은 다 있는데 투하자본(totalDebt + equity − cash)이 0 이하로 나오는
  * 것(NON_POSITIVE_INVESTED_CAPITAL — 현금이 부채·자본 합계보다 많은 초기 성장 단계
- * 기업에 흔하다. 이건 결측이 아니라 ROIC라는 지표 자체가 정의되지 않는 경우다).
+ * 기업에 흔하다. 이건 결측이 아니라 ROIC라는 지표 자체가 정의되지 않는 경우다), 그리고
+ * 투하자본이 양수이긴 하지만 총액 대비 무시할 만큼 작아 분모로 쓸 수 없는 것
+ * (IMMATERIAL_INVESTED_CAPITAL). 뒤의 둘은 "결측"이 아니라 "이 지표가 적용되지 않는다"는
+ * 같은 성격이므로 소비자(moat-signal)는 둘을 함께 다룬다.
  *
  * roic() 본체는 건드리지 않는다 — Tenbagger 채점 엔진이 그 함수를 그대로 공유하므로,
  * 이 함수는 같은 조건을 별도로 재현해 분류만 얹을 뿐 roic()의 반환값에는 관여하지 않는다.
  */
-export type RoicGap = 'MISSING_FIELDS' | 'NON_POSITIVE_INVESTED_CAPITAL'
+export type RoicGap =
+  | 'MISSING_FIELDS'
+  | 'NON_POSITIVE_INVESTED_CAPITAL'
+  | 'IMMATERIAL_INVESTED_CAPITAL'
 
-export function roicGap(p: FinancialPeriod | undefined): RoicGap | null {
+export function roicGap(
+  p: FinancialPeriod | undefined,
+  minInvestedCapitalRatio: number,
+): RoicGap | null {
   if (!p) return 'MISSING_FIELDS'
   if (p.operatingIncome === null || p.totalDebt === null || p.equity === null || p.cash === null) {
     return 'MISSING_FIELDS'
   }
   const invested = p.totalDebt + p.equity - p.cash
-  return invested <= 0 ? 'NON_POSITIVE_INVESTED_CAPITAL' : null
+  if (invested <= 0) return 'NON_POSITIVE_INVESTED_CAPITAL'
+  const ratio = investedCapitalRatio(p.totalDebt, p.equity, p.cash)
+  if (ratio === null || ratio < minInvestedCapitalRatio) return 'IMMATERIAL_INVESTED_CAPITAL'
+  return null
 }
 
 /** FCF가 음수인 기업만 의미가 있다. 분기 평균 소모액 기준 잔여 분기 수. */

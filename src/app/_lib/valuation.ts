@@ -10,7 +10,7 @@ import type {
 /**
  * fair_value_reason은 엔진 내부 코드 문자열이다(예: NOT_CASH_GENERATIVE) — 화면에 코드
  * 그대로 노출하지 않고 사람이 읽을 한국어 한 줄로 옮긴다. FairValueReason은 정확히 이
- * 6개뿐이다(src/engines/valuation/fair-value.ts) — Record<FairValueReason, string>으로
+ * 7개뿐이다(src/engines/valuation/fair-value.ts) — Record<FairValueReason, string>으로
  * 선언해 새 사유가 엔진에 추가되면 이 파일이 컴파일 타임에 깨지도록 한다(누락 방지).
  */
 export const FAIR_VALUE_REASON_LABELS: Record<FairValueReason, string> = {
@@ -19,6 +19,9 @@ export const FAIR_VALUE_REASON_LABELS: Record<FairValueReason, string> = {
   NOT_CASH_GENERATIVE: '잉여현금흐름과 영업이익이 모두 0 이하이거나 결측이라 매출을 현금으로 전환한다는 근거가 없습니다',
   NO_SHARE_COUNT: '희석주식수와 발행주식수 정보가 모두 없습니다',
   NO_BALANCE_SHEET_DATA: '현금 또는 총부채 데이터가 없습니다',
+  GROWTH_NOT_PROJECTABLE:
+    '최근 매출 성장률이 너무 높아 앞으로 몇 년간 이어진다고 가정할 수 없습니다 — ' +
+    '그 비율을 그대로 늘려 잡으면 내재가치가 측정이 아니라 가정이 되므로 숫자를 내지 않습니다',
   INVALID_ASSUMPTIONS: '할인율이 터미널 성장률보다 낮거나 같아 계산이 발산합니다',
 }
 
@@ -41,8 +44,8 @@ export const MOAT_INSUFFICIENT_REASON_LABELS: Record<MoatInsufficientReason, str
   MISSING_FINANCIALS:
     'ROIC 계산에 필요한 재무 항목(영업이익·부채·자본·현금)이 일부 연도에 보고되지 않아 판단할 수 없습니다',
   NOT_APPLICABLE:
-    '보유 현금이 부채와 자본을 합친 금액보다 많은 해가 있어 ROIC 자체를 정의할 수 없습니다 — 데이터가 없어서가 아니라, ' +
-    '현금을 많이 쌓아둔 초기 성장 단계 기업에는 이 지표가 적용되지 않기 때문입니다',
+    '사업에 실제로 투입된 자본이 0 이하이거나 회사 규모에 비해 무시할 만큼 작은 해가 있어 ROIC 자체를 정의할 수 없습니다 — ' +
+    '데이터가 없어서가 아니라, 현금을 많이 쌓아둔 초기 성장 단계 기업이나 자사주를 크게 매입한 기업에는 이 지표가 적용되지 않기 때문입니다',
 }
 
 export function moatInsufficientReasonLabel(reason: MoatInsufficientReason | null): string {

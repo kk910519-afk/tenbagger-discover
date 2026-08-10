@@ -15,8 +15,8 @@ const SIGNAL_COUNT = 4
  * 두 갈래로 나누기 때문이다.
  *
  *  - **회사 사유**(분모에 포함, 감쇠 대상)
- *    · ROIC 스프레드: 영업이익·부채·자본·현금이 없거나 투하자본 ≤ 0 — 그 회사의 재무
- *      데이터/재무 상태 문제다.
+ *    · ROIC 스프레드: 영업이익·부채·자본·현금이 없거나, 투하자본이 0 이하이거나 총액 대비
+ *      무시할 만큼 작아 분모로 쓸 수 없는 경우 — 그 회사의 재무 데이터/재무 상태 문제다.
  *    · 마진 안정성: 분기 매출총이익 8개 분기가 없다 — 상장·보고 이력이 짧다는 그 회사의
  *      사실이다. 이력이 짧으면 안정성을 주장할 근거가 실제로 없다.
  *    · R&D 집약도: R&D를 공시하지 않거나 매출이 0 이하 — 역시 그 회사의 사실이다.
@@ -34,7 +34,7 @@ export const competitiveAdvantageFactor: FactorFn = ({ snapshot, cfg }) => {
   const signals: { score: number; label: string }[] = []
 
   // 1. ROIC 스프레드 — 자본비용을 넘는 초과수익
-  const r = roic(ttm, cfg.scoring.tax_rate)
+  const r = roic(ttm, cfg.scoring.tax_rate, cfg.scoring.min_invested_capital_ratio)
   if (r !== null) {
     const spread = r - cfg.scoring.wacc_assumption
     signals.push({
