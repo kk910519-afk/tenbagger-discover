@@ -77,6 +77,16 @@ export type RedFlag = {
 
 export type Category = 'LEADER' | 'CHALLENGER' | 'EMERGING'
 
+/**
+ * 시가총액에 쓰인 발행주식수의 출처. 표지 발행주식수(EntityCommonStockSharesOutstanding,
+ * 신고서 표지의 특정 시점 값)를 최우선으로 쓰고('reported'), 그게 없는 회사는 희석
+ * 가중평균주식수(WeightedAverageNumberOfDilutedSharesOutstanding, 기간 평균값)로
+ * 대체한다('diluted_fallback'). 둘 다 회사가 직접 보고한 숫자이므로 조작은 아니지만,
+ * 시점 값과 기간 평균값은 서로 다른 측정이라 그 차이로 나온 시가총액은 근사치다 —
+ * 어느 쪽을 썼는지 나중에 역추정하지 않도록 계산 시점에 함께 기록해 보존한다.
+ */
+export type SharesBasis = 'reported' | 'diluted_fallback'
+
 export type CompanySnapshot = {
   cik: number
   ticker: string
@@ -89,6 +99,8 @@ export type CompanySnapshot = {
   price: number | null
   priceDate: string | null
   sharesOutstanding: number | null
+  /** marketCap이 null이면 이것도 null이다 — 어느 주식수를 썼는지는 시가총액이 있을 때만 의미가 있다. */
+  sharesBasis: SharesBasis | null
   /** TTM 계열, 최근순. [0]=현재 TTM, [4]=1년 전 TTM */
   ttm: FinancialPeriod[]
   /** 연간, 최근순 */

@@ -67,7 +67,19 @@ export default async function StockPage({
                 </span>
               ),
             },
-            { label: 'Market Cap', value: <Value>{formatUsd(d.marketCap)}</Value> },
+            {
+              label: 'Market Cap',
+              value: (
+                <span className="block">
+                  <Value>{formatUsd(d.marketCap)}</Value>
+                  {d.marketCapBasis === 'diluted_fallback' && (
+                    <span className="mt-1 block text-[10px] font-normal normal-case leading-snug text-[var(--color-text-faint)]">
+                      근사치 — 표지 발행주식수를 보고하지 않아 희석평균주식수로 계산했습니다.
+                    </span>
+                  )}
+                </span>
+              ),
+            },
             {
               label: 'Price',
               value: <Value>{d.price === null ? '—' : `$${d.price.toFixed(2)}`}</Value>,

@@ -30,7 +30,7 @@ function ctx(over: Partial<CompanySnapshot>, flags: RedFlag[] = []): FactorConte
         tamUsd: null, tamCagr: null, tamSource: null, tamAsOf: null,
       },
       classificationSource: 'sic', marketCap: 1e9, price: 10,
-      priceDate: '2026-08-08', sharesOutstanding: 1e8,
+      priceDate: '2026-08-08', sharesOutstanding: 1e8, sharesBasis: 'reported',
       ttm: [], annual: [], quarterly: [],
       industryStats: {
         candidateCount: 5, medianGrossMargin: 0.60,
@@ -103,6 +103,21 @@ describe('marketCapOpportunityFactor', () => {
   it('시가총액이 없으면 NO_DATA', () => {
     expect(marketCapOpportunityFactor(ctx({ marketCap: null, ttm: growingTtm() })).status)
       .toBe('NO_DATA')
+  })
+
+  it('희석평균주식수 폴백으로 계산된 시가총액이면 detail에 근사치임을 밝힌다', () => {
+    const r = marketCapOpportunityFactor(
+      ctx({ marketCap: 5e8, ttm: growingTtm(), sharesBasis: 'diluted_fallback' }),
+    )
+    expect(r.detail).toContain('근사치')
+    expect(r.detail).toContain('희석평균주식수')
+  })
+
+  it('표지 발행주식수 기반이면 근사치 문구가 없다', () => {
+    const r = marketCapOpportunityFactor(
+      ctx({ marketCap: 5e8, ttm: growingTtm(), sharesBasis: 'reported' }),
+    )
+    expect(r.detail).not.toContain('근사치')
   })
 })
 

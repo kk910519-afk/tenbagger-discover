@@ -52,8 +52,8 @@ beforeAll(() => {
              '{"ratio":0.18}')`,
   ).run()
   raw.prepare(
-    `INSERT INTO market_data (cik, date, price, shares_outstanding, market_cap)
-     VALUES (99, '2026-08-08', 412.5, 250000000, 103125000000)`,
+    `INSERT INTO market_data (cik, date, price, shares_outstanding, market_cap, shares_basis)
+     VALUES (99, '2026-08-08', 412.5, 250000000, 103125000000, 'reported')`,
   ).run()
   raw.prepare(
     `INSERT INTO financials (cik, period_end, period_type, revenue, gross_profit,
@@ -99,6 +99,7 @@ describe('getStockDetail', () => {
     expect(d.classificationSource).toBe('override')
     expect(d.category).toBe('CHALLENGER')
     expect(d.marketCap).toBe(103_125_000_000)
+    expect(d.marketCapBasis).toBe('reported')
     expect(d.price).toBe(412.5)
   })
 

@@ -25,6 +25,7 @@ function snap(over: Partial<CompanySnapshot>): CompanySnapshot {
     },
     classificationSource: 'sic',
     marketCap: 5_000_000_000, price: 10, priceDate: '2026-08-08', sharesOutstanding: 1000,
+    sharesBasis: 'reported',
     ttm: [fp({}), fp({ periodEnd: '2024-12-31' }), fp({ periodEnd: '2024-09-30' }),
           fp({ periodEnd: '2024-06-30' }), fp({ periodEnd: '2024-03-31' })],
     annual: [], quarterly: [],

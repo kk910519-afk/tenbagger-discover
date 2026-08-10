@@ -41,9 +41,16 @@ export const marketCapOpportunityFactor: FactorFn = ({ snapshot, cfg, flags }) =
   }
 
   const billions = (marketCap / 1e9).toFixed(2)
+  // 표지 발행주식수가 없어 희석평균주식수로 대체 계산한 시가총액이면(§SharesBasis 정의
+  // 참고) 그 사실을 detail에 남긴다 — 화면에 노출되는 유일한 경로이므로 XBRL 태그명 없이
+  // 사용자가 이해할 수 있는 문장으로 적는다.
+  const basisNote =
+    snapshot.sharesBasis === 'diluted_fallback'
+      ? ' (근사치 — 표지 발행주식수 미보고, 희석평균주식수로 계산)'
+      : ''
   const detail = gateReason
-    ? `시가총액 $${billions}B → ${base}점, ${gateReason}`
-    : `시가총액 $${billions}B → ${base}점`
+    ? `시가총액 $${billions}B${basisNote} → ${base}점, ${gateReason}`
+    : `시가총액 $${billions}B${basisNote} → ${base}점`
 
   const result: FactorResult = {
     key: KEY, weight: f.weight, points: base * gate, raw: marketCap,

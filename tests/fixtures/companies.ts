@@ -55,6 +55,7 @@ function base(over: Partial<CompanySnapshot>): CompanySnapshot {
     themeSlug: 'ai-software-semi', industrySlug: 'semiconductors',
     industry: INDUSTRY, classificationSource: 'sic',
     marketCap: null, price: 10, priceDate: '2026-08-08', sharesOutstanding: 1e8,
+    sharesBasis: null,
     ttm: [], annual: [], quarterly: [], industryStats: STATS,
     asOf: '2026-08-09', ...over,
   }

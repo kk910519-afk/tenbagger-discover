@@ -28,7 +28,7 @@ function ctx(over: Partial<CompanySnapshot>): FactorContext {
         tamUsd: null, tamCagr: null, tamSource: null, tamAsOf: null,
       },
       classificationSource: 'sic', marketCap: 1e9, price: 10,
-      priceDate: '2026-08-08', sharesOutstanding: 1e8,
+      priceDate: '2026-08-08', sharesOutstanding: 1e8, sharesBasis: 'reported',
       ttm: [], annual: [], quarterly: [],
       industryStats: {
         candidateCount: 5, medianGrossMargin: 0.6,

@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3'
-import type { Category, FactorStatus, FinancialPeriod } from '@/domain/types'
+import type { Category, FactorStatus, FinancialPeriod, SharesBasis } from '@/domain/types'
 import { grossMargin, operatingMargin, fcfMargin } from '@/domain/metrics'
 import { loadConfig } from '@/config'
 import type {
@@ -80,6 +80,8 @@ export type StockDetail = {
   classificationSource: ClassificationSource
   category: Category | null
   marketCap: number | null
+  /** marketCap이 null이면 이것도 null이다 — 어느 발행주식수를 썼는지는 시가총액이 있을 때만 의미가 있다. */
+  marketCapBasis: SharesBasis | null
   price: number | null
   priceDate: string | null
   tenbagger: number | null
@@ -198,10 +200,12 @@ export function getStockDetail(
 
   const market = raw
     .prepare(
-      `SELECT date, price, market_cap AS marketCap FROM market_data
+      `SELECT date, price, market_cap AS marketCap, shares_basis AS sharesBasis FROM market_data
        WHERE cik = ? ORDER BY date DESC LIMIT 1`,
     )
-    .get(head.cik) as { date: string; price: number | null; marketCap: number | null } | undefined
+    .get(head.cik) as
+    | { date: string; price: number | null; marketCap: number | null; sharesBasis: SharesBasis | null }
+    | undefined
 
   const fin = raw
     .prepare(
@@ -295,6 +299,7 @@ export function getStockDetail(
     engineVersion: head.engineVersion,
     asOf: scoreAsOf ?? asOf,
     marketCap: market?.marketCap ?? null,
+    marketCapBasis: market?.sharesBasis ?? null,
     price: market?.price ?? null,
     priceDate: market?.date ?? null,
     growth: {

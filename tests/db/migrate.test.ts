@@ -120,6 +120,36 @@ describe('마이그레이션', () => {
   })
 })
 
+describe('마이그레이션 — market_data.shares_basis', () => {
+  it('CHECK 제약으로 reported/diluted_fallback 외의 값을 거부한다', () => {
+    raw.prepare(
+      `INSERT INTO companies (cik, ticker, name, is_active, first_seen, last_updated)
+       VALUES (777, 'CHK', 'Check Inc', 1, '2026-08-09', '2026-08-09')`,
+    ).run()
+    expect(() =>
+      raw
+        .prepare(
+          `INSERT INTO market_data (cik, date, shares_basis) VALUES (777, '2026-08-08', 'guess')`,
+        )
+        .run(),
+    ).toThrow(/CHECK/i)
+  })
+
+  it('reported/diluted_fallback/NULL은 허용한다', () => {
+    raw.prepare(
+      `INSERT INTO companies (cik, ticker, name, is_active, first_seen, last_updated)
+       VALUES (778, 'CHK2', 'Check2 Inc', 1, '2026-08-09', '2026-08-09')`,
+    ).run()
+    expect(() =>
+      raw
+        .prepare(
+          `INSERT INTO market_data (cik, date, shares_basis) VALUES (778, '2026-08-08', 'diluted_fallback')`,
+        )
+        .run(),
+    ).not.toThrow()
+  })
+})
+
 describe('마이그레이션 — state_of_incorporation 컬럼의 사후 추가(ALTER TABLE)', () => {
   /**
    * CREATE TABLE IF NOT EXISTS는 companies 테이블이 이미 존재하는(phase1 이전에
@@ -174,5 +204,54 @@ describe('마이그레이션 — state_of_incorporation 컬럼의 사후 추가(
     )
     expect(cols).toContain('state_of_incorporation')
     expect(cols).toContain('state_of_incorporation_description')
+  })
+})
+
+describe('마이그레이션 — market_data.shares_basis 컬럼의 사후 추가(ALTER TABLE)', () => {
+  /**
+   * 라이브 DB는 이미 market_data 테이블을 갖고 있으므로 CREATE TABLE IF NOT EXISTS로는
+   * shares_basis 컬럼이 채워지지 않는다 — state_of_incorporation과 같은 모양의 문제라
+   * 같은 검증(ALTER 적용 + 멱등 + 신규 DB는 이미 갖고 있음)을 반복한다.
+   */
+  function makeLegacyMarketDataDb(): Database.Database {
+    const dbPath = join(mkdtempSync(join(tmpdir(), 'tb-legacy-md-')), 'legacy.db')
+    const db = getRawDb(dbPath)
+    db.exec(`
+      CREATE TABLE market_data (
+        cik INTEGER NOT NULL,
+        date TEXT NOT NULL,
+        price REAL,
+        shares_outstanding REAL,
+        market_cap REAL,
+        volume REAL,
+        PRIMARY KEY (cik, date)
+      );
+    `)
+    return db
+  }
+
+  it('컬럼이 없는 기존 DB에 ALTER TABLE로 shares_basis를 추가한다', () => {
+    const legacy = makeLegacyMarketDataDb()
+    runMigrations(legacy)
+    const cols = (legacy.prepare('PRAGMA table_info(market_data)').all() as { name: string }[]).map(
+      (c) => c.name,
+    )
+    expect(cols).toContain('shares_basis')
+  })
+
+  it('ALTER TABLE은 멱등이다 — 두 번 실행해도 실패하지 않는다', () => {
+    const legacy = makeLegacyMarketDataDb()
+    expect(() => runMigrations(legacy)).not.toThrow()
+    expect(() => runMigrations(legacy)).not.toThrow()
+  })
+
+  it('신규 DB는 CREATE TABLE 시점부터 shares_basis를 이미 갖고 있다(ALTER가 필요 없다)', () => {
+    const dbPath = join(mkdtempSync(join(tmpdir(), 'tb-fresh-md-')), 'fresh.db')
+    const fresh = getRawDb(dbPath)
+    runMigrations(fresh)
+    const cols = (fresh.prepare('PRAGMA table_info(market_data)').all() as { name: string }[]).map(
+      (c) => c.name,
+    )
+    expect(cols).toContain('shares_basis')
   })
 })

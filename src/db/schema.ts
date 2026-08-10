@@ -51,6 +51,7 @@ export const marketData = sqliteTable(
     sharesOutstanding: real('shares_outstanding'),
     marketCap: real('market_cap'),
     volume: real('volume'),
+    sharesBasis: text('shares_basis'),
   },
   (t) => ({ pk: primaryKey({ columns: [t.cik, t.date] }) }),
 )

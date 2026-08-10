@@ -25,7 +25,8 @@ function co(
       tamUsd: null, tamCagr: null, tamSource: null, tamAsOf: null,
     },
     classificationSource: 'sic', marketCap, price: null, priceDate: null,
-    sharesOutstanding: null, ttm, annual: [], quarterly: [],
+    sharesOutstanding: null, sharesBasis: marketCap === null ? null : 'reported',
+    ttm, annual: [], quarterly: [],
     industryStats: {
       candidateCount: 0, medianGrossMargin: null,
       medianRevenueGrowth: null, distributions: {},

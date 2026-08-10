@@ -19,6 +19,7 @@ function seedCompany(
   db: Database.Database,
   cik: number, ticker: string, industry: string,
   revenue: number, grossProfit: number, marketCap: number | null,
+  sharesBasis: 'reported' | 'diluted_fallback' | null = 'reported',
 ) {
   db.prepare(
     `INSERT INTO companies (cik, ticker, name, sic, is_active, first_seen, last_updated)
@@ -37,9 +38,9 @@ function seedCompany(
   ends.forEach((e, i) => ins.run(cik, e, i === 0 ? revenue : revenue / 1.25, grossProfit))
   if (marketCap !== null) {
     db.prepare(
-      `INSERT INTO market_data (cik, date, price, shares_outstanding, market_cap)
-       VALUES (?, '2026-08-08', 10, ?, ?)`,
-    ).run(cik, marketCap / 10, marketCap)
+      `INSERT INTO market_data (cik, date, price, shares_outstanding, market_cap, shares_basis)
+       VALUES (?, '2026-08-08', 10, ?, ?, ?)`,
+    ).run(cik, marketCap / 10, marketCap, sharesBasis)
   }
 }
 
@@ -50,12 +51,13 @@ beforeAll(() => {
   seedCompany(raw, 2, 'BBB', 'semiconductors', 2000, 1000, 20_000_000_000)
   seedCompany(raw, 3, 'CCC', 'semiconductors', 500, 200, 400_000_000)
   seedCompany(raw, 4, 'DDD', 'cybersecurity', 800, 600, null) // 시가총액 없음
+  seedCompany(raw, 5, 'EEE', 'cloud-computing', 900, 500, 3_000_000_000, 'diluted_fallback')
   snaps = buildSnapshots({ raw, taxonomy, cfg, asOf: '2026-08-09' })
 })
 
 describe('buildSnapshots', () => {
   it('유니버스 기업마다 스냅샷을 만든다', () => {
-    expect(snaps.map((s) => s.ticker).sort()).toEqual(['AAA', 'BBB', 'CCC', 'DDD'])
+    expect(snaps.map((s) => s.ticker).sort()).toEqual(['AAA', 'BBB', 'CCC', 'DDD', 'EEE'])
   })
 
   it('산업 메타데이터를 붙인다', () => {
@@ -75,6 +77,15 @@ describe('buildSnapshots', () => {
   it('시가총액이 없어도 스냅샷을 만들고 null로 둔다', () => {
     const d = snaps.find((s) => s.ticker === 'DDD')!
     expect(d.marketCap).toBeNull()
+    expect(d.sharesBasis).toBeNull()
+  })
+
+  it('shares_basis를 스냅샷에 그대로 전파한다', () => {
+    const a = snaps.find((s) => s.ticker === 'AAA')!
+    expect(a.sharesBasis).toBe('reported')
+    const e = snaps.find((s) => s.ticker === 'EEE')!
+    expect(e.sharesBasis).toBe('diluted_fallback')
+    expect(e.marketCap).toBe(3_000_000_000)
   })
 
   it('TTM 계열을 최근순으로 붙인다', () => {

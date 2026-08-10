@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS market_data (
   shares_outstanding REAL,
   market_cap REAL,
   volume REAL,
+  shares_basis TEXT CHECK (shares_basis IN ('reported','diluted_fallback')),
   PRIMARY KEY (cik, date)
 );
 
@@ -217,5 +218,13 @@ export function runMigrations(raw: Database.Database): void {
     'companies',
     'state_of_incorporation_description',
     'state_of_incorporation_description TEXT',
+  )
+  // shares_basis도 같은 이유로 사후 추가된 컬럼이다 — 이미 market_data 테이블이 있는
+  // 기존(라이브) DB에는 CREATE TABLE IF NOT EXISTS가 아무 일도 하지 않으므로 별도로 채운다.
+  ensureColumn(
+    raw,
+    'market_data',
+    'shares_basis',
+    `shares_basis TEXT CHECK (shares_basis IN ('reported','diluted_fallback'))`,
   )
 }

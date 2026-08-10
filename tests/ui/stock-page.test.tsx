@@ -64,6 +64,21 @@ beforeAll(() => {
   ).run()
   // scores/score_factors/red_flags 행 없음 — pipeline:universe 직후를 재현한다
 
+  // 시가총액이 희석평균주식수 폴백으로 계산된 회사 — Overview의 Market Cap 타일에
+  // 근사치 안내 문구가 실제로 렌더링되는지 검증한다.
+  raw.prepare(
+    `INSERT INTO companies (cik, ticker, name, sic, exchange, is_active, first_seen, last_updated)
+     VALUES (503, 'FALLBACKCO', 'Fallback Co', '7372', 'Q', 1, '2026-08-09', '2026-08-09')`,
+  ).run()
+  raw.prepare(
+    `INSERT INTO company_industry (cik, industry_slug, theme_slug, is_primary, source)
+     VALUES (503, 'ind1', 'theme1', 1, 'sic')`,
+  ).run()
+  raw.prepare(
+    `INSERT INTO market_data (cik, date, price, shares_outstanding, market_cap, shares_basis)
+     VALUES (503, '2026-08-08', 20, 50000000, 1000000000, 'diluted_fallback')`,
+  ).run()
+
   raw.close()
 })
 
@@ -102,6 +117,21 @@ describe('StockPage — SIC 기본 분류 안내는 SIC 출처일 때만 뜬다'
     const jsx = await StockPage({ params: paramsFor('CLEANCO') })
     const { container } = render(jsx)
     expect(container.textContent).not.toContain('SIC 기본 분류')
+  })
+})
+
+describe('StockPage — 시가총액이 희석평균주식수 폴백이면 Overview에 근사치임을 밝힌다', () => {
+  it('폴백으로 계산된 회사는 Market Cap 타일에 근사치 안내 문구가 뜬다', async () => {
+    const jsx = await StockPage({ params: paramsFor('FALLBACKCO') })
+    const { container } = render(jsx)
+    expect(container.textContent).toContain('근사치')
+    expect(container.textContent).toContain('희석평균주식수')
+  })
+
+  it('시가총액이 없는 회사는 근사치 문구가 뜨지 않는다', async () => {
+    const jsx = await StockPage({ params: paramsFor('CLEANCO') })
+    const { container } = render(jsx)
+    expect(container.textContent).not.toContain('근사치')
   })
 })
 

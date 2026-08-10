@@ -94,9 +94,35 @@ describe('getStockDetail 스코어링 파이프라인 실행 전', () => {
 
     expect(d).not.toBeNull()
     expect(d!.marketCap).toBeNull()
+    expect(d!.marketCapBasis).toBeNull()
     expect(d!.price).toBeNull()
     expect(d!.priceDate).toBeNull()
     expect(d!.quality.grossMargin).toBeNull()
+  })
+
+  it('희석평균주식수 폴백으로 계산된 시가총액은 basis를 diluted_fallback으로 준다', () => {
+    const db = getRawDb(join(mkdtempSync(join(tmpdir(), 'tb-stock-edge4-')), 's.db'))
+    runMigrations(db)
+    seedBase(db)
+    db.prepare(
+      `INSERT INTO companies (cik, ticker, name, is_active, first_seen, last_updated)
+       VALUES (404, 'FALLBACK', 'Fallback Inc', 1, '2026-08-09', '2026-08-09')`,
+    ).run()
+    db.prepare(
+      `INSERT INTO company_industry (cik, industry_slug, theme_slug, is_primary, source)
+       VALUES (404, 'sensors', 'ai-software-semi', 1, 'sic')`,
+    ).run()
+    db.prepare(
+      `INSERT INTO market_data (cik, date, price, shares_outstanding, market_cap, shares_basis)
+       VALUES (404, '2026-08-08', 50, 40000000, 2000000000, 'diluted_fallback')`,
+    ).run()
+
+    const d = getStockDetail(db, 'FALLBACK', '2026-08-09')
+    db.close()
+
+    expect(d).not.toBeNull()
+    expect(d!.marketCap).toBe(2_000_000_000)
+    expect(d!.marketCapBasis).toBe('diluted_fallback')
   })
 
   it('없는 회사(company_industry 없음 포함)는 여전히 null', () => {

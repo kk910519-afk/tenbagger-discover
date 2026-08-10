@@ -78,6 +78,7 @@ export function buildSnapshots(deps: SnapshotDeps): CompanySnapshot[] {
       price: market?.price ?? null,
       priceDate: market?.date ?? null,
       sharesOutstanding: market?.sharesOutstanding ?? null,
+      sharesBasis: market?.sharesBasis ?? null,
       ttm: fin.ttm,
       annual: fin.annual,
       quarterly: fin.quarterly,
