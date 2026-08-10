@@ -133,6 +133,41 @@ export function selectStaleCiks(
   return rows.map((r) => r.cik)
 }
 
+// 왜 네 번째 그물이 필요한가(F6 잔여 구멍): 위 `selectStaleCiks`는 `MAX(filed_date)`를
+// **모든 소스**에서 계산한다. bulk는 매 분기 자동으로 최신 신고일을 채워 넣으므로, API
+// 사실이 아무리 낡거나 망가져도 이 조건은 절대 발동하지 않는다. `selectThinCoverageCiks`는
+// API 행만 세지만 **누적** 개수라 이미 800건이 쌓인 회사는 파서가 망가져도 그물을
+// 빠져나가고, `selectTagSetStaleCiks`는 TRACKED_TAGS가 바뀔 때만 발동한다. 즉 세 그물 중
+// **어느 것도 API 데이터 자체의 신선도를 보지 않는다** — 태그 집합을 바꾸지 않는 파서
+// 회귀가 들어오면 재조회가 영원히 일어나지 않는다. 이 프로젝트에서 "최신처럼 보이는 낡은
+// 데이터"가 네 번째로 반복된 형태다.
+//
+// 이 함수는 `source='api'` 행만으로 `MAX(filed_date)`를 계산해 같은 임계값을 적용한다.
+// API 행이 아예 없는 회사(LEFT JOIN NULL)도 대상이다 — 그건 정확히 파서가 응답을 통째로
+// 버린 코호트다. 실측(2026-08, 1,200개사): API 신고일이 120일 넘게 낡은 회사는 소수이며,
+// 오탐이 나도 API 호출 한 번을 더 쓸 뿐 값을 왜곡하지 않는다.
+export function selectApiStaleCiks(
+  raw: Database.Database,
+  asOf: string,
+  days: number,
+): number[] {
+  const cutoff = new Date(Date.parse(asOf) - days * 86_400_000)
+    .toISOString()
+    .slice(0, 10)
+  const rows = raw
+    .prepare(
+      `SELECT c.cik FROM companies c
+       JOIN company_industry ci ON ci.cik = c.cik
+       LEFT JOIN (SELECT cik, MAX(filed_date) AS latest FROM financial_facts
+                  WHERE source = 'api' GROUP BY cik) f
+         ON f.cik = c.cik
+       WHERE c.is_active = 1 AND (f.latest IS NULL OR f.latest < ?)
+       ORDER BY c.cik`,
+    )
+    .all(cutoff) as { cik: number }[]
+  return rows.map((r) => r.cik)
+}
+
 // 왜 filed_date 기준 staleness만으로는 부족한가(결함: 문자열 cik 재발 시나리오): 이
 // 함수가 잡아내는 대상은 selectStaleCiks가 "충분히 최신"이라고 판단해 절대 건드리지
 // 않는 회사다. companyfacts 파서가 응답을 통째로 버리는 버그(예: cik가 숫자가 아닌

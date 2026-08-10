@@ -133,6 +133,72 @@ export const DEBT_TAGS: ReadonlySet<string> = new Set<string>([
 ])
 
 /**
+ * **대차대조표에서 이 태그가 덮는 구역**. 낡은 구성요소가 "다시 태깅되지 않은 것"인지
+ * "사라진 것"인지를 가르는 데 쓴다(resolve.ts `carryForwardGroup`).
+ *
+ *  - `noncurrent` : 비유동 구역만 잰다.
+ *  - `current`    : 유동 구역만 잰다.
+ *  - `spanning`   : 유동+비유동을 한 숫자로 잰다(계열 총계·롤업).
+ *
+ * 핵심은 **한 태그는 자기가 덮는 구역에 대해서만 증언한다**는 점이다. 어떤 분기에
+ * `DebtCurrent`(유동 총계)만 신고됐다고 해서 비유동 차입금이 사라졌다는 뜻이 아니다 —
+ * 유동 구역을 잰 숫자는 비유동 구역에 대해 아무 말도 하지 않는다. 실측(NXPI, 2026-03-29):
+ * 10-Q는 `DebtCurrent` 750,000,000만 태깅하지만 같은 대차대조표의 장기차입금
+ * 10,972,000,000(직전 10-K)은 그대로 남아 있다 — 10-Q 신고서 원문에도 `Long-term debt`가
+ * 그대로 있다. 반대로 QCOM 2026-06-28은 앵커 일자에 `LongTermDebt`(spanning)가 있으므로
+ * 낡은 `LongTermDebtNoncurrent`는 이미 다시 측정된 값이라 버려야 한다.
+ */
+export type DebtRegion = 'noncurrent' | 'current' | 'spanning'
+
+/** 태그가 속한 상품 계열 식별자. 계열이 다르면 서로의 구역을 대체하지 않는다. */
+export type DebtFamilyId =
+  | 'general' | 'longterm' | 'loc' | 'notes' | 'loans' | 'convertible' | 'other'
+  | 'cash' | 'shortTermInvestments'
+
+export type DebtTagShape = { readonly family: DebtFamilyId; readonly region: DebtRegion }
+
+const SPECIFIC_FAMILY_IDS: readonly DebtFamilyId[] = ['loc', 'notes', 'loans', 'convertible', 'other']
+
+function buildShapes(): ReadonlyMap<string, DebtTagShape> {
+  const m = new Map<string, DebtTagShape>()
+  const put = (tags: readonly string[], family: DebtFamilyId, region: DebtRegion) => {
+    for (const t of tags) m.set(t, { family, region })
+  }
+  // 일반(general) 계열 — 계열을 가리지 않는 총계 개념. `LongTermDebt`도 여기 속한다:
+  // 위 주석대로 이것은 **장기차입금 전체의 롤업**이라 상품별 계열을 이미 품고 있을 수
+  // 있다. 실측(UTMD 2025-12-31): `LongTermDebt` 0을 신고한 분기에 직전 분기의
+  // `OtherLongTermDebtNoncurrent` 241,000(실제로는 운용리스부채)을 이월하면 없는 부채가
+  // 만들어진다 — 신고자가 "장기차입금 0"이라고 롤업으로 말한 이상 그 아래 상품별 잔액도
+  // 함께 재측정된 것이다.
+  put([DEBT_COMBINED_TOTAL_TAG], 'general', 'spanning')
+  put([DEBT_CURRENT_TOTAL_TAG], 'general', 'current')
+  put(SHORT_TERM_BORROWING_TAGS, 'general', 'current')
+  put(LONG_TERM_DEBT_FAMILY.total, 'general', 'spanning')
+  // 장기차입금 계열의 구성요소.
+  put(LONG_TERM_DEBT_FAMILY.noncurrent, 'longterm', 'noncurrent')
+  put(LONG_TERM_DEBT_FAMILY.current, 'longterm', 'current')
+  // 상품별 계열.
+  SPECIFIC_DEBT_FAMILIES.forEach((f, i) => {
+    const id = SPECIFIC_FAMILY_IDS[i] ?? 'other'
+    put(f.total, id, 'spanning')
+    put(f.noncurrent, id, 'noncurrent')
+    put(f.current, id, 'current')
+  })
+  return m
+}
+
+export const DEBT_TAG_SHAPES: ReadonlyMap<string, DebtTagShape> = buildShapes()
+
+/**
+ * 현금성 그룹 — 두 태그는 대차대조표의 **서로 다른 줄**이라 계열을 따로 둔다.
+ * 어느 한쪽이 이번 분기에 태깅되지 않았다고 다른 쪽이 그 부재를 증언하지는 못한다.
+ */
+export const CASH_TAG_SHAPES: ReadonlyMap<string, DebtTagShape> = new Map<string, DebtTagShape>([
+  ['CashAndCashEquivalentsAtCarryingValue', { family: 'cash', region: 'current' }],
+  ['ShortTermInvestments', { family: 'shortTermInvestments', region: 'current' }],
+])
+
+/**
  * 리스부채 태그. `totalDebt`에는 **들어가지 않는다**(위 설명). 그런데도 수집하는
  * 이유는, 이것이 없으면 "이 회사는 부채가 없다"와 "이 회사의 부채를 우리가 못
  * 읽었다"를 DB만으로 구분할 수 없기 때문이다. `TRACKED_TAGS`가 파싱 시점에

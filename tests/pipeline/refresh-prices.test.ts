@@ -89,6 +89,45 @@ beforeAll(async () => {
      VALUES (4, '2025-12-31', 'Q', 7000, '2026-08-09')`,
   ).run()
 
+  // ── 주식수 신선도 기준선 (F3 후속) ────────────────────────────────────────
+  // AUR 실측: 최신 회계기간은 2026-06-30인데 표지 발행주식수는 2022-09-30 값
+  // 642,869,548주만 남아 있었다. Q2-2026 10-Q 표지는 Class A 1,708,146,085 +
+  // Class B 296,009,183 = 2,004,155,268주이고 같은 기간 희석주식수는 1,976,000,000주다.
+  // 낡은 표지값이 걸러지면 희석 폴백이 자릿수를 맞춘다(시가총액 3.1배 오차 제거).
+  addCompany(8, 'AUR')
+  raw.prepare(
+    `INSERT INTO financials (cik, period_end, period_type, shares_outstanding, computed_at)
+     VALUES (8, '2022-09-30', 'TTM', 642869548, '2026-08-09')`,
+  ).run()
+  raw.prepare(
+    `INSERT INTO financials (cik, period_end, period_type, shares_diluted, computed_at)
+     VALUES (8, '2026-06-30', 'TTM', 1976000000, '2026-08-09')`,
+  ).run()
+
+  // ACMR 실측: 표지 2020-03-31 14,176,690주 vs 2026-06-30 희석 71,838,908주.
+  // Q2-2026 10-Q 표지 합계는 64,657,388 + 4,991,808 = 69,649,196주(시가총액 4.9배 오차).
+  addCompany(9, 'ACMR')
+  raw.prepare(
+    `INSERT INTO financials (cik, period_end, period_type, shares_outstanding, computed_at)
+     VALUES (9, '2020-03-31', 'TTM', 14176690, '2026-08-09')`,
+  ).run()
+  raw.prepare(
+    `INSERT INTO financials (cik, period_end, period_type, shares_diluted, computed_at)
+     VALUES (9, '2026-06-30', 'TTM', 71838908, '2026-08-09')`,
+  ).run()
+
+  // 소급 상한(400일) 안쪽의 직전 기간 표지값은 그대로 쓴다 — PTCT처럼 최신 기간의
+  // 표지값이 자릿수 오기로 걸러졌을 때 직전 정상값을 쓰는 경로를 지켜야 한다.
+  addCompany(10, 'RECENTCOVER')
+  raw.prepare(
+    `INSERT INTO financials (cik, period_end, period_type, shares_outstanding, computed_at)
+     VALUES (10, '2026-03-31', 'TTM', 82774730, '2026-08-09')`,
+  ).run()
+  raw.prepare(
+    `INSERT INTO financials (cik, period_end, period_type, shares_diluted, computed_at)
+     VALUES (10, '2026-06-30', 'TTM', 92020009, '2026-08-09')`,
+  ).run()
+
   stats = await refreshPrices({ raw, prices })
 })
 
@@ -134,6 +173,25 @@ describe('refreshPrices', () => {
     expect(m.sharesBasis).toBe('reported')
   })
 
+  it('최신 회계기간에서 400일 넘게 낡은 표지 발행주식수는 쓰지 않는다 (AUR 실사례)', () => {
+    const m = getLatestMarketData(raw, 8)!
+    expect(m.sharesOutstanding).toBe(1_976_000_000)
+    expect(m.sharesBasis).toBe('diluted_fallback')
+    expect(m.marketCap).toBe(395_200_000_000)
+  })
+
+  it('ACMR 실사례 — 2020년 표지값이 2026년 시가총액을 결정하지 않는다', () => {
+    const m = getLatestMarketData(raw, 9)!
+    expect(m.sharesOutstanding).toBe(71_838_908)
+    expect(m.sharesBasis).toBe('diluted_fallback')
+  })
+
+  it('소급 상한 안쪽의 직전 기간 표지값은 그대로 쓴다 (PTCT 경로 보존)', () => {
+    const m = getLatestMarketData(raw, 10)!
+    expect(m.sharesOutstanding).toBe(82_774_730)
+    expect(m.sharesBasis).toBe('reported')
+  })
+
   it('희석주식수 폴백도 period_type 우선순위(Q > TTM > A)로 결정론적으로 고른다', () => {
     const m = getLatestMarketData(raw, 7)!
     expect(m.sharesOutstanding).toBe(7500)
@@ -142,10 +200,10 @@ describe('refreshPrices', () => {
   })
 
   it('통계를 반환한다', () => {
-    expect(stats.quoted).toBe(6)
+    expect(stats.quoted).toBe(9)
     expect(stats.noQuote).toBe(1)
     expect(stats.missingShares).toBe(1)
-    expect(stats.fallbackShares).toBe(2)
+    expect(stats.fallbackShares).toBe(4)
   })
 
   it('재실행해도 같은 날짜 행이 중복되지 않는다', async () => {

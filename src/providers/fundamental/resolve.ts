@@ -1,8 +1,9 @@
 import type { RawFact } from '../types.js'
 import {
-  DEBT_COMBINED_TOTAL_TAG, DEBT_CURRENT_TOTAL_TAG, DEBT_TAGS,
-  LONG_TERM_DEBT_CURRENT_TAG, LONG_TERM_DEBT_FAMILY, LONG_TERM_DEBT_NONCURRENT_TAG,
-  SHORT_TERM_BORROWING_TAGS, SPECIFIC_DEBT_FAMILIES, type DebtFamily,
+  BASIC_SHARES_CHAIN, CASH_TAG_SHAPES, DEBT_COMBINED_TOTAL_TAG, DEBT_CURRENT_TOTAL_TAG,
+  DEBT_TAGS, DEBT_TAG_SHAPES, LONG_TERM_DEBT_CURRENT_TAG, LONG_TERM_DEBT_FAMILY,
+  LONG_TERM_DEBT_NONCURRENT_TAG, LONG_TERM_DEBT_TOTAL_TAG, SHORT_TERM_BORROWING_TAGS,
+  SPECIFIC_DEBT_FAMILIES, type DebtFamily, type DebtTagShape,
 } from './tags.js'
 
 export type FactIndex = {
@@ -10,6 +11,20 @@ export type FactIndex = {
   duration: Map<number, Map<string, Map<string, number>>>
   /** periodEnd → tag → value */
   instant: Map<string, Map<string, number>>
+  /**
+   * 시점 축에서 **신고자가 부재를 명시한** 태그. periodEnd → 그 일자에 없다고
+   * 단언된 태그 집합.
+   *
+   * 근거: 하나의 신고서(accession)는 보통 두 개의 대차대조표 일자(당기·전기)를
+   * 함께 태깅한다. 그 신고서가 어떤 개념을 **전기에는 태깅하고 당기에는 태깅하지
+   * 않았다면**, 그것은 "이번에는 안 썼다"가 아니라 "당기 대차대조표에 그 줄이
+   * 없다"는 신고자 자신의 진술이다. 실측(CVV, FY2025 10-K, accession
+   * 0001437749-26-000?): 같은 신고서가 `LongTermDebtNoncurrent`를 2024-12-31에는
+   * 181,000으로 태깅하고 2025-12-31에는 태깅하지 않았다 — 실제로 그 10-K의 부채
+   * 표는 `장비대출 181 / 유동성 대체 181 / 유동분 제외 장기 —`로, 잔액 전부가
+   * 유동으로 재분류돼 비유동 잔액이 0이 됐다.
+   */
+  absent: Map<string, Set<string>>
 }
 
 const DAY_MS = 86_400_000
@@ -43,6 +58,25 @@ function daysBetween(a: string, b: string): number {
 
 function sameNumber(a: number, b: number): boolean {
   return Math.abs(a - b) <= DUPLICATE_REL_TOLERANCE * Math.max(Math.abs(a), Math.abs(b), 1)
+}
+
+// 오기 날짜 판정. TRNS·SYPR 실측에서 오기 날짜에 딸려 온 사실은 각각 2건이고 진짜
+// 마감일에는 22건이 붙었다. 3건 이하 + 5배 이상이면 "몇 개 태그만 잘못 찍힌 날짜"로
+// 본다 — 진짜 회계 마감일이 3건 이하로 얇게 들어오는 경우는 실측에서 없었고, 있더라도
+// 20일 이내에 그보다 5배 두꺼운 다른 마감일이 함께 존재하지는 않는다.
+const SPARSE_DATE_MAX_FACTS = 3
+const SPARSE_DATE_DOMINANCE = 5
+
+/** 가중평균 주식수 계열(기본·희석) — 기간 종료일이 바뀌면 값이 달라지는 것이 정상이다. */
+const WEIGHTED_AVERAGE_SHARE_TAGS: ReadonlySet<string> = new Set<string>([
+  'WeightedAverageNumberOfDilutedSharesOutstanding',
+  ...BASIC_SHARES_CHAIN,
+])
+
+/** `${qtrs}|${tag}` 키에서 태그 부분이 가중평균 주식수인지 판정한다. */
+function isWeightedAverageShares(key: string): boolean {
+  const bar = key.indexOf('|')
+  return WEIGHTED_AVERAGE_SHARE_TAGS.has(bar < 0 ? key : key.slice(bar + 1))
 }
 
 type FactEntry = { value: number; filedDate: string }
@@ -157,14 +191,36 @@ function canonicaliseApiDates(facts: RawFact[]): Record<DateAxis, Map<string, st
     const ta = byAxis[axis].get(a)
     const tb = byAxis[axis].get(b)
     if (!ta || !tb) return false
-    let overlap = 0
+    let agree = 0
+    let disagree = 0
     for (const [key, va] of ta) {
       const vb = tb.get(key)
       if (vb === undefined) continue
-      if (!sameNumber(va, vb)) return false
-      overlap++
+      // 가중평균 주식수는 **증거로 쓰지 않는다.** 정의상 "기간 중 발행돼 있던 주식수의
+      // 시간가중 평균"이라 기간 종료일이 하루라도 움직이면 값이 달라지는 것이 정상이다 —
+      // 즉 두 날짜가 사실은 같은 분기임을 보여주는 상황에서 오히려 확실하게 어긋난다.
+      // 실측(SYPR, CIK 864240): 2025-09-28과 2025-09-29에 겹치는 태그가 기본
+      // 가중평균 주식수 단 하나뿐인데 값이 22,251,000 / 22,011,000으로 1.1% 달라
+      // 병합이 거부됐고, 그 결과 유령 분기가 살아남아 최신 TTM이 9월을 두 번 셌다.
+      if (isWeightedAverageShares(key)) continue
+      if (sameNumber(va, vb)) agree++
+      else disagree++
     }
-    return overlap > 0
+    // 겹치는 (가중평균이 아닌) 항목이 하나라도 있으면 **다수결**로 판정한다. 실측:
+    // 20일 이내인데 병합되지 않은 API 쌍 18개 중 6개가 태그 하나의 불일치로 거부됐고
+    // (BLFS 4-of-5 일치, COHU 3-of-4, LIND 3-of-4), 반면 합치면 안 되는 전신/후신
+    // 법인 쌍(VTRS·RPAY·SYM)은 겹치는 20개 항목이 **하나도** 일치하지 않는다 —
+    // 두 집단은 다수결로 깨끗이 갈린다.
+    if (agree + disagree > 0) return agree > disagree
+    // 겹치는 항목이 전혀 없으면 값으로는 판정할 수 없다. 이때만 **밀도 비대칭**을 본다:
+    // 진짜 회계 마감일에는 재무제표 전체가 붙지만 오기 날짜에는 태그 몇 개만 딸려 온다
+    // (TRNS 22건 vs 2건, SYPR 22건 vs 2건). 한쪽이 SPARSE_DATE_MAX_FACTS건 이하이고
+    // 다른 쪽이 그 SPARSE_DATE_DOMINANCE배 이상이면 희소한 쪽을 오기로 보고 흡수한다.
+    const na = factCount.get(a) ?? 0
+    const nb = factCount.get(b) ?? 0
+    const lo = Math.min(na, nb)
+    const hi = Math.max(na, nb)
+    return lo > 0 && lo <= SPARSE_DATE_MAX_FACTS && hi >= SPARSE_DATE_DOMINANCE * lo
   }
 
   // duration: 같은 qtrs 안에서 **시작일과 종료일이 모두** 허용치 이내인 쌍만 후보다.
@@ -248,6 +304,8 @@ function buildCanonicalIndex(facts: RawFact[]): (f: RawFact) => string {
   // 축별 canonical API 날짜 그리드. bulk 날짜는 이 그리드에만 투영된다.
   const grid: Record<DateAxis, string[]> = { instant: [], duration: [] }
   const gridSet: Record<DateAxis, Set<string>> = { instant: new Set(), duration: new Set() }
+  // canonical 날짜 → 그 날짜에 API 사실이 존재하는 qtrs 버킷 집합.
+  const bucketsOf = new Map<string, Set<number>>()
   for (const f of facts) {
     if (f.source !== 'api') continue
     const axis = axisOf(f.qtrs)
@@ -256,6 +314,9 @@ function buildCanonicalIndex(facts: RawFact[]): (f: RawFact) => string {
       gridSet[axis].add(canonical)
       grid[axis].push(canonical)
     }
+    let buckets = bucketsOf.get(canonical)
+    if (!buckets) { buckets = new Set(); bucketsOf.set(canonical, buckets) }
+    buckets.add(f.qtrs)
   }
   grid.instant.sort()
   grid.duration.sort()
@@ -265,19 +326,31 @@ function buildCanonicalIndex(facts: RawFact[]): (f: RawFact) => string {
   return (f: RawFact): string => {
     const axis = axisOf(f.qtrs)
     if (f.source === 'api') return apiCanonical[axis].get(f.periodEnd) ?? f.periodEnd
-    const key = `${axis}|${f.periodEnd}`
+    const key = `${axis}|${f.qtrs}|${f.periodEnd}`
     const cached = bulkCache.get(key)
     if (cached !== undefined) return cached
     let resolved = f.periodEnd
     if (!gridSet[axis].has(f.periodEnd)) {
+      // **같은 qtrs 버킷에 API 사실이 있는 canonical 날짜를 우선한다.** 그리드를 버킷
+      // 사이에서 공유하는 것 자체는 필요하다(CSCO: qtrs=1 버킷이 비어 있어 bulk
+      // 2025-07-31이 qtrs=4의 진짜 마감일 2025-07-26에 붙어야 한다). 하지만 거리만
+      // 보면 **한 버킷에만 존재하는 날짜가 다른 버킷의 분기를 통째로 훔칠 수** 있다 —
+      // 실측(SYPR): 2025-09-29에는 qtrs=3의 가중평균 주식수 2건밖에 없는데
+      // |09-30 − 09-29| = 1 이 |09-30 − 09-28| = 2 를 이겨 bulk 분기 전체가 그리로
+      // 붙었고, 그 결과 완전한 중복 분기가 만들어졌다. 같은 버킷에 실제 사실이 있는
+      // 날짜를 먼저 찾고, 없을 때만 다른 버킷의 날짜로 넘어간다.
       let best: string | null = null
       let bestDiff = Infinity
+      let bestSameBucket = false
       for (const apiEnd of grid[axis]) {
         const diff = daysBetween(f.periodEnd, apiEnd)
-        if (diff <= CROSS_SOURCE_TOLERANCE_DAYS && diff < bestDiff) {
-          best = apiEnd
-          bestDiff = diff
-        }
+        if (diff > CROSS_SOURCE_TOLERANCE_DAYS) continue
+        const sameBucket = bucketsOf.get(apiEnd)?.has(f.qtrs) ?? false
+        if (best !== null && bestSameBucket && !sameBucket) continue
+        if (best !== null && sameBucket === bestSameBucket && diff >= bestDiff) continue
+        best = apiEnd
+        bestDiff = diff
+        bestSameBucket = sameBucket
       }
       // 대응하는 API 날짜가 전혀 없는 기간의 bulk 사실은 자기 자신의 period_end를
       // 그대로 쓴다 — 대응 기간이 없다고 그 기간 자체를 버리지 않는다.
@@ -307,9 +380,19 @@ export function indexFacts(facts: RawFact[]): FactIndex {
 
   // qtrs → source → canonical periodEnd → tag → entry
   const chosen = new Map<number, Record<'api' | 'bulk', Map<string, Map<string, FactEntry>>>>()
+  // accession → { 그 신고서가 시점 사실을 실은 일자들, 태그 → 그 태그를 실은 일자들 }
+  const byAccession = new Map<string, { dates: Set<string>; tags: Map<string, Set<string>> }>()
 
   for (const f of facts) {
     const periodEnd = canonicalOf(f)
+    if (f.qtrs === 0) {
+      let acc = byAccession.get(f.accession)
+      if (!acc) { acc = { dates: new Set(), tags: new Map() }; byAccession.set(f.accession, acc) }
+      acc.dates.add(periodEnd)
+      let tagDates = acc.tags.get(f.tag)
+      if (!tagDates) { tagDates = new Set(); acc.tags.set(f.tag, tagDates) }
+      tagDates.add(periodEnd)
+    }
     let bySource = chosen.get(f.qtrs)
     if (!bySource) { bySource = { api: new Map(), bulk: new Map() }; chosen.set(f.qtrs, bySource) }
     const byPeriod = bySource[f.source]
@@ -341,7 +424,23 @@ export function indexFacts(facts: RawFact[]): FactIndex {
     }
   }
 
-  return { duration, instant }
+  // 같은 신고서가 어떤 개념을 다른 일자에는 태깅하고 이 일자에는 태깅하지 않았다면,
+  // 그 개념은 이 대차대조표에 **없다**는 신고자의 진술이다(FactIndex.absent 주석 참고).
+  const absent = new Map<string, Set<string>>()
+  for (const acc of byAccession.values()) {
+    if (acc.dates.size < 2) continue
+    for (const [tag, tagDates] of acc.tags) {
+      if (tagDates.size === acc.dates.size) continue
+      for (const date of acc.dates) {
+        if (tagDates.has(date)) continue
+        let set = absent.get(date)
+        if (!set) { set = new Set(); absent.set(date, set) }
+        set.add(tag)
+      }
+    }
+  }
+
+  return { duration, instant, absent }
 }
 
 const REVENUE_CHAIN = [
@@ -515,41 +614,127 @@ function familyBalance(tags: Map<string, number>, family: DebtFamily): Resolved 
   return best
 }
 
+export type InstantContext = {
+  /** 태그 → 그 값이 찍힌 대차대조표 일자 */
+  dates: ReadonlyMap<string, string>
+  /** 일자 → 그 일자에 없다고 신고자가 단언한 태그(FactIndex.absent) */
+  absent: ReadonlyMap<string, ReadonlySet<string>>
+  /** 일자 → 그 일자의 태그 → 값. 별칭(같은 줄을 두 이름으로 태깅) 판정에 쓴다. */
+  instant: ReadonlyMap<string, ReadonlyMap<string, number>>
+}
+
 /**
- * **가산 그룹의 날짜 정합성.** `pickInstant`는 태그마다 독립적으로 "asOf 이전
- * 최근값"을 400일까지 소급해 찾는다. 표지 발행주식수처럼 대차대조표 일자와
- * 무관한 날짜에 찍히는 값에는 그 규칙이 꼭 필요하지만, **서로 더해지는
- * 대차대조표 구성요소에까지 적용되면 어느 대차대조표에도 실재한 적 없는 합계가
- * 만들어진다.** 실측(최신 TTM 기준, 두 구성요소가 모두 있는 289개사):
- * `LongTermDebtNoncurrent`와 `LongTermDebtCurrent`가 서로 다른 대차대조표
- * 일자에서 온 회사가 35개(12%), 그중 100일 넘게 벌어진 회사가 21개(7%)였다.
+ * **가산 그룹의 날짜 정합성 — "다시 태깅되지 않았다"와 "사라졌다"를 가른다.**
  *
- * 그래서 **합산에 참여하는 태그 집합은 그 집합 안에서 가장 최근인 일자 하나로
- * 고정하고, 그 일자에 없는 구성요소는 버린다**(→ null, 0으로 채우지 않는다).
- * 그룹 안에서 앵커를 잡으므로 커버리지는 줄지 않는다 — 그룹 전체가 한 분기
- * 늦은 대차대조표에서 오면 그 대차대조표를 통째로 쓴다.
+ * `pickInstant`는 태그마다 독립적으로 "asOf 이전 최근값"을 400일까지 소급해 찾는다.
+ * 그 규칙을 서로 더해지는 대차대조표 구성요소에 그대로 적용하면 어느 대차대조표에도
+ * 실재한 적 없는 합계가 만들어진다(실측: 두 구성요소가 모두 있는 289개사 중 35개사가
+ * 서로 다른 일자에서 왔고 21개사는 100일 넘게 벌어져 있었다).
  *
- * 더 엄격한 대안(현금·부채·자본을 통틀어 하나의 대차대조표 일자로 고정)은
- * 채택하지 않았다. 실측하면 720개사 중 92개사(13%)가 `total_debt`를 통째로
- * 잃는다 — 최신 시점 일자에 부채 태그가 없고 중앙값 181일 전 대차대조표에만
- * 있는 회사들이다. 검증된 결함(둘을 더해 만든 가짜 합계)을 넘어서는 커버리지
- * 손실이라 이번 범위에서는 제외했다.
+ * 직전 구현은 이를 **"그룹 안에서 가장 최근 일자 하나로 고정하고 나머지는 버린다"**로
+ * 풀었는데, 그 규칙은 *모든 구성요소가 매 대차대조표마다 다시 태깅된다*는 전제를 깔고
+ * 있었다. 그 전제는 틀렸다 — 많은 신고자가 `LongTermDebtNoncurrent`를 10-K에서만
+ * 태깅하고 10-Q에서는 `DebtCurrent`만 태깅한다. 그 회사들에서는 앵커가 분기 쪽에
+ * 잡히면서 **장기차입금이 통째로 삭제됐다**(QCOM 2,489,000,000 · NXPI 750,000,000 ·
+ * MTCH 0 — 실제 3,551,878,000).
+ *
+ * 그래서 규칙을 뒤집는다: **낡은 구성요소는 기본적으로 이월한다. 버리는 것은
+ * 그것이 사라졌다는 증거가 있을 때뿐이다.** 증거는 네 가지이며 모두 신고서가
+ * 실제로 주장하는 내용에서 나온다.
+ *
+ *  1. **같은 구역 재측정(REPLACED).** 앵커 일자에 같은 계열·겹치는 구역의 태그가
+ *     있으면 그 구역은 다시 측정됐다 — 낡은 값은 그 값의 이전 상태일 뿐이다.
+ *     (QCOM 2026-06-28: 앵커에 `LongTermDebt`가 있으므로 2025-09-28의
+ *     `LongTermDebtNoncurrent` 14,811,000,000은 버린다.) 반대로 `DebtCurrent`만
+ *     있는 앵커는 **유동 구역만** 재측정한 것이라 비유동 잔액을 반박하지 못한다
+ *     (NXPI 2026-03-29: 10-Q 원문에도 `Long-term debt`가 그대로 있다).
+ *  2. **별칭(ALIASED).** 낡은 태그가 자기 일자에서 앵커에 있는 다른 태그와 값이
+ *     같았다면 두 이름이 같은 줄을 가리킨다 — 새 이름이 그 줄을 대표한다.
+ *     (LPTH 2025-09-30: `LongTermDebtNoncurrent` = `LongTermLoansPayable` =
+ *     4,867,298. IONS 2025-12-31: `LongTermDebtCurrent` 432,120 ≈
+ *     `ConvertibleDebtCurrent` 431,948.)
+ *  3. **부재 단언(ASSERTED ABSENT).** 앵커 일자를 신고한 바로 그 신고서가 같은
+ *     개념을 **다른 일자에는** 태깅했다면, 앵커에서의 부재는 진술이다
+ *     (CVV FY2025 10-K — `FactIndex.absent` 주석 참고).
+ *  4. **낡은 롤업(SPANNING-STALE).** 유동+비유동을 한 숫자로 잰 태그는 앵커에서
+ *     유동 구역이 다시 측정된 순간 합계로서 무효다 — 그 안의 유동 부분이 이미
+ *     바뀌었기 때문이다.
+ *
+ * 이월된 값은 "이 구성요소를 마지막으로 신고한 대차대조표의 잔액"이며, 빠뜨리면
+ * 그 금액 **전부**를 잃지만 이월하면 그동안 변한 만큼만 틀린다.
  */
-function coherentGroup(
+function carryForwardGroup(
   tags: Map<string, number>,
-  dates: ReadonlyMap<string, string> | undefined,
-  group: ReadonlySet<string>,
+  ctx: InstantContext | undefined,
+  shapes: ReadonlyMap<string, DebtTagShape>,
+  /**
+   * 구역(유동/비유동)이 **상품 계열을 가로질러** 같은 것을 재는 그룹에서만 켠다.
+   * 부채는 그렇다 — 어느 상품이든 유동/비유동 두 줄로 나뉘어 대차대조표에 오른다.
+   * 현금 그룹은 아니다 — 현금성자산과 단기투자자산은 둘 다 유동이지만 서로 다른 줄이라
+   * 한쪽이 다시 측정됐다고 다른 쪽이 그 안에 들어가지 않는다.
+   */
+  crossFamilyRegions = false,
 ): Map<string, number> {
-  if (dates === undefined) return tags
+  if (ctx === undefined) return tags
+  const { dates, absent, instant } = ctx
   let anchor: string | null = null
   for (const [tag, date] of dates) {
-    if (!group.has(tag) || !tags.has(tag)) continue
+    if (!shapes.has(tag) || !tags.has(tag)) continue
     if (anchor === null || date > anchor) anchor = date
   }
   if (anchor === null) return tags
+
+  const anchorShapes: DebtTagShape[] = []
+  for (const [tag, date] of dates) {
+    if (date !== anchor || !tags.has(tag)) continue
+    const shape = shapes.get(tag)
+    if (shape) anchorShapes.push(shape)
+  }
+  const anchorAbsent = absent.get(anchor)
+  // 앵커에서 **구역이 명시적으로 다시 측정됐는지**. 계열을 가리지 않고 본다 — 앵커
+  // 대차대조표가 비유동·유동 두 줄을 모두 새로 적었다면, 낡은 신고서에서 온 "한
+  // 상품의 전체 잔액"은 이미 그 두 줄 안에 반영돼 있다. spanning 태그는 여기 세지
+  // 않는다: 어떤 상품의 총액 하나만 있는 앵커(SNWV 2026-06-30의 `LineOfCredit`
+  // 655,000)는 다른 상품의 잔액에 대해 아무 말도 하지 않기 때문이다. 실측으로 이
+  // 규칙이 가르는 두 사례 — LPTH 2026-03-31은 앵커에 `LongTermLoansPayable`(비유동)과
+  // `LoansPayableCurrent`(유동)가 모두 있고 신고서 대차대조표에 전환사채 줄이 없다
+  // (전환 완료), SNWV 2026-06-30은 앵커에 리볼버 총액 하나뿐이고 담보 대출
+  // 12,922,000 + 5,599,000이 대차대조표에 그대로 있다.
+  const anchorMeasured = new Set<DebtTagShape['region']>()
+  for (const s of anchorShapes) if (s.region !== 'spanning') anchorMeasured.add(s.region)
+
+  const overlaps = (a: DebtTagShape, b: DebtTagShape): boolean => {
+    // 'general' 계열의 총계 개념은 계열을 가리지 않는다 — `DebtCurrent`는 모든 계열의
+    // 유동 부분을, `DebtLongtermAndShorttermCombinedAmount`는 전부를 덮는다.
+    if (a.family !== b.family && a.family !== 'general' && b.family !== 'general') return false
+    return a.region === 'spanning' || b.region === 'spanning' || a.region === b.region
+  }
+
   const out = new Map<string, number>()
   for (const [tag, value] of tags) {
-    if (!group.has(tag) || dates.get(tag) === anchor) out.set(tag, value)
+    const shape = shapes.get(tag)
+    if (!shape) continue
+    const date = dates.get(tag)
+    if (date === undefined || date === anchor) { out.set(tag, value); continue }
+
+    // 4번(낡은 롤업)은 1번에 흡수된다 — spanning 태그는 같은 계열(혹은 general)의
+    // 어떤 구역과도 겹치므로, 앵커가 유동 구역을 다시 측정한 순간 1번이 이미 버린다.
+    if (anchorShapes.some((s) => overlaps(s, shape))) continue          // 1
+    if (anchorAbsent?.has(tag)) continue                                // 3
+    if (crossFamilyRegions && (shape.region === 'spanning'
+      ? anchorMeasured.has('noncurrent') && anchorMeasured.has('current')
+      : anchorMeasured.has(shape.region))) continue                     // 5
+    const atOwnDate = instant.get(date)
+    if (atOwnDate !== undefined) {
+      let aliased = false
+      for (const [other, otherDate] of dates) {
+        if (otherDate !== anchor || other === tag) continue
+        const v = atOwnDate.get(other)
+        if (v !== undefined && sameNumber(v, value)) { aliased = true; break }
+      }
+      if (aliased) continue                                             // 2
+    }
+    out.set(tag, value)
   }
   return out
 }
@@ -589,39 +774,81 @@ function coherentGroup(
  * 집단까지 덮으면서, 자릿수가 다른 별개 항목과는 충분히 멀다. 판정이 틀렸을 때의
  * 손해도 비대칭이다 — 포함인데 더하면 최대 2배 과대, 별개인데 큰 쪽만 쓰면 최대
  * 절반 과소다.
+ *
+ * **그러나 상대 허용오차는 포함관계를 표현할 수 있는 도구가 아니다.** 실측으로 양쪽
+ * 방향의 오판이 확인됐다(둘 다 신고서 원문 확인):
+ *  - GEHC 2026-03-31: `LongTermDebtCurrent` 2,000,000 vs `ShortTermBorrowings`
+ *    7,000,000 — 상대차 71%라 "별개"로 판정돼 더해졌지만, 회사의 차입금 주석은
+ *    *"Short-term borrowings … includes $2 million … related to the current portion of
+ *    our long-term borrowings"*라고 적고 총차입금을 10,134로 마감한다. 금액이 작아지면
+ *    상대차는 포함관계와 아무 상관이 없어진다.
+ *  - WWD 2025-09-30: `LongTermDebtCurrent` 122,934,000 vs `ShortTermBorrowings`
+ *    122,300,000 — 상대차 0.52%라 "포함"으로 판정돼 122,300,000이 통째로 사라졌지만,
+ *    FY2025 10-K 대차대조표는 `Short-term debt 122,300` / `Current portion of long-term
+ *    debt 122,934` / `Long-term debt, less current portion 456,968`을 **세 줄로 따로**
+ *    적는다. 진짜 총부채는 702,202,000이다.
+ *
+ * 그래서 판정 근거를 **신고자 자신이 함께 신고한 롤업 항등식**으로 바꾼다. 네 태그가
+ * 함께 있을 때 어느 항등식이 **정확히** 성립하는지가 구조를 그대로 말해준다:
+ *
+ *   `LongTermDebt = LongTermDebtNoncurrent + ShortTermBorrowings`
+ *        → 단기차입금이 곧 유동 만기분이다(포함).       GEHC: 10,127 + 7 = 10,134 ✔
+ *   `LongTermDebt = LongTermDebtNoncurrent + LongTermDebtCurrent`
+ *        → 롤업은 유동 만기분에서 끝난다. 단기차입금은 그 밖이다(별개).
+ *                                                      WWD: 456,968 + 122,934 = 579,902 ✔
+ *
+ * 두 항등식이 모두 성립하면 두 유동 태그가 같은 줄을 두 이름으로 부른 것이므로 포함이다.
+ * 항등식을 세울 태그가 없으면(다수) 마지막으로 **두 값이 같은 숫자인지**만 본다 —
+ * 실측 763개 시점 중 171건(22%)이 값이 정확히 같고(AMAT 2026-04-26 둘 다
+ * 1,199,000,000, LITE 2025-12-27 둘 다 3,240,200,000), 같은 숫자를 두 번 적는 것은
+ * 중복 태깅의 직접 증거다. 근사 구간(0.5~2%)은 더 이상 포함으로 보지 않는다 — WWD가
+ * 정확히 그 구간에서 틀렸다.
  */
-const DEBT_OVERLAP_REL_TOLERANCE = 0.02
 
-function overlapping(a: number, b: number): boolean {
-  const scale = Math.max(Math.abs(a), Math.abs(b))
-  return scale === 0 || Math.abs(a - b) / scale <= DEBT_OVERLAP_REL_TOLERANCE
-}
+/**
+ * 유동 차입금 부분과, 그중 **장기차입금 계열 총계 안에 이미 들어 있는 금액**.
+ * 후자는 계열 총계에 유동 부분을 다시 더해 이중계상하는 것을 막는다.
+ */
+type CurrentPortion = Resolved & { insideLongTermFamily: number }
 
-function currentDebtPortion(tags: Map<string, number>): Resolved | null {
-  const candidates: Resolved[] = []
+function currentDebtPortion(tags: Map<string, number>): CurrentPortion | null {
+  const ltCur = tags.get(LONG_TERM_DEBT_CURRENT_TAG)
+  const shortTerm = firstOf(tags, [...SHORT_TERM_BORROWING_TAGS])
+  const ltNon = tags.get(LONG_TERM_DEBT_NONCURRENT_TAG)
+  const ltTotal = tags.get(LONG_TERM_DEBT_TOTAL_TAG)
+
+  const candidates: CurrentPortion[] = []
 
   const rollup = tags.get(DEBT_CURRENT_TOTAL_TAG)
   if (typeof rollup === 'number') {
-    candidates.push({ value: rollup, tag: DEBT_CURRENT_TOTAL_TAG })
+    candidates.push({
+      value: rollup,
+      tag: DEBT_CURRENT_TOTAL_TAG,
+      insideLongTermFamily: typeof ltCur === 'number' ? Math.min(ltCur, rollup) : 0,
+    })
   }
 
-  const ltCur = tags.get(LONG_TERM_DEBT_CURRENT_TAG)
-  const shortTerm = firstOf(tags, [...SHORT_TERM_BORROWING_TAGS])
   if (typeof ltCur === 'number' && shortTerm !== null) {
-    candidates.push(
-      overlapping(ltCur, shortTerm.value)
-        ? (ltCur >= shortTerm.value
-          ? { value: ltCur, tag: LONG_TERM_DEBT_CURRENT_TAG }
-          : shortTerm)
-        : {
-          value: ltCur + shortTerm.value,
-          tag: `${LONG_TERM_DEBT_CURRENT_TAG}+${shortTerm.tag}`,
-        },
-    )
+    // 신고자 자신의 롤업 항등식이 정확히 성립하는지 본다(위 주석).
+    const exact = (a: number, b: number) => a === b
+    const stIsCurrentPortion = typeof ltNon === 'number' && typeof ltTotal === 'number'
+      && exact(ltTotal, ltNon + shortTerm.value)
+    const stIsSeparate = typeof ltNon === 'number' && typeof ltTotal === 'number'
+      && exact(ltTotal, ltNon + ltCur)
+    const contained = stIsCurrentPortion || (!stIsSeparate && sameNumber(ltCur, shortTerm.value))
+    candidates.push(contained
+      ? (ltCur >= shortTerm.value
+        ? { value: ltCur, tag: LONG_TERM_DEBT_CURRENT_TAG, insideLongTermFamily: ltCur }
+        : { ...shortTerm, insideLongTermFamily: shortTerm.value })
+      : {
+        value: ltCur + shortTerm.value,
+        tag: `${LONG_TERM_DEBT_CURRENT_TAG}+${shortTerm.tag}`,
+        insideLongTermFamily: ltCur,
+      })
   } else if (typeof ltCur === 'number') {
-    candidates.push({ value: ltCur, tag: LONG_TERM_DEBT_CURRENT_TAG })
+    candidates.push({ value: ltCur, tag: LONG_TERM_DEBT_CURRENT_TAG, insideLongTermFamily: ltCur })
   } else if (shortTerm !== null) {
-    candidates.push(shortTerm)
+    candidates.push({ ...shortTerm, insideLongTermFamily: 0 })
   }
 
   if (candidates.length === 0) return null
@@ -631,48 +858,24 @@ function currentDebtPortion(tags: Map<string, number>): Resolved | null {
 }
 
 /**
- * 총부채(이자부 차입금) 해석. 티어 순서이며 아래 티어는 위 티어가 아무 값도 내지
- * 못할 때만 작동한다. 태그 선정과 계열 간 최댓값 규칙의 실측 근거는 tags.ts 주석과
- * debt-coverage-report.md 1절 참고.
+ * **총부채 0은 언제나 null이다.** 0은 "부채가 없다"가 아니라 "이 태그들로는 부채를
+ * 못 봤다"이다 — 진짜 무차입 기업은 애초에 차입금 개념을 태깅하지 않아 여기까지 오지
+ * 않는다. 반면 부분적인 태그 하나가 0으로 들어오면(유동 총계만 0, 리볼버 미인출 0 등)
+ * 확신에 찬 틀린 0이 만들어진다. 실측 두 가지:
+ *  - CDNS 2024-12-31: 대차대조표에 선순위채 약 $2.5B이 있는데 그 기간에 추적 가능한
+ *    부채 태그가 없고 400일 소급으로 2023-12-31의 `LinesOfCreditCurrent`=0만 딸려
+ *    들어와 총부채가 0으로 확정됐다.
+ *  - MTCH 2026-06-30: `LongTermDebtCurrent`=0 하나만 앵커에 남아 총부채가 **0**으로
+ *    저장됐다 — 실제 장기차입금은 3,551,878,000이다. 이 가드가 티어 4에만 있었기
+ *    때문에 벌어진 일이라 이제 모든 티어에 적용한다.
+ * 확신에 찬 틀린 0은 정직한 null보다 나쁘다.
  */
-export function resolveTotalDebt(
-  allTags: Map<string, number>,
-  dates?: ReadonlyMap<string, string>,
-): Resolved | null {
-  // 합산에 참여하는 부채 태그는 모두 같은 대차대조표에서 와야 한다(F4).
-  const tags = coherentGroup(allTags, dates, DEBT_TAGS)
+function nonZero(r: Resolved): Resolved | null {
+  return r.value === 0 ? null : r
+}
 
-  // 티어 1·2 — 대차대조표의 **총계 개념**으로 신고한 경우(가장 흔한 형태).
-  //   총부채 = 비유동 장기차입금 + 유동 차입금 부분
-  // 옛 코드는 티어 1(비유동/유동 분리)과 티어 2(`DebtCurrent`)를 따로 두고 둘 다
-  // 조기 반환했는데, 그 구조가 곧 F2의 결함이었다 — 유동 부분을 어느 태그로
-  // 읽든 단기차입금은 같은 방식으로 합쳐져야 한다.
-  const ltNon = tags.get(LONG_TERM_DEBT_NONCURRENT_TAG)
-  const ltCur = tags.get(LONG_TERM_DEBT_CURRENT_TAG)
-  const debtCurrent = tags.get(DEBT_CURRENT_TOTAL_TAG)
-  if (typeof ltNon === 'number' || typeof ltCur === 'number' || typeof debtCurrent === 'number') {
-    const current = currentDebtPortion(tags)
-    return {
-      value: (ltNon ?? 0) + (current?.value ?? 0),
-      tag: [
-        typeof ltNon === 'number' ? LONG_TERM_DEBT_NONCURRENT_TAG : null,
-        current?.tag,
-      ].filter(Boolean).join('+'),
-    }
-  }
-
-  // 티어 3 — 장·단기를 하나로 합쳐 신고한 총계 태그. 정의상 단기차입금을 이미
-  // 포함하므로 더하지 않는다.
-  const combined = tags.get(DEBT_COMBINED_TOTAL_TAG)
-  if (typeof combined === 'number') {
-    return { value: combined, tag: DEBT_COMBINED_TOTAL_TAG }
-  }
-
-  // 티어 4 — 상품별 이름으로만 태깅한 발행사. 상품별 계열은 서로 다른 상품이라
-  // 합산하고, 그 합과 `LongTermDebt`(같은 부채를 품고 있을 수 있는 롤업) 사이에서만
-  // 큰 쪽을 고른다. 단기차입금은 장기차입금에 포함될 수 없으므로 언제나 더한다.
-  // (tags.ts의 TLS·SND·XEL 실사례 참고)
-  const rollup = familyBalance(tags, LONG_TERM_DEBT_FAMILY)
+/** 상품별 계열의 합. 계열끼리는 서로 다른 상품이라 겹치지 않으므로 더한다. */
+function specificFamilySum(tags: Map<string, number>): Resolved | null {
   let specific: Resolved | null = null
   for (const family of SPECIFIC_DEBT_FAMILIES) {
     const balance = familyBalance(tags, family)
@@ -681,29 +884,117 @@ export function resolveTotalDebt(
       ? balance
       : { value: specific.value + balance.value, tag: `${specific.tag}+${balance.tag}` }
   }
-  let core: Resolved | null = null
-  for (const candidate of [rollup, specific]) {
-    if (candidate && (core === null || candidate.value > core.value)) core = candidate
+  return specific
+}
+
+/** provenance 문자열. 같은 태그가 두 조각에 나타나도 한 번만 적는다. */
+function joinTags(parts: readonly string[]): string {
+  const seen = new Set<string>()
+  for (const part of parts) {
+    for (const t of part.split('+')) if (t !== '') seen.add(t)
+  }
+  return [...seen].join('+')
+}
+
+/**
+ * 총부채(이자부 차입금) 해석. 티어 순서이며 아래 티어는 위 티어가 아무 값도 내지
+ * 못할 때만 작동한다. 태그 선정과 계열 간 최댓값 규칙의 실측 근거는 tags.ts 주석과
+ * debt-coverage-report.md 1절 참고.
+ */
+export function resolveTotalDebt(
+  allTags: Map<string, number>,
+  ctx?: InstantContext,
+): Resolved | null {
+  // 합산에 참여하는 부채 태그의 일자 정합(F4) — 낡은 구성요소는 사라졌다는 증거가
+  // 있을 때만 버린다.
+  const tags = carryForwardGroup(allTags, ctx, DEBT_TAG_SHAPES, true)
+
+  // 티어 1 — 장·단기를 하나로 합쳐 신고한 총계 태그. **정의상 총부채 그 자체**이므로
+  // 다른 조립보다 우선한다. 실측(VRSK 2025-12-31): `DebtLongtermAndShorttermCombinedAmount`
+  // 4,737,200,000이 회사의 총차입금이고, 같은 일자의 `LongTermDebt` 4,773,500,000은
+  // 발행총액(할인·발행비 차감 전)이라 `DebtCurrent` 1,508,900,000과 더하면 1.5B 이중계상이
+  // 된다. 다른 신고자(SWKS 2025-10-03)에서는 combined 995,800,000 = `LongTermDebt`
+  // 496,400,000 + `DebtCurrent` 499,400,000으로 조립과 정확히 일치한다 — 즉 combined는
+  // 두 관행 어느 쪽에서도 옳고, 조립은 그렇지 않다.
+  const combined = tags.get(DEBT_COMBINED_TOTAL_TAG)
+  if (typeof combined === 'number') {
+    return nonZero({ value: combined, tag: DEBT_COMBINED_TOTAL_TAG })
   }
 
+  // 티어 2 — 대차대조표의 **총계 개념**으로 신고한 경우(가장 흔한 형태).
+  //   총부채 = 비유동 장기차입금 + (계열 밖) 유동 차입금
+  // 옛 코드는 티어 1(비유동/유동 분리)과 티어 2(`DebtCurrent`)를 따로 두고 둘 다
+  // 조기 반환했는데, 그 구조가 F2의 결함이었다 — 유동 부분을 어느 태그로 읽든
+  // 단기차입금은 같은 방식으로 합쳐져야 하고, `LongTermDebt` 롤업에도 닿아야 한다.
+  //
+  // **`LongTermDebt`를 어떻게 읽는가.** 두 관행이 실재하며, 신고자가 같은 일자에
+  // `LongTermDebtNoncurrent`를 함께 태깅했는지가 그 관행을 가른다:
+  //  (a) 비유동 태그가 **있으면** `LongTermDebt`는 유동 만기분을 포함한 계열 총계다
+  //      (tags.ts 실측: 셋이 함께 있는 781개 시점에서 ltd / (nc+cur) 중앙값 1.000,
+  //      0.99~1.01 구간 671건). 그래서 계열 총계 = max(ltd, nc+cur)이고, 유동 차입금
+  //      중 **계열 밖 부분만** 더한다.
+  //  (b) 비유동 태그가 **없으면** `LongTermDebt`는 대차대조표의 `Long-term debt` 줄,
+  //      즉 유동분을 뺀 비유동 잔액이다. 신고서 원문으로 확인: QCOM 2026-06-28
+  //      (`Short-term debt 2,489` + `Long-term debt 12,781`), TSLA 2026-06-30
+  //      (1,340 + 7,721), ADBE 2026-05-29 (1,843 + 4,802), XRX 2026-06-30 (70 + 4,153),
+  //      MTCH 2026-06-30 (`Current maturities … 0` + `Long-term debt, net 3,551,878`),
+  //      SWKS 2025-10-03(combined 995.8 = 496.4 + 499.4). 그래서 유동 부분을 그대로
+  //      더한다.
+  const ltNon = tags.get(LONG_TERM_DEBT_NONCURRENT_TAG)
+  const ltCur = tags.get(LONG_TERM_DEBT_CURRENT_TAG)
+  const ltTotal = tags.get(LONG_TERM_DEBT_TOTAL_TAG)
+  const debtCurrent = tags.get(DEBT_CURRENT_TOTAL_TAG)
+  const hasTier2 = typeof ltNon === 'number' || typeof ltCur === 'number'
+    || typeof ltTotal === 'number' || typeof debtCurrent === 'number'
+  // 상품별 계열 합. 장기차입금 롤업이 디멘션 슬라이스로 오염됐을 때 진짜 총계는
+  // 이쪽이다(tags.ts SND 실사례) — 롤업과는 **더하지 않고 큰 쪽**을 쓴다.
+  const specific = specificFamilySum(tags)
+  if (hasTier2) {
+    const current = currentDebtPortion(tags)
+    if (typeof ltNon === 'number') {
+      const componentSum = ltNon + (ltCur ?? 0)
+      const familyValue = Math.max(ltTotal ?? 0, componentSum)
+      const familyTag = (ltTotal ?? 0) > componentSum
+        ? [LONG_TERM_DEBT_TOTAL_TAG]
+        : [LONG_TERM_DEBT_NONCURRENT_TAG, ...(typeof ltCur === 'number' ? [LONG_TERM_DEBT_CURRENT_TAG] : [])]
+      // 비유동 태그를 명시한 신고자는 대차대조표의 총계 개념을 쓰고 있으므로 상품별
+      // 계열은 그 안에 이미 들어 있다고 본다(부채 태그 확장 과제의 가산성 보장) —
+      // 상품합과의 최댓값 비교는 롤업이 오염될 수 있는 (b)·(c) 경로에서만 한다.
+      const core = { value: familyValue, tag: familyTag }
+      const outside = current === null
+        ? 0
+        : Math.max(0, current.value - current.insideLongTermFamily)
+      return nonZero({
+        value: core.value + outside,
+        tag: joinTags(outside > 0 && current !== null ? [...core.tag, current.tag] : core.tag),
+      })
+    }
+    if (typeof ltTotal === 'number') {
+      const core = specific !== null && specific.value > ltTotal
+        ? specific
+        : { value: ltTotal, tag: LONG_TERM_DEBT_TOTAL_TAG }
+      return nonZero({
+        value: core.value + (current?.value ?? 0),
+        tag: joinTags([core.tag, ...(current ? [current.tag] : [])]),
+      })
+    }
+    if (current !== null) {
+      return nonZero(specific !== null && specific.value > current.value
+        ? specific
+        : { value: current.value, tag: current.tag })
+    }
+  }
+
+  // 티어 3 — 상품별 이름으로만 태깅한 발행사. 상품별 계열은 서로 다른 상품이라
+  // 합산한다. 단기차입금은 장기차입금에 포함될 수 없으므로 언제나 더한다.
+  // (tags.ts의 TLS·SND·XEL 실사례 참고)
   const shortTerm = firstOf(tags, [...SHORT_TERM_BORROWING_TAGS])
-  if (core === null && shortTerm === null) return null
+  if (specific === null && shortTerm === null) return null
 
-  const value = (core?.value ?? 0) + (shortTerm?.value ?? 0)
-
-  // 티어 4가 0을 내면 그것은 "부채가 없다"가 아니라 "이 상품들이 비어 있다"이다.
-  // 티어 1~3의 태그는 대차대조표의 총계 개념이라 0이 곧 신고된 사실이지만, 티어 4가
-  // 보는 것은 상품 단위 잔액이라 정의상 부분적이다 — 다른 이름으로 신고된 부채가
-  // 남아 있어도 알 수 없다. 실측(CDNS, Cadence Design Systems): 2024-12-31 대차대조표에
-  // 선순위채 약 $2.5B이 있는데 그 기간에는 추적 가능한 부채 태그가 하나도 없고,
-  // 400일 소급으로 2023-12-31의 `LinesOfCreditCurrent`=0(리볼버 미인출)만 딸려 들어와
-  // 총부채가 0으로 확정됐다. 확신에 찬 틀린 0은 정직한 null보다 나쁘다.
-  if (value === 0) return null
-
-  return {
-    value,
-    tag: [core?.tag, shortTerm?.tag].filter(Boolean).join('+'),
-  }
+  return nonZero({
+    value: (specific?.value ?? 0) + (shortTerm?.value ?? 0),
+    tag: [specific?.tag, shortTerm?.tag].filter(Boolean).join('+'),
+  })
 }
 
 export type ResolvedStock = {
@@ -713,18 +1004,15 @@ export type ResolvedStock = {
   sharesOutstanding: number | null
 }
 
-/** 현금성자산 합산 그룹 — 서로 더해지므로 같은 대차대조표에서 와야 한다(F4). */
-const CASH_TAGS: ReadonlySet<string> = new Set([
-  'CashAndCashEquivalentsAtCarryingValue',
-  'ShortTermInvestments',
-])
-
 export function resolveStock(
   allTags: Map<string, number>,
-  dates?: ReadonlyMap<string, string>,
+  ctx?: InstantContext,
 ): { fields: ResolvedStock; used: Record<string, string> } {
   const used: Record<string, string> = {}
-  const tags = coherentGroup(allTags, dates, CASH_TAGS)
+  // 현금성자산 + 단기투자자산도 서로 더해지므로 같은 규칙을 쓴다(F4). 두 태그는
+  // 대차대조표의 서로 다른 줄이라 한쪽의 존재가 다른 쪽의 부재를 증언하지 못한다 —
+  // 신고자가 같은 신고서에서 부재를 단언했을 때만 버린다.
+  const tags = carryForwardGroup(allTags, ctx, CASH_TAG_SHAPES)
 
   let cash: number | null = null
   const cce = tags.get('CashAndCashEquivalentsAtCarryingValue')
@@ -745,7 +1033,7 @@ export function resolveStock(
   // "fixing" it by accident.
   // See test: 단기투자자산만 있고 현금성자산이 없으면 null
 
-  const debt = resolveTotalDebt(allTags, dates)
+  const debt = resolveTotalDebt(allTags, ctx)
   const totalDebt = debt?.value ?? null
   if (debt) used.totalDebt = debt.tag
 

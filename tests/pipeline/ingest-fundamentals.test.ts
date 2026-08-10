@@ -7,7 +7,8 @@ import { getRawDb, runMigrations } from '@/db/client'
 import { parseConfig } from '@/config'
 import { ingestFundamentals } from '@/pipeline/jobs/ingest-fundamentals'
 import {
-  getFinancialsFor, selectStaleCiks, selectThinCoverageCiks, selectTagSetStaleCiks,
+  getFinancialsFor, selectApiStaleCiks, selectStaleCiks, selectThinCoverageCiks,
+  selectTagSetStaleCiks,
   markTagSetFetched,
 } from '@/db/repositories/financials'
 import { TRACKED_TAGS, TRACKED_TAGS_FINGERPRINT } from '@/providers/fundamental/tags'
@@ -526,5 +527,60 @@ describe('ingestFundamentals — 태그 집합이 바뀌면 실제로 재조회�
     })
     expect(stats.apiEmptyParse).toBe(0)
     expect(selectTagSetStaleCiks(changedRaw, TRACKED_TAGS_FINGERPRINT)).not.toContain(CIK)
+  })
+})
+
+
+// F6 잔여 구멍: 세 그물 중 어느 것도 **API 데이터 자체의 신선도**를 보지 않는다.
+// 태그 집합을 바꾸지 않는 파서 회귀가 들어오면 bulk가 filed_date를 계속 최신으로
+// 채우고(선택자 1), API 행은 누적이라 두껍고(선택자 2), 지문은 그대로다(선택자 3) —
+// 재조회가 영원히 일어나지 않는다.
+describe('selectApiStaleCiks — API 사실의 신선도 (F6 네 번째 그물)', () => {
+  const API_STALE_CIK = 5100000
+  const API_FRESH_CIK = 5100001
+  const NO_API_CIK = 5100002
+
+  beforeAll(() => {
+    for (const [cik, ticker] of [
+      [API_STALE_CIK, 'APISTALE'], [API_FRESH_CIK, 'APIFRESH'], [NO_API_CIK, 'NOAPI'],
+    ] as const) {
+      raw.prepare(
+        `INSERT INTO companies (cik, ticker, name, is_active, first_seen, last_updated)
+         VALUES (?, ?, ?, 1, '2026-08-09', '2026-08-09')`,
+      ).run(cik, ticker, `${ticker} CORP`)
+      raw.prepare(
+        `INSERT INTO company_industry (cik, industry_slug, theme_slug, is_primary, source)
+         VALUES (?, 'ai-infrastructure', 'ai-software-semi', 1, 'override')`,
+      ).run(cik)
+    }
+    const put = raw.prepare(
+      `INSERT INTO financial_facts
+         (cik, tag, unit, period_start, period_end, qtrs, value, form, filed_date, accession, source)
+       VALUES (?, ?, 'USD', NULL, ?, 1, 1, '10-Q', ?, ?, ?)`,
+    )
+    // API는 2025-01-15에 멈췄지만 bulk가 매 분기 최신 filed_date를 채워 넣는다.
+    for (let i = 0; i < 300; i++) {
+      put.run(API_STALE_CIK, `Tag${i}`, '2025-01-01', '2025-01-15', `as-a-${i}`, 'api')
+    }
+    put.run(API_STALE_CIK, 'BulkTag', '2026-06-30', '2026-08-01', 'as-b', 'bulk')
+    for (let i = 0; i < 300; i++) {
+      put.run(API_FRESH_CIK, `Tag${i}`, '2026-06-30', '2026-08-01', `af-a-${i}`, 'api')
+    }
+    put.run(NO_API_CIK, 'BulkTag', '2026-06-30', '2026-08-01', 'na-b', 'bulk')
+  })
+
+  it('API 신고일이 낡은 회사를 고른다 — bulk가 최신이라 기존 그물은 놓친다', () => {
+    expect(selectApiStaleCiks(raw, '2026-08-09', 120)).toContain(API_STALE_CIK)
+    // 기존 세 그물은 전부 이 회사를 놓친다.
+    expect(selectStaleCiks(raw, '2026-08-09', 120)).not.toContain(API_STALE_CIK)
+    expect(selectThinCoverageCiks(raw, 200)).not.toContain(API_STALE_CIK)
+  })
+
+  it('API 사실이 하나도 없는 회사도 고른다 (파서가 응답을 통째로 버린 코호트)', () => {
+    expect(selectApiStaleCiks(raw, '2026-08-09', 120)).toContain(NO_API_CIK)
+  })
+
+  it('API 신고일이 최신이면 고르지 않는다', () => {
+    expect(selectApiStaleCiks(raw, '2026-08-09', 120)).not.toContain(API_FRESH_CIK)
   })
 })

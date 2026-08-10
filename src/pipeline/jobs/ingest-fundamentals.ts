@@ -4,8 +4,8 @@ import type { BulkFundamentalProvider, CompanyFactsProvider } from '@/providers/
 import { normalizeFacts } from '@/providers/fundamental/normalizer'
 import { listUniverseCiks } from '@/db/repositories/companies'
 import {
-  insertFacts, getFacts, replaceFinancials, selectStaleCiks, selectThinCoverageCiks,
-  selectTagSetStaleCiks, markTagSetFetched,
+  insertFacts, getFacts, replaceFinancials, selectApiStaleCiks, selectStaleCiks,
+  selectThinCoverageCiks, selectTagSetStaleCiks, markTagSetFetched,
 } from '@/db/repositories/financials'
 import { TRACKED_TAGS_FINGERPRINT } from '@/providers/fundamental/tags'
 import { recentQuarters } from '@/pipeline/quarters'
@@ -55,10 +55,16 @@ export async function ingestFundamentals(deps: FundamentalsDeps): Promise<JobSta
     //     파싱 시점에 필터링하므로 목록을 늘려도 (1)·(2)로는 기존 회사가 절대 재조회되지
     //     않는다 — 신고일도 최신이고 사실 수도 충분하기 때문이다. 이 기준이 없으면 앞으로
     //     태그를 추가할 때마다 그 추가가 조용히 무효가 된다.
+    //  4) selectApiStaleCiks — **API 사실 자체의 신선도**. (1)은 bulk가 채운 신고일 때문에,
+    //     (2)는 누적 개수라서, (3)은 태그 집합이 그대로라서 — 셋 중 어느 것도 태그 집합을
+    //     바꾸지 않는 파서 회귀를 감지하지 못한다. 이 기준만이 "API 데이터가 실제로 언제
+    //     갱신됐는가"를 본다(financials.ts 주석 참고).
     const stale = selectStaleCiks(raw, asOf, INCREMENTAL_STALE_DAYS)
+    const apiStale = selectApiStaleCiks(raw, asOf, INCREMENTAL_STALE_DAYS)
     const thinCoverage = selectThinCoverageCiks(raw, cfg.ingest.thin_coverage_min_facts)
     const tagSetStale = selectTagSetStaleCiks(raw, TRACKED_TAGS_FINGERPRINT)
-    const toFetch = [...new Set([...stale, ...thinCoverage, ...tagSetStale])].sort((a, b) => a - b)
+    const toFetch = [...new Set([...stale, ...apiStale, ...thinCoverage, ...tagSetStale])]
+      .sort((a, b) => a - b)
 
     let apiFacts = 0
     let apiFailed = 0
@@ -149,6 +155,7 @@ export async function ingestFundamentals(deps: FundamentalsDeps): Promise<JobSta
       quartersLoaded,
       bulkFacts,
       staleCompanies: stale.length,
+      apiStaleCompanies: apiStale.length,
       thinCoverageCompanies: thinCoverage.length,
       tagSetStaleCompanies: tagSetStale.length,
       tagsFingerprint: TRACKED_TAGS_FINGERPRINT,

@@ -207,7 +207,11 @@ function buildPeriod(
   const used: Record<string, string> = { ...flow.used }
   adjust?.(fields, used)
   const instant = pickInstant(idx, periodEnd)
-  const stock = resolveStock(instant.values, instant.dates)
+  const stock = resolveStock(instant.values, {
+    dates: instant.dates,
+    absent: idx.absent,
+    instant: idx.instant,
+  })
   applyShareCoverageGuard(stock.fields, stock.used, basicSharesAsOf(idx, periodEnd))
   sourceTags[`${periodType}:${periodEnd}`] = { ...used, ...stock.used }
   return {

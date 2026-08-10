@@ -452,7 +452,7 @@ describe('resolveStock', () => {
 // 신설됐다 — 아래 첫 describe가 "확장이 순수하게 가산적"임을(기존에 값이 나오던
 // 조합은 하나도 변하지 않음) 명시적으로 못 박는다.
 describe('resolveTotalDebt — 기존 조합은 값이 변하지 않는다 (가산적 확장 회귀)', () => {
-  it('티어 1에서 상품별 롤업 태그는 결과를 건드리지 못한다 (단기차입금만 예외)', () => {
+  it('장·단기 합산 총계 태그가 있으면 그것이 총부채다 (구성요소 조립과 값이 같다)', () => {
     const r = resolveTotalDebt(new Map([
       ['LongTermDebtNoncurrent', 800], ['LongTermDebtCurrent', 200],
       // 상품별/롤업 태그는 티어 1 결과를 건드리면 안 된다.
@@ -462,10 +462,9 @@ describe('resolveTotalDebt — 기존 조합은 값이 변하지 않는다 (가�
       // 유동 부분은 총계 `DebtCurrent`(250)와 구성요소 합(200+400=600) 중 큰 쪽.
       ['ShortTermBorrowings', 400], ['DebtCurrent', 250],
     ]))
-    expect(r).toEqual({
-      value: 1400,
-      tag: 'LongTermDebtNoncurrent+LongTermDebtCurrent+ShortTermBorrowings',
-    })
+    // 회사 자신의 장·단기 합산 총계(1400)가 구성요소 조립(800+200+400)과 정확히
+    // 일치한다 — 두 관행 중 어느 쪽에서도 옳은 것은 합산 총계 쪽이므로 그것을 쓴다.
+    expect(r).toEqual({ value: 1400, tag: 'DebtLongtermAndShorttermCombinedAmount' })
   })
 
   it('비유동만 있어도 그것만 쓴다', () => {
@@ -473,9 +472,12 @@ describe('resolveTotalDebt — 기존 조합은 값이 변하지 않는다 (가�
       .toEqual({ value: 800, tag: 'LongTermDebtNoncurrent' })
   })
 
-  it('DebtCurrent 폴백이 새 티어보다 우선한다', () => {
+  it('DebtCurrent가 있어도 LongTermDebt 롤업에 닿는다 (F2 심층 회귀)', () => {
+    // 옛 동작은 `DebtCurrent`에서 조기 반환해 300만 냈다. 실측(TSLA 2026-06-30):
+    // `DebtCurrent` 1,340,000,000 / `LongTermDebt` 7,721,000,000이고 신고서
+    // 대차대조표는 유동 1,418 / 비유동 7,924(리스 포함)로 둘을 따로 적는다.
     expect(resolveTotalDebt(new Map([['DebtCurrent', 300], ['LongTermDebt', 7000]])))
-      .toEqual({ value: 300, tag: 'DebtCurrent' })
+      .toEqual({ value: 7300, tag: 'LongTermDebt+DebtCurrent' })
   })
 
   it('부채 개념이 하나도 없으면 null — 0으로 가정하지 않는다', () => {
@@ -557,12 +559,10 @@ describe('resolveTotalDebt — 상품별 이름으로만 태깅한 발행사 (�
     ]))).toBeNull()
   })
 
-  it('티어 1~3의 0은 신고된 총계이므로 그대로 0이다', () => {
-    expect(resolveTotalDebt(new Map([['LongTermDebtNoncurrent', 0]])))
-      .toEqual({ value: 0, tag: 'LongTermDebtNoncurrent' })
-    expect(resolveTotalDebt(new Map([['DebtCurrent', 0]])))
-      .toEqual({ value: 0, tag: 'DebtCurrent' })
+  it('총부채 0은 어느 티어에서도 null이다 (MTCH 2026-06-30 회귀)', () => {
+    expect(resolveTotalDebt(new Map([['LongTermDebtNoncurrent', 0]]))).toBeNull()
+    expect(resolveTotalDebt(new Map([['DebtCurrent', 0]]))).toBeNull()
     expect(resolveTotalDebt(new Map([['DebtLongtermAndShorttermCombinedAmount', 0]])))
-      .toEqual({ value: 0, tag: 'DebtLongtermAndShorttermCombinedAmount' })
+      .toBeNull()
   })
 })
