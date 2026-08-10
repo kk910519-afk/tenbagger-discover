@@ -79,6 +79,35 @@ beforeAll(() => {
      VALUES (503, '2026-08-08', 20, 50000000, 1000000000, 'diluted_fallback')`,
   ).run()
 
+  // Finding 1: TTM 재무 일부가 누적 공시 차분(cumulative_diff)으로 유도된 회사 —
+  // FCF Margin에만 안내가 붙고 Gross Margin/Revenue에는 붙지 않아야 한다(ocf만 유도).
+  raw.prepare(
+    `INSERT INTO companies (cik, ticker, name, sic, exchange, is_active, first_seen, last_updated)
+     VALUES (504, 'DERIVEDCO', 'Derived Co', '7372', 'Q', 1, '2026-08-09', '2026-08-09')`,
+  ).run()
+  raw.prepare(
+    `INSERT INTO company_industry (cik, industry_slug, theme_slug, is_primary, source)
+     VALUES (504, 'ind1', 'theme1', 1, 'sic')`,
+  ).run()
+  raw.prepare(
+    `INSERT INTO financials (cik, period_end, period_type, revenue, gross_profit,
+                             operating_income, ocf, capex, fcf, cash, total_debt,
+                             source_tags, computed_at)
+     VALUES (504, '2026-06-27', 'TTM', 1000, 600, 200, 150, 50, 100, 300, 20, ?,
+             '2026-08-09T00:00:00.000Z')`,
+  ).run(
+    JSON.stringify({
+      revenue: 'Revenues',
+      grossProfit: 'GrossProfit',
+      operatingIncome: 'OperatingIncomeLoss',
+      ocf: 'cumulative_diff',
+      capex: 'PaymentsToAcquirePropertyPlantAndEquipment',
+      cash: 'CashAndCashEquivalentsAtCarryingValue',
+      totalDebt: 'DebtCurrent',
+      derived: 'cumulative_diff@2026-06-27',
+    }),
+  )
+
   raw.close()
 })
 
@@ -157,5 +186,39 @@ describe('StockPage — Overview에 회사 정보(CompanyFacts) 블록이 있다
     )!
     const dd = dt.nextElementSibling as HTMLElement
     expect(dd.textContent).toBe('—')
+  })
+})
+
+/**
+ * 최종 리뷰 Finding 1: TTM 재무가 누적 공시 차분으로 유도됐는데도 화면에 아무 표시가
+ * 없었다. DERIVEDCO는 ocf만 cumulative_diff로 유도된 상태 — FCF Margin 타일에만
+ * "계산됨" 안내가 붙고, 그 유도와 무관한 Gross Margin/Revenue/Cash 타일에는 붙지
+ * 않아야 "현금만 유도됐는데 매출도 유도된 것처럼" 보이는 일이 없다.
+ */
+describe('StockPage — Finding 1: TTM 유도 필드는 그 필드에만 안내가 붙는다', () => {
+  function ddOf(container: HTMLElement, label: string): HTMLElement {
+    const dt = Array.from(container.querySelectorAll('dt')).find((el) => el.textContent === label)!
+    return dt.nextElementSibling as HTMLElement
+  }
+
+  it('ocf만 유도된 회사는 FCF Margin에 "계산됨" 안내가 붙는다', async () => {
+    const jsx = await StockPage({ params: paramsFor('DERIVEDCO') })
+    const { container } = render(jsx)
+    expect(ddOf(container, 'FCF Margin').textContent).toContain('계산됨')
+    expect(ddOf(container, 'FCF Margin').textContent).toContain('누적 공시 간 차분')
+  })
+
+  it('ocf만 유도된 회사라도 Gross Margin/Revenue/Cash에는 안내가 붙지 않는다', async () => {
+    const jsx = await StockPage({ params: paramsFor('DERIVEDCO') })
+    const { container } = render(jsx)
+    expect(ddOf(container, 'Gross Margin').textContent).not.toContain('계산됨')
+    expect(ddOf(container, 'Revenue (TTM)').textContent).not.toContain('계산됨')
+    expect(ddOf(container, 'Cash').textContent).not.toContain('계산됨')
+  })
+
+  it('완전히 보고된 회사(CLEANCO)는 어디에도 "계산됨" 안내가 뜨지 않는다', async () => {
+    const jsx = await StockPage({ params: paramsFor('CLEANCO') })
+    const { container } = render(jsx)
+    expect(container.textContent).not.toContain('계산됨')
   })
 })

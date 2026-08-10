@@ -119,6 +119,18 @@ describe('getStockDetail', () => {
     expect(d.quality.totalDebt).toBe(700)
   })
 
+  // Finding 1: financials.source_tags가 아예 없는 행(이 fixture처럼 컬럼을 채우지 않은
+  // 경우 NULL)은 어느 필드도 유도된 것으로 잘못 표시하면 안 된다.
+  it('source_tags가 없으면 모든 유도 플래그가 false다', () => {
+    const d = detail()
+    expect(d.quality.grossMarginDerived).toBe(false)
+    expect(d.quality.operatingMarginDerived).toBe(false)
+    expect(d.quality.fcfMarginDerived).toBe(false)
+    expect(d.quality.cashDerived).toBe(false)
+    expect(d.quality.totalDebtDerived).toBe(false)
+    expect(d.quality.revenueDerived).toBe(false)
+  })
+
   it('팩터를 배점 내림차순으로 준다', () => {
     const keys = detail().factors.map((f) => f.key)
     expect(keys[0]).toBe('revenue_growth')   // weight 20

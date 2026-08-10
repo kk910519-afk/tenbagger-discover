@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3'
-import type { Category, FactorStatus, FinancialPeriod, SharesBasis } from '@/domain/types'
+import { DERIVED_SOURCE_TAG, type Category, type FactorStatus, type FinancialPeriod, type SharesBasis } from '@/domain/types'
 import { grossMargin, operatingMargin, fcfMargin } from '@/domain/metrics'
 import { loadConfig } from '@/config'
 import type {
@@ -99,11 +99,19 @@ export type StockDetail = {
   growth: { revenueGrowth: number | null; revenueAcceleration: number | null }
   quality: {
     grossMargin: number | null
+    /** grossMargin 계산에 쓰인 revenue/grossProfit 중 하나라도 신고된 분기값이 아니라
+     * 누적 기간 차분으로 유도됐으면 true. 값이 null이면 애초에 계산이 안 됐으므로 false다. */
+    grossMarginDerived: boolean
     operatingMargin: number | null
+    operatingMarginDerived: boolean
     fcfMargin: number | null
+    fcfMarginDerived: boolean
     cash: number | null
+    cashDerived: boolean
     totalDebt: number | null
+    totalDebtDerived: boolean
     revenue: number | null
+    revenueDerived: boolean
   }
   factors: FactorView[]
   flags: FlagView[]
@@ -218,11 +226,29 @@ export function getStockDetail(
               net_income AS netIncome, ocf, capex, fcf, cash, total_debt AS totalDebt,
               equity, shares_diluted AS sharesDiluted,
               shares_outstanding AS sharesOutstanding, sbc, rd_expense AS rdExpense,
-              computed_at AS computedAt
+              computed_at AS computedAt, source_tags AS sourceTags
        FROM financials WHERE cik = ? AND period_type = 'TTM'
        ORDER BY period_end DESC LIMIT 1`,
     )
-    .get(head.cik) as (FinancialPeriod & { computedAt: string }) | undefined
+    .get(head.cik) as
+    | (FinancialPeriod & { computedAt: string; sourceTags: string | null })
+    | undefined
+
+  // financials.source_tags는 (period_type, period_end) 행 하나에 대해 필드별로 어느 XBRL
+  // 태그를 썼는지 기록한다 — 그 필드가 회사가 신고한 분기값이 아니라 누적 기간(YTD/연간)
+  // 차분으로 유도됐으면 태그 자리에 DERIVED_SOURCE_TAG가 들어간다(normalizer.ts). TTM 행은
+  // 4개 분기의 합이므로, 화면에 보이는 값은 그 4개 필드 중 하나라도 유도됐으면 함께
+  // 유도된 것이다 — 필드 단위로 판정해야 "현금만 유도됐는데 매출도 유도된 것처럼" 보이는
+  // 일이 없다(리뷰 Finding 1).
+  let finTags: Record<string, string> = {}
+  if (fin?.sourceTags) {
+    try {
+      finTags = JSON.parse(fin.sourceTags) as Record<string, string>
+    } catch {
+      finTags = {}
+    }
+  }
+  const isDerived = (...fields: string[]) => fields.some((f) => finTags[f] === DERIVED_SOURCE_TAG)
 
   const scoreAsOf = head.asOf
   const factors = scoreAsOf
@@ -284,6 +310,13 @@ export function getStockDetail(
         }
       : null
 
+  const grossMarginValue = grossMargin(fin)
+  const operatingMarginValue = operatingMargin(fin)
+  const fcfMarginValue = fcfMargin(fin)
+  const cashValue = fin?.cash ?? null
+  const totalDebtValue = fin?.totalDebt ?? null
+  const revenueValue = fin?.revenue ?? null
+
   return {
     cik: head.cik,
     ticker: head.ticker,
@@ -312,12 +345,18 @@ export function getStockDetail(
       revenueAcceleration: factorRaw('revenue_acceleration'),
     },
     quality: {
-      grossMargin: grossMargin(fin),
-      operatingMargin: operatingMargin(fin),
-      fcfMargin: fcfMargin(fin),
-      cash: fin?.cash ?? null,
-      totalDebt: fin?.totalDebt ?? null,
-      revenue: fin?.revenue ?? null,
+      grossMargin: grossMarginValue,
+      grossMarginDerived: grossMarginValue !== null && isDerived('revenue', 'grossProfit'),
+      operatingMargin: operatingMarginValue,
+      operatingMarginDerived: operatingMarginValue !== null && isDerived('revenue', 'operatingIncome'),
+      fcfMargin: fcfMarginValue,
+      fcfMarginDerived: fcfMarginValue !== null && isDerived('revenue', 'ocf', 'capex'),
+      cash: cashValue,
+      cashDerived: cashValue !== null && isDerived('cash'),
+      totalDebt: totalDebtValue,
+      totalDebtDerived: totalDebtValue !== null && isDerived('totalDebt'),
+      revenue: revenueValue,
+      revenueDerived: revenueValue !== null && isDerived('revenue'),
     },
     factors,
     flags: flagRows.map((f) => ({

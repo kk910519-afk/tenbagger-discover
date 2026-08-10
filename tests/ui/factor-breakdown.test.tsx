@@ -172,10 +172,14 @@ describe('StrengthWeakness — 배점이 아니라 fill ratio(획득/배점)로 
   })
 
   it('NO_DATA/NOT_IMPLEMENTED 팩터는 비교 대상에서 제외된다', () => {
+    // 스코어링된 팩터가 남은 개수(2개)로 비교가 성립하도록 gross_margin도 함께 둔다 —
+    // revenue_growth 하나만 남으면(n=1) 비교할 상대가 없어 패널 자체가 비므로,
+    // "제외된다"는 이 테스트의 취지를 확인하려면 최소 2개가 필요하다.
     const factors: FactorView[] = [
       factor({ key: 'balance_sheet', status: 'NO_DATA', points: null, percentile: null }),
       factor({ key: 'institutional_insider', status: 'NOT_IMPLEMENTED', points: null, percentile: null, weight: 5 }),
       factor({ key: 'revenue_growth', weight: 20, points: 16 }),
+      factor({ key: 'gross_margin', weight: 10, points: 2 }),
     ]
     const { container } = render(<StrengthWeakness factors={factors} />)
     expect(container.textContent).not.toContain('재무 안정성')
@@ -195,5 +199,82 @@ describe('StrengthWeakness — 배점이 아니라 fill ratio(획득/배점)로 
     const factors: FactorView[] = [factor({ key: 'zero_weight', weight: 0, points: 0 })]
     const { container } = render(<StrengthWeakness factors={factors} />)
     expect(container.firstChild).toBeNull()
+  })
+})
+
+/** 리스트에서 렌더된 팩터 라벨을 순서대로 뽑는다. h3 다음의 ul 안 li 텍스트에서 % 부분을 뗀다. */
+function labelsIn(container: HTMLElement, heading: 'Strength' | 'Weakness'): string[] {
+  const h3s = Array.from(container.querySelectorAll('h3'))
+  const h3 = h3s.find((el) => el.textContent === heading)
+  if (!h3) return []
+  const ul = h3.parentElement!.querySelector('ul')!
+  return Array.from(ul.querySelectorAll('li')).map((li) => li.querySelector('span')!.textContent ?? '')
+}
+
+describe('StrengthWeakness — Finding 2: 같은 팩터가 Strength/Weakness에 동시에 뜨면 안 된다', () => {
+  // fill ratio가 서로 다른 n개의 SCORED 팩터를 만든다. key는 f0(가장 강함) ~ f(n-1)(가장 약함).
+  function scoredFactors(n: number): FactorView[] {
+    return Array.from({ length: n }, (_, i) =>
+      factor({ key: `f${i}`, weight: 100, points: 100 - i }),
+    )
+  }
+
+  it('스코어링된 팩터가 1개면(비교 상대 없음) 패널을 렌더링하지 않는다', () => {
+    const { container } = render(<StrengthWeakness factors={scoredFactors(1)} />)
+    expect(container.firstChild).toBeNull()
+  })
+
+  it('2개면 각 칸에 1개씩, 겹치지 않는다', () => {
+    const { container } = render(<StrengthWeakness factors={scoredFactors(2)} />)
+    const strength = labelsIn(container, 'Strength')
+    const weakness = labelsIn(container, 'Weakness')
+    expect(strength).toEqual(['f0'])
+    expect(weakness).toEqual(['f1'])
+  })
+
+  it('3개면(구 버그 재현 케이스, 리뷰 ACOG) 각 칸에 1개씩만 채우고 가운데는 어느 쪽에도 넣지 않는다', () => {
+    const { container } = render(<StrengthWeakness factors={scoredFactors(3)} />)
+    const strength = labelsIn(container, 'Strength')
+    const weakness = labelsIn(container, 'Weakness')
+    expect(strength).toEqual(['f0'])
+    expect(weakness).toEqual(['f2'])
+    expect(container.textContent).not.toContain('f1')
+  })
+
+  it('4개면 각 칸에 2개씩, 전부 소진되고 겹치지 않는다', () => {
+    const { container } = render(<StrengthWeakness factors={scoredFactors(4)} />)
+    expect(labelsIn(container, 'Strength')).toEqual(['f0', 'f1'])
+    expect(labelsIn(container, 'Weakness')).toEqual(['f3', 'f2'])
+  })
+
+  it('5개면(리뷰 ABEO 유형) 각 칸에 2개씩만 채우고 가운데 하나는 빠진다', () => {
+    const { container } = render(<StrengthWeakness factors={scoredFactors(5)} />)
+    expect(labelsIn(container, 'Strength')).toEqual(['f0', 'f1'])
+    expect(labelsIn(container, 'Weakness')).toEqual(['f4', 'f3'])
+    expect(container.textContent).not.toContain('f2')
+  })
+
+  it('6개면 각 칸에 3개씩(기존 동작 유지)', () => {
+    const { container } = render(<StrengthWeakness factors={scoredFactors(6)} />)
+    expect(labelsIn(container, 'Strength')).toEqual(['f0', 'f1', 'f2'])
+    expect(labelsIn(container, 'Weakness')).toEqual(['f5', 'f4', 'f3'])
+  })
+
+  it('9개(전체 팩터가 다 채점된 경우)면 상위 3/하위 3만 보여주고 중간 3개는 뺀다', () => {
+    const { container } = render(<StrengthWeakness factors={scoredFactors(9)} />)
+    expect(labelsIn(container, 'Strength')).toEqual(['f0', 'f1', 'f2'])
+    expect(labelsIn(container, 'Weakness')).toEqual(['f8', 'f7', 'f6'])
+  })
+
+  it('0~12개 전 구간에서 Strength와 Weakness 목록의 교집합이 비어 있다', () => {
+    for (let n = 0; n <= 12; n++) {
+      const { container, unmount } = render(<StrengthWeakness factors={scoredFactors(n)} />)
+      const strength = new Set(labelsIn(container, 'Strength'))
+      const weakness = labelsIn(container, 'Weakness')
+      for (const w of weakness) {
+        expect(strength.has(w), `n=${n}: "${w}"가 Strength와 Weakness에 동시에 존재`).toBe(false)
+      }
+      unmount()
+    }
   })
 })

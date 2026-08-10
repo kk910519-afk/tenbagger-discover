@@ -1,6 +1,6 @@
 import type { FactorView } from '../_queries/stock'
 import { formatPct, formatUsd } from '../_lib/format'
-import { factorsByFillRatio } from '../_lib/strengths'
+import { factorsByFillRatio, splitStrengthWeakness } from '../_lib/strengths'
 import { ScoreBar } from './ScoreBar'
 import { Badge } from './Badge'
 
@@ -110,13 +110,16 @@ export function FactorBreakdown({ factors }: { factors: FactorView[] }) {
  * 강점/약점은 배점(절대 점수)이 아니라 배점 대비 획득 비율(fill ratio)로 가른다.
  * 5점 만점에 5점을 받은 팩터가 20점 만점에 12점을 받은 팩터보다 더 큰 강점이다.
  * 계산되지 않은 팩터(NO_DATA/NOT_IMPLEMENTED)는 비교 대상이 아니므로 제외한다.
+ *
+ * 상위/하위를 고르는 규칙은 splitStrengthWeakness에 있다 — 채점된 팩터가 6개 미만이면
+ * 같은 팩터가 두 칸에 동시에 뜨지 않도록 칸마다 최대 floor(n/2)개만 채우고, 비교할
+ * 상대가 없으면(0~1개) 패널 자체를 렌더링하지 않는다.
  */
 export function StrengthWeakness({ factors }: { factors: FactorView[] }) {
   const scored = factorsByFillRatio(factors)
+  const { top, bottom } = splitStrengthWeakness(scored)
 
-  if (scored.length === 0) return null
-  const top = scored.slice(0, 3)
-  const bottom = scored.slice(-3).reverse()
+  if (top.length === 0) return null
 
   return (
     <div className="grid gap-6 sm:grid-cols-2">

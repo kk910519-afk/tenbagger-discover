@@ -1,5 +1,14 @@
 export type PeriodType = 'Q' | 'A' | 'TTM'
 
+/**
+ * financials.source_tags에서 해당 필드가 회사가 신고한 분기값이 아니라 누적 기간
+ * (YTD/연간) 차분으로 유도됐음을 나타내는 표식. providers/fundamental/normalizer.ts가
+ * 기록하고, app 레이어(_queries/stock.ts)가 화면에 유도 여부를 표시할 때 같은
+ * 상수로 비교한다 — 문자열 리터럴을 두 곳에 따로 적어두면 한쪽만 바뀌었을 때
+ * 조용히 어긋난다.
+ */
+export const DERIVED_SOURCE_TAG = 'cumulative_diff'
+
 export type FinancialPeriod = {
   periodEnd: string            // ISO date (YYYY-MM-DD)
   periodType: PeriodType

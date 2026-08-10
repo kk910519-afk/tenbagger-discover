@@ -2,7 +2,7 @@ import { notFound } from 'next/navigation'
 import { getRawDb } from '@/db/client'
 import { getStockDetail, type StockDetail } from '@/app/_queries/stock'
 import { formatUsd, formatPct, formatScore, formatDate, stalenessOf } from '@/app/_lib/format'
-import { Value, SignedValue } from '@/app/_components/Value'
+import { Value, SignedValue, DerivedNote } from '@/app/_components/Value'
 import { Badge, CategoryBadge } from '@/app/_components/Badge'
 import { MetricGrid } from '@/app/_components/MetricGrid'
 import { FactorBreakdown, StrengthWeakness } from '@/app/_components/FactorBreakdown'
@@ -125,7 +125,15 @@ export default async function StockPage({
                 />
               ),
             },
-            { label: 'Revenue (TTM)', value: <Value>{formatUsd(d.quality.revenue)}</Value> },
+            {
+              label: 'Revenue (TTM)',
+              value: (
+                <span className="block">
+                  <Value>{formatUsd(d.quality.revenue)}</Value>
+                  {d.quality.revenueDerived && <DerivedNote />}
+                </span>
+              ),
+            },
           ]}
         />
       </section>
@@ -134,17 +142,51 @@ export default async function StockPage({
         <h2 className="mb-2 text-sm text-[var(--color-text-dim)]">Quality</h2>
         <MetricGrid
           items={[
-            { label: 'Gross Margin', value: <Value>{formatPct(d.quality.grossMargin)}</Value> },
+            {
+              label: 'Gross Margin',
+              value: (
+                <span className="block">
+                  <Value>{formatPct(d.quality.grossMargin)}</Value>
+                  {d.quality.grossMarginDerived && <DerivedNote />}
+                </span>
+              ),
+            },
             {
               label: 'Operating Margin',
-              value: <SignedValue value={d.quality.operatingMargin} text={formatPct(d.quality.operatingMargin)} />,
+              value: (
+                <span className="block">
+                  <SignedValue value={d.quality.operatingMargin} text={formatPct(d.quality.operatingMargin)} />
+                  {d.quality.operatingMarginDerived && <DerivedNote />}
+                </span>
+              ),
             },
             {
               label: 'FCF Margin',
-              value: <SignedValue value={d.quality.fcfMargin} text={formatPct(d.quality.fcfMargin)} />,
+              value: (
+                <span className="block">
+                  <SignedValue value={d.quality.fcfMargin} text={formatPct(d.quality.fcfMargin)} />
+                  {d.quality.fcfMarginDerived && <DerivedNote />}
+                </span>
+              ),
             },
-            { label: 'Cash', value: <Value>{formatUsd(d.quality.cash)}</Value> },
-            { label: 'Total Debt', value: <Value>{formatUsd(d.quality.totalDebt)}</Value> },
+            {
+              label: 'Cash',
+              value: (
+                <span className="block">
+                  <Value>{formatUsd(d.quality.cash)}</Value>
+                  {d.quality.cashDerived && <DerivedNote />}
+                </span>
+              ),
+            },
+            {
+              label: 'Total Debt',
+              value: (
+                <span className="block">
+                  <Value>{formatUsd(d.quality.totalDebt)}</Value>
+                  {d.quality.totalDebtDerived && <DerivedNote />}
+                </span>
+              ),
+            },
           ]}
         />
       </section>

@@ -148,6 +148,152 @@ describe('getStockDetail 스코어링 파이프라인 실행 전', () => {
  * 끝난 회사(점수 섹션은 정상)라도 밸류에이션은 독립적으로 INSUFFICIENT_DATA일 수 있다 —
  * 두 파이프라인 스텝이 서로 다른 데이터 요건을 갖기 때문이다.
  */
+/**
+ * 최종 리뷰 Finding 1: TTM 재무는 신고된 분기값이 아니라 누적 공시 간 차분(cumulative_diff)
+ * 으로 재구성될 수 있는데, 화면 어디에도 그 사실이 드러나지 않았다. financials.source_tags에
+ * 필드별로 기록된 provenance를 getStockDetail이 필드 단위로 해석해 quality.*Derived
+ * 플래그를 만드는지 검증한다 — "현금만 유도됐는데 매출도 유도된 것처럼" 보이면 안 된다.
+ */
+describe('getStockDetail Finding 1 — TTM 유도 필드를 필드 단위로 표시한다', () => {
+  function seedCompany(
+    db: ReturnType<typeof getRawDb>,
+    cik: number,
+    ticker: string,
+    sourceTags: Record<string, string>,
+  ) {
+    db.prepare(
+      `INSERT INTO themes (slug, name, display_order) VALUES ('ai-software-semi', 'AI', 1)`,
+    ).run()
+    db.prepare(
+      `INSERT INTO industries (slug, theme_slug, name)
+       VALUES ('semis', 'ai-software-semi', 'Semiconductors')`,
+    ).run()
+    db.prepare(
+      `INSERT INTO companies (cik, ticker, name, is_active, first_seen, last_updated)
+       VALUES (?, ?, ?, 1, '2026-08-09', '2026-08-09')`,
+    ).run(cik, ticker, `${ticker} Inc`)
+    db.prepare(
+      `INSERT INTO company_industry (cik, industry_slug, theme_slug, is_primary, source)
+       VALUES (?, 'semis', 'ai-software-semi', 1, 'sic')`,
+    ).run(cik)
+    db.prepare(
+      `INSERT INTO financials (cik, period_end, period_type, revenue, gross_profit,
+                               operating_income, ocf, capex, fcf, cash, total_debt,
+                               source_tags, computed_at)
+       VALUES (?, '2026-06-27', 'TTM', 1000, 600, 200, 150, 50, 100, 300, 20, ?,
+               '2026-08-09T00:00:00.000Z')`,
+    ).run(cik, JSON.stringify(sourceTags))
+  }
+
+  it('ocf만 cumulative_diff면 FCF Margin만 유도로 표시되고 매출/마진/현금은 아니다', () => {
+    const db = getRawDb(join(mkdtempSync(join(tmpdir(), 'tb-stock-derived1-')), 's.db'))
+    runMigrations(db)
+    seedCompany(db, 601, 'PARTDRV', {
+      revenue: 'Revenues',
+      grossProfit: 'GrossProfit',
+      operatingIncome: 'OperatingIncomeLoss',
+      ocf: 'cumulative_diff',
+      capex: 'PaymentsToAcquirePropertyPlantAndEquipment',
+      cash: 'CashAndCashEquivalentsAtCarryingValue',
+      totalDebt: 'DebtCurrent',
+      derived: 'cumulative_diff@2026-06-27',
+    })
+
+    const d = getStockDetail(db, 'PARTDRV', '2026-08-09')
+    db.close()
+
+    expect(d).not.toBeNull()
+    expect(d!.quality.fcfMarginDerived).toBe(true) // ocf가 유도됐으므로 fcf도 유도
+    expect(d!.quality.revenueDerived).toBe(false)
+    expect(d!.quality.grossMarginDerived).toBe(false)
+    expect(d!.quality.operatingMarginDerived).toBe(false)
+    expect(d!.quality.cashDerived).toBe(false)
+    expect(d!.quality.totalDebtDerived).toBe(false)
+  })
+
+  it('revenue가 cumulative_diff면 revenue를 쓰는 모든 지표가 유도로 표시되지만 현금/부채는 아니다', () => {
+    const db = getRawDb(join(mkdtempSync(join(tmpdir(), 'tb-stock-derived2-')), 's.db'))
+    runMigrations(db)
+    seedCompany(db, 602, 'REVDRV', {
+      revenue: 'cumulative_diff',
+      grossProfit: 'GrossProfit',
+      operatingIncome: 'OperatingIncomeLoss',
+      ocf: 'NetCashProvidedByUsedInOperatingActivities',
+      capex: 'PaymentsToAcquirePropertyPlantAndEquipment',
+      cash: 'CashAndCashEquivalentsAtCarryingValue',
+      totalDebt: 'DebtCurrent',
+      derived: 'cumulative_diff@2026-06-27',
+    })
+
+    const d = getStockDetail(db, 'REVDRV', '2026-08-09')
+    db.close()
+
+    expect(d).not.toBeNull()
+    expect(d!.quality.revenueDerived).toBe(true)
+    expect(d!.quality.grossMarginDerived).toBe(true)
+    expect(d!.quality.operatingMarginDerived).toBe(true)
+    expect(d!.quality.fcfMarginDerived).toBe(true)
+    expect(d!.quality.cashDerived).toBe(false)
+    expect(d!.quality.totalDebtDerived).toBe(false)
+  })
+
+  it('모든 필드가 직접 신고된 태그면 유도 플래그가 전부 false다(완전 보고 케이스)', () => {
+    const db = getRawDb(join(mkdtempSync(join(tmpdir(), 'tb-stock-derived3-')), 's.db'))
+    runMigrations(db)
+    seedCompany(db, 603, 'ALLRPT', {
+      revenue: 'Revenues',
+      grossProfit: 'GrossProfit',
+      operatingIncome: 'OperatingIncomeLoss',
+      ocf: 'NetCashProvidedByUsedInOperatingActivities',
+      capex: 'PaymentsToAcquirePropertyPlantAndEquipment',
+      cash: 'CashAndCashEquivalentsAtCarryingValue',
+      totalDebt: 'DebtCurrent',
+    })
+
+    const d = getStockDetail(db, 'ALLRPT', '2026-08-09')
+    db.close()
+
+    expect(d).not.toBeNull()
+    expect(d!.quality.revenueDerived).toBe(false)
+    expect(d!.quality.grossMarginDerived).toBe(false)
+    expect(d!.quality.operatingMarginDerived).toBe(false)
+    expect(d!.quality.fcfMarginDerived).toBe(false)
+    expect(d!.quality.cashDerived).toBe(false)
+    expect(d!.quality.totalDebtDerived).toBe(false)
+  })
+
+  it('source_tags가 깨진 JSON이어도 죽지 않고 유도되지 않은 것으로 안전하게 처리한다', () => {
+    const db = getRawDb(join(mkdtempSync(join(tmpdir(), 'tb-stock-derived4-')), 's.db'))
+    runMigrations(db)
+    db.prepare(
+      `INSERT INTO themes (slug, name, display_order) VALUES ('ai-software-semi', 'AI', 1)`,
+    ).run()
+    db.prepare(
+      `INSERT INTO industries (slug, theme_slug, name)
+       VALUES ('semis', 'ai-software-semi', 'Semiconductors')`,
+    ).run()
+    db.prepare(
+      `INSERT INTO companies (cik, ticker, name, is_active, first_seen, last_updated)
+       VALUES (604, 'BADJSON', 'BADJSON Inc', 1, '2026-08-09', '2026-08-09')`,
+    ).run()
+    db.prepare(
+      `INSERT INTO company_industry (cik, industry_slug, theme_slug, is_primary, source)
+       VALUES (604, 'semis', 'ai-software-semi', 1, 'sic')`,
+    ).run()
+    db.prepare(
+      `INSERT INTO financials (cik, period_end, period_type, revenue, gross_profit, source_tags, computed_at)
+       VALUES (604, '2026-06-27', 'TTM', 1000, 600, '{not valid json', '2026-08-09T00:00:00.000Z')`,
+    ).run()
+
+    const d = getStockDetail(db, 'BADJSON', '2026-08-09')
+    db.close()
+
+    expect(d).not.toBeNull()
+    expect(d!.quality.revenueDerived).toBe(false)
+    expect(d!.quality.grossMarginDerived).toBe(false)
+  })
+})
+
 describe('getStockDetail 밸류에이션이 INSUFFICIENT_DATA인 회사', () => {
   it('fair value가 없으면 price-to-fair-value/margin-of-safety도 null로 연쇄된다', () => {
     const db = getRawDb(join(mkdtempSync(join(tmpdir(), 'tb-stock-valedge-')), 's.db'))

@@ -1,4 +1,4 @@
-import type { FieldRejection, FinancialPeriod, PeriodType } from '@/domain/types'
+import { DERIVED_SOURCE_TAG, type FieldRejection, type FinancialPeriod, type PeriodType } from '@/domain/types'
 import { sumTTM } from '@/domain/growth'
 import { validatePeriod } from '@/domain/validate'
 import type { RawFact } from '../types.js'
@@ -26,7 +26,7 @@ const DAY_MS = 86_400_000
 const INSTANT_LOOKBACK_DAYS = 400
 
 /** 신고된 분기값이 아니라 누적 기간 차분으로 얻은 값임을 provenance에 남기는 표식 */
-const DERIVED_MARKER = 'cumulative_diff'
+const DERIVED_MARKER = DERIVED_SOURCE_TAG
 
 // TTM: 4개 분기 창의 처음과 끝 간격이 대략 3개 분기(약 9개월)여야 연속한 창으로 인정한다.
 const TTM_SPAN_MIN_DAYS = 240
