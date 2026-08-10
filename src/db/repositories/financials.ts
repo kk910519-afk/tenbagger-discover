@@ -3,6 +3,19 @@ import type { FinancialPeriod } from '@/domain/types'
 import type { RawFact } from '@/providers/types'
 import type { NormalizeResult } from '@/providers/fundamental/normalizer'
 
+// 왜 filed_date 동률에서 source도 봐야 하는가: ingest-fundamentals는 매 실행마다
+// bulk를 먼저 적재하고 같은 회계기간을 다루는 API(companyfacts)를 나중에 적재한다.
+// 같은 신고서(accession)에서 나온 두 값은 filed_date가 완전히 동일하므로, 예전의
+// "filed_date가 엄격히 더 커야 갱신" 규칙 아래에서는 API 값이 절대로 bulk 값을
+// 이길 수 없었다 — bulk가 먼저 자리를 잡으면 그걸로 영원히 굳어버린다. 그런데
+// 두 소스는 신뢰도가 같지 않다: SEC bulk(num.txt)는 `coreg`가 빈 문자열인
+// 디멘션 슬라이스(제품/세그먼트별 분해)를 연결 총계와 구별하지 못해 그대로
+// 통과시키는 반면(Apple 매출, Alphabet 영업이익 실사례), 기업별 API는 이 문제가
+// 없다. 그래서 filed_date가 같을 때는 API가 bulk를 대체하도록 허용하되, 그
+// 반대(bulk가 같은 날짜의 API를 대체하는 것)는 여전히 막는다. filed_date가
+// 진짜로 더 최신이면 소스와 무관하게 그 값이 이긴다 — 정정 신고가 항상 최우선.
+// source까지 같은 상태로 동률이면(같은 잡의 재실행 등) 갱신하지 않는다 — 먼저
+// 자리잡은 값을 그대로 유지하는 편이 재실행 때마다 결과가 흔들리지 않아 결정적이다.
 export function insertFacts(raw: Database.Database, facts: RawFact[]): number {
   const stmt = raw.prepare(
     `INSERT INTO financial_facts
@@ -15,7 +28,10 @@ export function insertFacts(raw: Database.Database, facts: RawFact[]): number {
        unit = excluded.unit,
        period_start = excluded.period_start,
        source = excluded.source
-     WHERE excluded.filed_date > financial_facts.filed_date`,
+     WHERE excluded.filed_date > financial_facts.filed_date
+        OR (excluded.filed_date = financial_facts.filed_date
+            AND excluded.source = 'api'
+            AND financial_facts.source = 'bulk')`,
   )
   let n = 0
   raw.transaction(() => {

@@ -58,6 +58,79 @@ describe('insertFacts — 같은 키는 filedDate가 늦은 값이 이긴다 (pe
   })
 })
 
+describe('insertFacts — filedDate 동률에서는 source가 결정한다 (Alphabet 영업이익 회귀)', () => {
+  // ingest-fundamentals는 매 실행마다 bulk를 먼저 적재하고, 같은 회계기간을
+  // 다루는 API(companyfacts)를 나중에 적재한다. 같은 신고서(accession)에서
+  // 나온 bulk 값과 API 값은 filed_date가 완전히 동일한 경우가 흔하다 — 이때
+  // "filed_date가 엄격히 더 커야 갱신"이라는 옛 규칙은 API 값이 절대 bulk
+  // 값을 이길 수 없게 만들었다(이 버그의 근본 원인). bulk의 num.txt는
+  // coreg가 빈 문자열인 디멘션 슬라이스(세그먼트/제품 분해)를 연결 총계와
+  // 구별하지 못하므로, bulk가 먼저 자리잡으면 오염된 값이 영원히 굳어버렸다.
+  const KEY = {
+    cik: CIK, tag: 'OperatingIncomeLoss', unit: 'USD', periodStart: '2025-01-01' as string | null,
+    periodEnd: '2025-12-31', qtrs: 4, form: '10-K',
+  }
+  function bulkFact(filedDate: string, value: number, accession: string): RawFact {
+    return { ...KEY, value, filedDate, accession, source: 'bulk' }
+  }
+  function apiFact(filedDate: string, value: number, accession: string): RawFact {
+    return { ...KEY, value, filedDate, accession, source: 'api' }
+  }
+
+  it('bulk 먼저, 그다음 같은 filedDate로 api가 들어오면 api가 bulk를 대체한다', () => {
+    insertFacts(raw, [bulkFact('2026-02-01', -16_760_000_000, 'seg-1')])
+    const n = insertFacts(raw, [apiFact('2026-02-01', 165_000_000_000, 'seg-1')])
+    expect(n).toBe(1) // .changes > 0 — 동률에서도 api가 bulk를 이긴다
+
+    const [row] = getFacts(raw, CIK).filter((f) => f.tag === 'OperatingIncomeLoss')
+    expect(row!.value).toBe(165_000_000_000)
+    expect(row!.source).toBe('api')
+  })
+
+  it('반대 순서(api 먼저, 그다음 같은 filedDate로 bulk)에서는 bulk가 api를 대체하지 못한다', () => {
+    raw.prepare(
+      `DELETE FROM financial_facts WHERE cik = ? AND tag = 'OperatingIncomeLoss'`,
+    ).run(CIK)
+
+    insertFacts(raw, [apiFact('2026-02-01', 165_000_000_000, 'seg-2')])
+    const n = insertFacts(raw, [bulkFact('2026-02-01', -16_760_000_000, 'seg-2')])
+    expect(n).toBe(0) // WHERE 절이 거짓이라 .changes === 0 — 오염된 bulk가 정상 api를 덮어쓰지 않는다
+
+    const [row] = getFacts(raw, CIK).filter((f) => f.tag === 'OperatingIncomeLoss')
+    expect(row!.value).toBe(165_000_000_000)
+    expect(row!.source).toBe('api')
+  })
+
+  it('filedDate가 진짜로 더 최신이면 소스와 무관하게 그 값이 이긴다 (정정 신고 우선순위는 그대로 유지)', () => {
+    raw.prepare(
+      `DELETE FROM financial_facts WHERE cik = ? AND tag = 'OperatingIncomeLoss'`,
+    ).run(CIK)
+
+    insertFacts(raw, [apiFact('2026-02-01', 165_000_000_000, 'seg-3')])
+    const n = insertFacts(raw, [bulkFact('2026-03-15', 170_000_000_000, 'seg-3-restate')])
+    expect(n).toBe(1) // 더 늦은 filedDate는 소스가 bulk여도 이긴다
+
+    const [row] = getFacts(raw, CIK).filter((f) => f.tag === 'OperatingIncomeLoss')
+    expect(row!.value).toBe(170_000_000_000)
+    expect(row!.source).toBe('bulk')
+    expect(row!.filedDate).toBe('2026-03-15')
+  })
+
+  it('같은 source·같은 filedDate로 재실행해도(동일 잡의 재적재) 값이 흔들리지 않는다 (결정론)', () => {
+    raw.prepare(
+      `DELETE FROM financial_facts WHERE cik = ? AND tag = 'OperatingIncomeLoss'`,
+    ).run(CIK)
+
+    insertFacts(raw, [apiFact('2026-02-01', 165_000_000_000, 'seg-4')])
+    const n = insertFacts(raw, [apiFact('2026-02-01', 999_999_999_999, 'seg-4-rerun')])
+    expect(n).toBe(0) // source·filedDate 모두 동률 — 먼저 자리잡은 값을 그대로 유지
+
+    const [row] = getFacts(raw, CIK).filter((f) => f.tag === 'OperatingIncomeLoss')
+    expect(row!.value).toBe(165_000_000_000)
+    expect(row!.accession).toBe('seg-4')
+  })
+})
+
 describe('replaceFinancials — 재계산 시 이전 회차의 소멸된 기간을 남기지 않는다', () => {
   const OTHER_CIK = 3000000
 
