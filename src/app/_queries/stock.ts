@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3'
 import { DERIVED_SOURCE_TAG, type Category, type FactorStatus, type FinancialPeriod, type SharesBasis } from '@/domain/types'
 import { grossMargin, operatingMargin, fcfMargin } from '@/domain/metrics'
+import { yoy } from '@/domain/growth'
 import { loadConfig } from '@/config'
 import type {
   FairValueReason,
@@ -96,7 +97,15 @@ export type StockDetail = {
   asOf: string
   /** 마찬가지로 스코어링 전이면 엔진 버전도 없다 */
   engineVersion: string | null
-  growth: { revenueGrowth: number | null; revenueAcceleration: number | null }
+  growth: {
+    revenueGrowth: number | null
+    /** revenueGrowth가 실제로 비교한 두 TTM 시점(최근·1년 전 또는 최근·3년 전) 중
+     * 어느 한쪽이라도 revenue가 누적 기간 차분으로 유도됐으면 true. */
+    revenueGrowthDerived: boolean
+    revenueAcceleration: number | null
+    /** 최근 8개 분기(quarterly[0..7]) revenue 중 하나라도 유도됐으면 true. */
+    revenueAccelerationDerived: boolean
+  }
   quality: {
     grossMargin: number | null
     /** grossMargin 계산에 쓰인 revenue/grossProfit 중 하나라도 신고된 분기값이 아니라
@@ -240,15 +249,42 @@ export function getStockDetail(
   // 4개 분기의 합이므로, 화면에 보이는 값은 그 4개 필드 중 하나라도 유도됐으면 함께
   // 유도된 것이다 — 필드 단위로 판정해야 "현금만 유도됐는데 매출도 유도된 것처럼" 보이는
   // 일이 없다(리뷰 Finding 1).
-  let finTags: Record<string, string> = {}
-  if (fin?.sourceTags) {
+  const parseSourceTags = (tagsJson: string | null | undefined): Record<string, string> => {
+    if (!tagsJson) return {}
     try {
-      finTags = JSON.parse(fin.sourceTags) as Record<string, string>
+      return JSON.parse(tagsJson) as Record<string, string>
     } catch {
-      finTags = {}
+      return {}
     }
   }
+  const finTags = parseSourceTags(fin?.sourceTags)
   const isDerived = (...fields: string[]) => fields.some((f) => finTags[f] === DERIVED_SOURCE_TAG)
+
+  // Growth 팩터(revenue_growth, revenue_acceleration)는 fin(최근 TTM) 한 행이 아니라 여러
+  // 시점의 revenue를 비교해 나온 값이다 — TTM YoY는 최근 TTM(index 0)과 1년 전 TTM(index
+  // 4)을, 3Y CAGR은 index 0과 3년 전 TTM(index 12)을, Revenue Acceleration은 최근 8개
+  // 분기(index 0~7)를 함께 쓴다(domain/metrics.ts ttmRevenueGrowth/revenueCagr3y/
+  // revenueAcceleration과 완전히 같은 인덱스). "유도됐다"는 Revenue (TTM) 한 칸만의
+  // 이야기가 아니라 그 값을 입력으로 삼는 모든 화면 지표로 전파돼야 한다(리뷰 Finding 1의
+  // 지적: growth 칸은 그동안 빠져 있었다) — 채택한 규칙은 "성장률은 두 시점을 비교해
+  // 계산되므로, 그중 어느 한쪽이라도 유도된 값이면 성장률도 유도된 것으로 본다."
+  const ttmRevRows = raw
+    .prepare(
+      `SELECT revenue, source_tags AS sourceTags FROM financials
+       WHERE cik = ? AND period_type = 'TTM' ORDER BY period_end DESC LIMIT 13`,
+    )
+    .all(head.cik) as { revenue: number | null; sourceTags: string | null }[]
+
+  const quarterlyRevRows = raw
+    .prepare(
+      `SELECT revenue, source_tags AS sourceTags FROM financials
+       WHERE cik = ? AND period_type = 'Q' ORDER BY period_end DESC LIMIT 8`,
+    )
+    .all(head.cik) as { revenue: number | null; sourceTags: string | null }[]
+
+  const revenueAt = (rows: { revenue: number | null }[], i: number): number | null => rows[i]?.revenue ?? null
+  const revenueDerivedAt = (rows: { sourceTags: string | null }[], i: number): boolean =>
+    parseSourceTags(rows[i]?.sourceTags)['revenue'] === DERIVED_SOURCE_TAG
 
   const scoreAsOf = head.asOf
   const factors = scoreAsOf
@@ -317,6 +353,27 @@ export function getStockDetail(
   const totalDebtValue = fin?.totalDebt ?? null
   const revenueValue = fin?.revenue ?? null
 
+  const revenueGrowthValue = factorRaw('revenue_growth')
+  const revenueAccelerationValue = factorRaw('revenue_acceleration')
+
+  // engines/tenbagger/factors/revenue-growth.ts는 raw로 `ttmYoy ?? cagr3y`를 저장한다 —
+  // 즉 1년 전 TTM(index 4)이 계산 가능하면 그 값을 쓰고, 그때만 3년 전 TTM(index 12)은
+  // 아예 쓰이지 않는다. 어느 쪽이 실제로 쓰였는지에 맞춰 그 두 번째 시점만 확인해야
+  // 한다 — 안 쓰인 시점이 유도됐다고 "계산됨"을 잘못 붙이면 Finding 1이 지킨 "필드 단위
+  // 정확성"이 growth 칸에서 깨진다.
+  const ttmYoyValue = yoy(revenueAt(ttmRevRows, 0), revenueAt(ttmRevRows, 4))
+  const revenueGrowthSecondPeriod = ttmYoyValue !== null ? 4 : 12
+  const revenueGrowthDerived =
+    revenueGrowthValue !== null &&
+    (revenueDerivedAt(ttmRevRows, 0) || revenueDerivedAt(ttmRevRows, revenueGrowthSecondPeriod))
+
+  // revenue-acceleration.ts는 quarterly[0..7] 8개 전부의 revenue가 있어야만 null이
+  // 아닌 raw를 낸다 — raw가 있다는 것 자체가 8개 분기 모두 실제로 계산에 쓰였다는
+  // 뜻이므로, 조건 분기 없이 8개 전부를 확인한다.
+  const revenueAccelerationDerived =
+    revenueAccelerationValue !== null &&
+    [0, 1, 2, 3, 4, 5, 6, 7].some((i) => revenueDerivedAt(quarterlyRevRows, i))
+
   return {
     cik: head.cik,
     ticker: head.ticker,
@@ -341,8 +398,10 @@ export function getStockDetail(
     price: market?.price ?? null,
     priceDate: market?.date ?? null,
     growth: {
-      revenueGrowth: factorRaw('revenue_growth'),
-      revenueAcceleration: factorRaw('revenue_acceleration'),
+      revenueGrowth: revenueGrowthValue,
+      revenueGrowthDerived,
+      revenueAcceleration: revenueAccelerationValue,
+      revenueAccelerationDerived,
     },
     quality: {
       grossMargin: grossMarginValue,

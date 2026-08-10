@@ -114,15 +114,23 @@ export default async function StockPage({
           items={[
             {
               label: 'Revenue Growth (TTM YoY)',
-              value: <SignedValue value={d.growth.revenueGrowth} text={formatPct(d.growth.revenueGrowth)} />,
+              value: (
+                <span className="block">
+                  <SignedValue value={d.growth.revenueGrowth} text={formatPct(d.growth.revenueGrowth)} />
+                  {d.growth.revenueGrowthDerived && <DerivedNote />}
+                </span>
+              ),
             },
             {
               label: 'Revenue Acceleration',
               value: (
-                <SignedValue
-                  value={d.growth.revenueAcceleration}
-                  text={formatPct(d.growth.revenueAcceleration)}
-                />
+                <span className="block">
+                  <SignedValue
+                    value={d.growth.revenueAcceleration}
+                    text={formatPct(d.growth.revenueAcceleration)}
+                  />
+                  {d.growth.revenueAccelerationDerived && <DerivedNote />}
+                </span>
               ),
             },
             {

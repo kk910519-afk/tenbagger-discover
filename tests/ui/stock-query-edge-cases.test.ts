@@ -294,6 +294,234 @@ describe('getStockDetail Finding 1 — TTM 유도 필드를 필드 단위로 표
   })
 })
 
+/**
+ * 리뷰 Finding 1 gap: `*Derived` 플래그가 StockDetail.quality에만 있고 growth(성장률)
+ * 지표는 빠져 있었다 — Revenue (TTM)은 "계산됨"이 붙는데 바로 옆 Revenue Growth (TTM
+ * YoY)/Revenue Acceleration은 같은 유도 매출을 쓰면서도 안내가 없었다. 채택한 규칙:
+ * 성장률은 두 시점을 비교해 계산되므로, 그중 한쪽이라도 유도된 값이면 성장률도 유도된
+ * 것으로 표시한다. revenue_growth는 raw로 `ttmYoy ?? cagr3y`를 담으므로(engines/
+ * tenbagger/factors/revenue-growth.ts) 실제로 쓰인 두 번째 시점(1년 전 또는 3년 전)만
+ * 확인해야 한다는 것도 함께 검증한다.
+ */
+describe('getStockDetail Finding 4 — Growth 지표도 유도된 revenue를 물려받으면 표시한다', () => {
+  function seedGrowthCompany(db: ReturnType<typeof getRawDb>, cik: number, ticker: string) {
+    db.prepare(
+      `INSERT INTO themes (slug, name, display_order) VALUES ('ai-software-semi', 'AI', 1)`,
+    ).run()
+    db.prepare(
+      `INSERT INTO industries (slug, theme_slug, name)
+       VALUES ('semis', 'ai-software-semi', 'Semiconductors')`,
+    ).run()
+    db.prepare(
+      `INSERT INTO companies (cik, ticker, name, is_active, first_seen, last_updated)
+       VALUES (?, ?, ?, 1, '2026-08-09', '2026-08-09')`,
+    ).run(cik, ticker, `${ticker} Inc`)
+    db.prepare(
+      `INSERT INTO company_industry (cik, industry_slug, theme_slug, is_primary, source)
+       VALUES (?, 'semis', 'ai-software-semi', 1, 'sic')`,
+    ).run(cik)
+    db.prepare(
+      `INSERT INTO scores (cik, as_of, tenbagger, completeness, category, engine_version)
+       VALUES (?, '2026-08-09', 50, 0.5, 'CHALLENGER', 'tenbagger-1.0.0')`,
+    ).run(cik)
+  }
+
+  function periodEnd(quartersBack: number): string {
+    const base = new Date('2026-06-27T00:00:00.000Z')
+    base.setUTCDate(base.getUTCDate() - quartersBack * 91)
+    return base.toISOString().slice(0, 10)
+  }
+
+  /** index 0~12의 TTM 행 13개를 빈틈없이 채운다 — getFinancialsFor/stock.ts 모두
+   * "ORDER BY period_end DESC"의 배열 위치를 그대로 인덱스로 쓰므로, 특정 인덱스만
+   * 빼먹으면 그 뒤 인덱스가 전부 하나씩 당겨져 다른 인덱스를 검사하게 된다. */
+  function seedTtmSeries(
+    db: ReturnType<typeof getRawDb>,
+    cik: number,
+    overrides: Record<number, { revenue?: number | null; derived?: boolean }> = {},
+  ) {
+    for (let i = 0; i < 13; i++) {
+      const o = overrides[i] ?? {}
+      const revenue = o.revenue !== undefined ? o.revenue : 1000 + i
+      const tags = o.derived ? { revenue: 'cumulative_diff' } : { revenue: 'Revenues' }
+      db.prepare(
+        `INSERT INTO financials (cik, period_end, period_type, revenue, source_tags, computed_at)
+         VALUES (?, ?, 'TTM', ?, ?, '2026-08-09T00:00:00.000Z')`,
+      ).run(cik, periodEnd(i), revenue, JSON.stringify(tags))
+    }
+  }
+
+  function seedQuarterlySeries(
+    db: ReturnType<typeof getRawDb>,
+    cik: number,
+    overrides: Record<number, { derived?: boolean }> = {},
+  ) {
+    for (let i = 0; i < 8; i++) {
+      const o = overrides[i] ?? {}
+      const tags = o.derived ? { revenue: 'cumulative_diff' } : { revenue: 'Revenues' }
+      db.prepare(
+        `INSERT INTO financials (cik, period_end, period_type, revenue, source_tags, computed_at)
+         VALUES (?, ?, 'Q', ?, ?, '2026-08-09T00:00:00.000Z')`,
+      ).run(cik, periodEnd(i), 200 + i, JSON.stringify(tags))
+    }
+  }
+
+  function insertFactor(
+    db: ReturnType<typeof getRawDb>,
+    cik: number,
+    key: string,
+    raw: number | null,
+  ) {
+    db.prepare(
+      `INSERT INTO score_factors
+         (cik, as_of, engine, factor_key, raw, points, weight, status, percentile, detail)
+       VALUES (?, '2026-08-09', 'tenbagger', ?, ?, ?, 20, ?, ?, 'x')`,
+    ).run(cik, key, raw, raw === null ? null : 10, raw === null ? 'NO_DATA' : 'SCORED', raw === null ? null : 0.5)
+  }
+
+  it('TTM YoY 경로에서 1년 전(index 4) revenue가 유도됐으면 Revenue Growth도 유도로 표시된다', () => {
+    const db = getRawDb(join(mkdtempSync(join(tmpdir(), 'tb-growth-derived1-')), 's.db'))
+    runMigrations(db)
+    seedGrowthCompany(db, 701, 'GRWDRV1')
+    seedTtmSeries(db, 701, { 4: { derived: true } })
+    insertFactor(db, 701, 'revenue_growth', 0.25)
+
+    const d = getStockDetail(db, 'GRWDRV1', '2026-08-09')
+    db.close()
+
+    expect(d!.growth.revenueGrowth).toBe(0.25)
+    expect(d!.growth.revenueGrowthDerived).toBe(true)
+  })
+
+  it('TTM YoY 경로에서 안 쓰인 3년 전(index 12)이 유도돼도 무시한다(사용된 시점만 확인)', () => {
+    const db = getRawDb(join(mkdtempSync(join(tmpdir(), 'tb-growth-derived2-')), 's.db'))
+    runMigrations(db)
+    seedGrowthCompany(db, 702, 'GRWDRV2')
+    // index 0, index 4 모두 정상 신고 → ttmYoy 경로 사용. index 12만 유도됐지만 안 쓰인다.
+    seedTtmSeries(db, 702, { 12: { derived: true } })
+    insertFactor(db, 702, 'revenue_growth', 0.25)
+
+    const d = getStockDetail(db, 'GRWDRV2', '2026-08-09')
+    db.close()
+
+    expect(d!.growth.revenueGrowth).toBe(0.25)
+    expect(d!.growth.revenueGrowthDerived).toBe(false)
+  })
+
+  it('1년 전 TTM이 없어(ttmYoy 계산 불가) 3Y CAGR 경로로 넘어가면 3년 전(index 12)을 확인한다', () => {
+    const db = getRawDb(join(mkdtempSync(join(tmpdir(), 'tb-growth-derived3-')), 's.db'))
+    runMigrations(db)
+    seedGrowthCompany(db, 703, 'GRWDRV3')
+    // index 4의 revenue가 null이면 yoy()가 null을 반환해 cagr3y(index 12) 경로로 넘어간다.
+    seedTtmSeries(db, 703, { 4: { revenue: null }, 12: { derived: true } })
+    insertFactor(db, 703, 'revenue_growth', 0.09)
+
+    const d = getStockDetail(db, 'GRWDRV3', '2026-08-09')
+    db.close()
+
+    expect(d!.growth.revenueGrowth).toBe(0.09)
+    expect(d!.growth.revenueGrowthDerived).toBe(true)
+  })
+
+  it('revenue_growth 팩터가 아직 채점되지 않았으면(raw가 null) 유도된 기간이 있어도 표시하지 않는다', () => {
+    const db = getRawDb(join(mkdtempSync(join(tmpdir(), 'tb-growth-derived4-')), 's.db'))
+    runMigrations(db)
+    seedGrowthCompany(db, 704, 'GRWDRV4')
+    seedTtmSeries(db, 704, { 0: { derived: true }, 4: { derived: true } })
+    insertFactor(db, 704, 'revenue_growth', null)
+
+    const d = getStockDetail(db, 'GRWDRV4', '2026-08-09')
+    db.close()
+
+    expect(d!.growth.revenueGrowth).toBeNull()
+    expect(d!.growth.revenueGrowthDerived).toBe(false)
+  })
+
+  it('최근 8개 분기 중 어느 하나라도 revenue가 유도됐으면 Revenue Acceleration도 유도로 표시된다', () => {
+    const db = getRawDb(join(mkdtempSync(join(tmpdir(), 'tb-growth-derived5-')), 's.db'))
+    runMigrations(db)
+    seedGrowthCompany(db, 705, 'GRWDRV5')
+    seedQuarterlySeries(db, 705, { 3: { derived: true } })
+    insertFactor(db, 705, 'revenue_acceleration', 0.02)
+
+    const d = getStockDetail(db, 'GRWDRV5', '2026-08-09')
+    db.close()
+
+    expect(d!.growth.revenueAcceleration).toBe(0.02)
+    expect(d!.growth.revenueAccelerationDerived).toBe(true)
+  })
+
+  it('8개 분기 전부 직접 신고됐으면 Revenue Acceleration은 유도로 표시되지 않는다', () => {
+    const db = getRawDb(join(mkdtempSync(join(tmpdir(), 'tb-growth-derived6-')), 's.db'))
+    runMigrations(db)
+    seedGrowthCompany(db, 706, 'GRWDRV6')
+    seedQuarterlySeries(db, 706)
+    insertFactor(db, 706, 'revenue_acceleration', -0.01)
+
+    const d = getStockDetail(db, 'GRWDRV6', '2026-08-09')
+    db.close()
+
+    expect(d!.growth.revenueAcceleration).toBe(-0.01)
+    expect(d!.growth.revenueAccelerationDerived).toBe(false)
+  })
+
+  it('revenue_acceleration 팩터가 아직 채점되지 않았으면(raw가 null) 유도된 분기가 있어도 표시하지 않는다', () => {
+    const db = getRawDb(join(mkdtempSync(join(tmpdir(), 'tb-growth-derived7-')), 's.db'))
+    runMigrations(db)
+    seedGrowthCompany(db, 707, 'GRWDRV7')
+    seedQuarterlySeries(db, 707, { 0: { derived: true } })
+    insertFactor(db, 707, 'revenue_acceleration', null)
+
+    const d = getStockDetail(db, 'GRWDRV7', '2026-08-09')
+    db.close()
+
+    expect(d!.growth.revenueAcceleration).toBeNull()
+    expect(d!.growth.revenueAccelerationDerived).toBe(false)
+  })
+})
+
+/**
+ * 리뷰 Finding 5(독립 뮤테이션 검증): ui-disclosure-report.md는 "값 자체가 null이면
+ * 유도 플래그도 강제로 false"라는 규칙을 명시하지만, `grossMarginValue !== null &&` 가드를
+ * 지워도 811개 테스트가 전부 통과했다 — 이 규칙을 실제로 겨냥한 테스트가 하나도 없었다는
+ * 뜻이다. revenue는 cumulative_diff로 유도됐지만 grossProfit이 아예 없어 Gross Margin
+ * 자체가 계산되지 않는(= 화면에 "—"만 뜨는) 경우, 유도 플래그도 함께 꺼져야 한다 —
+ * 안 그러면 "— 계산됨…"처럼 값도 없는데 안내만 뜨는 화면이 나온다.
+ */
+describe('getStockDetail Finding 5 — 값이 null이면 유도 플래그도 강제로 false다', () => {
+  it('revenue는 유도됐지만 grossProfit이 없어 Gross Margin이 null이면 grossMarginDerived도 false다', () => {
+    const db = getRawDb(join(mkdtempSync(join(tmpdir(), 'tb-nullguard1-')), 's.db'))
+    runMigrations(db)
+    db.prepare(
+      `INSERT INTO themes (slug, name, display_order) VALUES ('ai-software-semi', 'AI', 1)`,
+    ).run()
+    db.prepare(
+      `INSERT INTO industries (slug, theme_slug, name)
+       VALUES ('semis', 'ai-software-semi', 'Semiconductors')`,
+    ).run()
+    db.prepare(
+      `INSERT INTO companies (cik, ticker, name, is_active, first_seen, last_updated)
+       VALUES (801, 'NULLGM', 'NULLGM Inc', 1, '2026-08-09', '2026-08-09')`,
+    ).run()
+    db.prepare(
+      `INSERT INTO company_industry (cik, industry_slug, theme_slug, is_primary, source)
+       VALUES (801, 'semis', 'ai-software-semi', 1, 'sic')`,
+    ).run()
+    db.prepare(
+      `INSERT INTO financials (cik, period_end, period_type, revenue, gross_profit, source_tags, computed_at)
+       VALUES (801, '2026-06-27', 'TTM', 1000, NULL, ?, '2026-08-09T00:00:00.000Z')`,
+    ).run(JSON.stringify({ revenue: 'cumulative_diff' }))
+
+    const d = getStockDetail(db, 'NULLGM', '2026-08-09')
+    db.close()
+
+    expect(d).not.toBeNull()
+    expect(d!.quality.revenueDerived).toBe(true) // revenue 자체는 유도됐고 값도 있다
+    expect(d!.quality.grossMargin).toBeNull() // grossProfit이 없어 계산 자체가 안 됨
+    expect(d!.quality.grossMarginDerived).toBe(false) // 그래서 유도 안내도 뜨면 안 된다
+  })
+})
+
 describe('getStockDetail 밸류에이션이 INSUFFICIENT_DATA인 회사', () => {
   it('fair value가 없으면 price-to-fair-value/margin-of-safety도 null로 연쇄된다', () => {
     const db = getRawDb(join(mkdtempSync(join(tmpdir(), 'tb-stock-valedge-')), 's.db'))

@@ -119,7 +119,18 @@ export function StrengthWeakness({ factors }: { factors: FactorView[] }) {
   const scored = factorsByFillRatio(factors)
   const { top, bottom } = splitStrengthWeakness(scored)
 
-  if (top.length === 0) return null
+  // splitStrengthWeakness는 채점된 팩터가 0~1개면(비교 상대가 없음) 두 칸 모두 비운다.
+  // 예전에는 이때 패널을 통째로 렌더링하지 않아 왜 없는지 설명이 없었다 — 이 코드베이스는
+  // 데이터가 빠졌을 때 그냥 침묵하지 않고 이유를 한 줄로 말하는 스타일이다(예: "스코어링
+  // 미실행 —", "밸류에이션 미실행 —"). 카드나 패널 구조를 새로 만들지 않고 같은 자리에
+  // 문장 한 줄만 놓는다.
+  if (top.length === 0) {
+    return (
+      <p className="text-xs text-[var(--color-text-faint)]">
+        비교할 팩터 부족 — 스코어링된 팩터가 {scored.length}개뿐이라 강점/약점을 가릴 수 없습니다
+      </p>
+    )
+  }
 
   return (
     <div className="grid gap-6 sm:grid-cols-2">

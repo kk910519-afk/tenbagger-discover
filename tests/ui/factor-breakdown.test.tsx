@@ -187,18 +187,21 @@ describe('StrengthWeakness — 배점이 아니라 fill ratio(획득/배점)로 
     expect(container.textContent).toContain('매출 성장')
   })
 
-  it('스코어링된 팩터가 하나도 없으면 아무것도 렌더링하지 않는다', () => {
+  // 리뷰 Finding 7: 비교 대상이 없어 패널을 비울 때 침묵하지 않고 이유를 한 줄로 말한다.
+  it('스코어링된 팩터가 하나도 없으면 강점/약점 목록 대신 안내 문구만 렌더링한다', () => {
     const factors: FactorView[] = [
       factor({ key: 'balance_sheet', status: 'NO_DATA', points: null, percentile: null }),
     ]
     const { container } = render(<StrengthWeakness factors={factors} />)
-    expect(container.firstChild).toBeNull()
+    expect(container.querySelector('h3')).toBeNull()
+    expect(container.textContent).toContain('비교할 팩터 부족')
   })
 
-  it('weight가 0인 팩터는 나눗셈 대상에서 제외된다', () => {
+  it('weight가 0인 팩터는 나눗셈 대상에서 제외되어 안내 문구만 렌더링한다', () => {
     const factors: FactorView[] = [factor({ key: 'zero_weight', weight: 0, points: 0 })]
     const { container } = render(<StrengthWeakness factors={factors} />)
-    expect(container.firstChild).toBeNull()
+    expect(container.querySelector('h3')).toBeNull()
+    expect(container.textContent).toContain('비교할 팩터 부족')
   })
 })
 
@@ -219,9 +222,10 @@ describe('StrengthWeakness — Finding 2: 같은 팩터가 Strength/Weakness에 
     )
   }
 
-  it('스코어링된 팩터가 1개면(비교 상대 없음) 패널을 렌더링하지 않는다', () => {
+  it('스코어링된 팩터가 1개면(비교 상대 없음) 강점/약점 목록 대신 안내 문구를 렌더링한다', () => {
     const { container } = render(<StrengthWeakness factors={scoredFactors(1)} />)
-    expect(container.firstChild).toBeNull()
+    expect(container.querySelector('h3')).toBeNull()
+    expect(container.textContent).toContain('비교할 팩터 부족')
   })
 
   it('2개면 각 칸에 1개씩, 겹치지 않는다', () => {
