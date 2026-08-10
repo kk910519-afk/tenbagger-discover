@@ -85,7 +85,7 @@ describe('normalizeFacts — Q4 재구성', () => {
   })
 
   it('유도 사실을 sourceTags에 남긴다', () => {
-    expect(r.sourceTags['Q:2024-12-31']!.derived).toBe('Q4_from_annual')
+    expect(r.sourceTags['Q:2024-12-31']!.derived).toBe('cumulative_diff')
   })
 
   it('Q4가 이미 신고되어 있으면 유도하지 않는다', () => {
@@ -189,7 +189,7 @@ describe('normalizeFacts — TTM 안전장치 (회귀)', () => {
     const r = normalizeFacts(facts)
     const anchor = r.ttm.find((t) => t.periodEnd === '2024-09-30')!
     expect(anchor).toBeDefined()
-    expect(r.sourceTags['TTM:2024-09-30']!.derived).toBe('Q4_from_annual@2023-12-31')
+    expect(r.sourceTags['TTM:2024-09-30']!.derived).toBe('cumulative_diff@2023-12-31')
   })
 })
 

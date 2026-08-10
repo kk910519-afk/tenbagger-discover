@@ -178,6 +178,29 @@ describe('resolveFlow — 매출 태그 공존 시 큰 값 선택 (결함 2, Alp
     expect(r.fields.revenue).toBe(253_549_000_000)
     expect(r.used.revenue).toBe(EXCL)
   })
+
+  // 매출 = 매출총이익 + 매출원가는 회계 항등식이므로, 매출 태그만 오염된 기간에서
+  // 회사가 신고한 다른 두 숫자로 진짜 총계를 되살릴 수 있다.
+  it('매출 태그가 오염됐어도 GrossProfit+CostOfRevenue로 복원한다 (Astera Labs 2025 Q1 실사례)', () => {
+    const r = resolveFlow(new Map([
+      [EXCL, 44_638_000],
+      ['GrossProfit', 119_411_000],
+      ['CostOfGoodsAndServicesSold', 40_031_000],
+    ]))
+    expect(r.fields.revenue).toBe(159_442_000)
+    expect(r.used.revenue).toBe('GrossProfit+CostOfGoodsAndServicesSold')
+    expect(r.fields.grossProfit).toBe(119_411_000)
+  })
+
+  it('매출 태그가 정상이면 항등식 후보가 이기지 못한다', () => {
+    const r = resolveFlow(new Map([
+      ['Revenues', 1_000_000],
+      ['GrossProfit', 600_000],
+      ['CostOfRevenue', 400_000],
+    ]))
+    expect(r.fields.revenue).toBe(1_000_000)
+    expect(r.used.revenue).toBe('Revenues')
+  })
 })
 
 describe('resolveFlow', () => {

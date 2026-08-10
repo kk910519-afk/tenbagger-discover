@@ -2,7 +2,8 @@ import type { FieldRejection, FinancialPeriod, PeriodType } from '@/domain/types
 import { sumTTM } from '@/domain/growth'
 import { validatePeriod } from '@/domain/validate'
 import type { RawFact } from '../types.js'
-import { indexFacts, resolveFlow, resolveStock, type FactIndex } from './resolve.js'
+import { indexFacts, resolveFlow, resolveStock, type FactIndex, type ResolvedFlow } from './resolve.js'
+import { resolveCumulative, FLOW_FIELDS } from './cumulative.js'
 
 export type NormalizeResult = {
   quarterly: FinancialPeriod[]
@@ -15,16 +16,13 @@ export type NormalizeResult = {
 }
 
 const DAY_MS = 86_400_000
-const FLOW_FIELDS = [
-  'revenue', 'grossProfit', 'operatingIncome', 'netIncome', 'ocf', 'capex', 'sbc', 'rdExpense',
-] as const
 
-// Q4 재구성: 연간 종료일 이전 400일 이내에서 후보 분기를 모으고, 그 중 정확히 3개가
-// 서로 인접(52/53주 회계달력을 포함해 약 2~4개월 간격)해야만 유도한다.
-// 이 창을 벗어나면 SEC 데이터에 흔한 "전년 비교기간 재태깅"을 실수로 끌어들일 수 있다.
-const Q4_LOOKBACK_DAYS = 400
-const Q4_GAP_MIN_DAYS = 60
-const Q4_GAP_MAX_DAYS = 120
+// 시점(instant) 값을 얼마나 과거까지 소급해 찾을지의 상한. 분기 신고 주기(~90일)를
+// 감안해 한 번의 누락된 분기 신고까지는 메워주되 그보다 오래된 값은 쓰지 않는다.
+const INSTANT_LOOKBACK_DAYS = 400
+
+/** 신고된 분기값이 아니라 누적 기간 차분으로 얻은 값임을 provenance에 남기는 표식 */
+const DERIVED_MARKER = 'cumulative_diff'
 
 // TTM: 4개 분기 창의 처음과 끝 간격이 대략 3개 분기(약 9개월)여야 연속한 창으로 인정한다.
 const TTM_SPAN_MIN_DAYS = 240
@@ -42,12 +40,10 @@ function daysBetween(a: string, b: string): number {
 // 찾아야 한다.
 //
 // 다만 무제한으로 과거를 뒤지면 수년 전 폐지/재상장 등으로 남은 낡은 값이 전혀
-// 무관한 최근 기간에 되살아날 수 있다. 이 파일은 이미 Q4 유도에 "400일" 창을
-// 회계연도 상한으로 쓰고 있으므로(Q4_LOOKBACK_DAYS) 같은 상수를 시점 조회의
-// 최대 소급 기간으로도 재사용한다: 분기 신고 주기(~90일)를 감안하면 최대 한 번의
-// 누락된 분기 신고까지는 메워주면서, 그보다 오래된 값은 null로 남겨 이전에 고쳤던
-// "결측을 0/구식값으로 채우지 않는다" 원칙을 지킨다.
-const INSTANT_STALENESS_LIMIT_DAYS = Q4_LOOKBACK_DAYS
+// 무관한 최근 기간에 되살아날 수 있다. 그래서 회계연도 한 바퀴(400일)를 소급
+// 상한으로 둔다 — 최대 한 번의 누락된 분기 신고까지는 메워주면서, 그보다 오래된
+// 값은 null로 남겨 "결측을 0/구식값으로 채우지 않는다" 원칙을 지킨다.
+const INSTANT_STALENESS_LIMIT_DAYS = INSTANT_LOOKBACK_DAYS
 
 /** asOf 이전(포함) 중, 태그별로 가장 최근 시점 값을 독립적으로 찾는다. */
 function pickInstant(idx: FactIndex, asOf: string): Map<string, number> {
@@ -87,15 +83,19 @@ function buildPeriod(
   periodType: PeriodType,
   tags: Map<string, number>,
   sourceTags: Record<string, Record<string, string>>,
+  adjust?: (fields: ResolvedFlow, used: Record<string, string>) => void,
 ): FinancialPeriod {
   const flow = resolveFlow(tags)
+  const fields: ResolvedFlow = { ...flow.fields }
+  const used: Record<string, string> = { ...flow.used }
+  adjust?.(fields, used)
   const stock = resolveStock(pickInstant(idx, periodEnd))
-  sourceTags[`${periodType}:${periodEnd}`] = { ...flow.used, ...stock.used }
+  sourceTags[`${periodType}:${periodEnd}`] = { ...used, ...stock.used }
   return {
     periodEnd,
     periodType,
-    ...flow.fields,
-    fcf: fcfOf(flow.fields.ocf, flow.fields.capex),
+    ...fields,
+    fcf: fcfOf(fields.ocf, fields.capex),
     cash: stock.fields.cash,
     totalDebt: stock.fields.totalDebt,
     equity: stock.fields.equity,
@@ -129,64 +129,47 @@ export function normalizeFacts(facts: RawFact[]): NormalizeResult {
   const desc = (a: FinancialPeriod, b: FinancialPeriod) =>
     b.periodEnd.localeCompare(a.periodEnd)
 
-  // 연간 (qtrs=4)
+  // 누적 기간(qtrs=1/2/3/4) 차분으로 분기 시계열을 재구성한다. 기존의 Q4 재구성
+  // (연간 − q1 − q2 − q3)은 이 일반 규칙의 한 특수 사례로 흡수됐다.
+  const cum = resolveCumulative(idx)
+
+  // 연간 (qtrs=4) — 누적 사다리가 오염으로 판정한 필드는 연간에서도 null이다.
+  // 같은 하나의 사실이 그 오염의 출처이기 때문이다.
   const annual: FinancialPeriod[] = []
   for (const [periodEnd, tags] of idx.duration.get(4) ?? []) {
-    annual.push(validate(buildPeriod(idx, periodEnd, 'A', tags, sourceTags)))
+    const rejectedFields = cum.rejected.get(`4:${periodEnd}`)
+    annual.push(validate(buildPeriod(idx, periodEnd, 'A', tags, sourceTags, (fields, used) => {
+      if (!rejectedFields) return
+      for (const field of rejectedFields) {
+        fields[field] = null
+        delete used[field]
+      }
+    })))
   }
   annual.sort(desc)
 
-  // 분기 (qtrs=1)
+  // 분기: 신고된 qtrs=1 기간 ∪ 누적 차분으로 값이 확정된 기간
+  const quarterEnds = new Set<string>()
+  for (const periodEnd of idx.duration.get(1)?.keys() ?? []) quarterEnds.add(periodEnd)
+  for (const periodEnd of cum.quarters.keys()) quarterEnds.add(periodEnd)
+
   const quarterly: FinancialPeriod[] = []
-  const reportedQuarterEnds = new Set<string>()
-  for (const [periodEnd, tags] of idx.duration.get(1) ?? []) {
-    reportedQuarterEnds.add(periodEnd)
-    quarterly.push(validate(buildPeriod(idx, periodEnd, 'Q', tags, sourceTags)))
-  }
-
-  // Q4 재구성: 연간 종료일에 분기 값이 없고 직전 3개 분기가 인접하게 있으면 차감으로 유도
-  for (const a of annual) {
-    if (reportedQuarterEnds.has(a.periodEnd)) continue
-    const inYear = quarterly.filter(
-      (q) => q.periodEnd < a.periodEnd && daysBetween(q.periodEnd, a.periodEnd) < Q4_LOOKBACK_DAYS,
-    )
-    if (inYear.length !== 3) continue
-
-    // 개수만으로는 부족하다 — SEC 데이터에는 전년도 비교기간이 같은 400일 창에
-    // 섞여 들어올 수 있다. 최신순으로 정렬해 연간 종료일→q1→q2→q3 간격이 모두
-    // 60~120일(약 2~4개월) 안에 들어야 실제로 회계연도를 3등분한 분기로 간주한다.
-    const sorted = [...inYear].sort((x, y) => y.periodEnd.localeCompare(x.periodEnd))
-    const q1 = sorted[0]!
-    const q2 = sorted[1]!
-    const q3 = sorted[2]!
-    const gaps = [
-      daysBetween(q1.periodEnd, a.periodEnd),
-      daysBetween(q2.periodEnd, q1.periodEnd),
-      daysBetween(q3.periodEnd, q2.periodEnd),
-    ]
-    const contiguous = gaps.every((g) => g >= Q4_GAP_MIN_DAYS && g <= Q4_GAP_MAX_DAYS)
-    if (!contiguous) continue
-
-    const q4 = emptyPeriod(a.periodEnd, 'Q')
-    for (const field of FLOW_FIELDS) {
-      const annualValue = a[field]
-      if (annualValue === null) continue
-      const parts = inYear.map((q) => q[field])
-      if (parts.some((p) => p === null)) continue
-      q4[field] = annualValue - (parts as number[]).reduce((s, v) => s + v, 0)
-    }
-    q4.fcf = fcfOf(q4.ocf, q4.capex)
-    // 희석주식수는 기간 가중평균이라 연간 값도, 분기 차감도 대체값이 될 수 없다.
-    // 알 수 없는 값은 null — 그럴듯한 대체값(연간 평균)을 넣지 않는다.
-    q4.sharesDiluted = null
-    const stock = resolveStock(pickInstant(idx, a.periodEnd))
-    q4.cash = stock.fields.cash
-    q4.totalDebt = stock.fields.totalDebt
-    q4.equity = stock.fields.equity
-    q4.sharesOutstanding = stock.fields.sharesOutstanding
-
-    quarterly.push(validate(q4))
-    sourceTags[`Q:${a.periodEnd}`] = { ...stock.used, derived: 'Q4_from_annual' }
+  for (const periodEnd of quarterEnds) {
+    const tags = idx.duration.get(1)?.get(periodEnd) ?? new Map<string, number>()
+    const resolved = cum.quarters.get(periodEnd)
+    quarterly.push(validate(buildPeriod(idx, periodEnd, 'Q', tags, sourceTags, (fields, used) => {
+      if (!resolved) return
+      let anyDerived = false
+      for (const [field, q] of resolved) {
+        fields[field] = q.value
+        if (!q.derived) continue
+        anyDerived = true
+        // 희석주식수는 기간 가중평균이라 차분할 수 없다 — 유도 분기에는 null로 남는다.
+        if (q.value === null) delete used[field]
+        else used[field] = DERIVED_MARKER
+      }
+      if (anyDerived) used.derived = DERIVED_MARKER
+    })))
   }
   quarterly.sort(desc)
 
@@ -225,7 +208,7 @@ export function normalizeFacts(facts: RawFact[]): NormalizeResult {
         }
       }
     }
-    if (derivedFrom.length > 0) merged.derived = `Q4_from_annual@${derivedFrom.join(',')}`
+    if (derivedFrom.length > 0) merged.derived = `${DERIVED_MARKER}@${derivedFrom.join(',')}`
     sourceTags[`TTM:${p.periodEnd}`] = merged
   }
 

@@ -159,6 +159,7 @@ function firstOf(
 
 const REVENUE_TAG_EXCL_TAX = 'RevenueFromContractWithCustomerExcludingAssessedTax'
 const REVENUE_TAG_TOTAL = 'Revenues'
+const GROSS_PROFIT_TAG = 'GrossProfit'
 
 /**
  * 매출 태그 해석. 결함 2(ingest-hardening 과제): 같은 회계기간·같은 소스에
@@ -183,12 +184,27 @@ const REVENUE_TAG_TOTAL = 'Revenues'
  * 두 값이 같으면(실측 747건 중 198건) 어느 쪽을 골라도 결과는 같다.
  */
 function resolveRevenue(tags: Map<string, number>): { value: number; tag: string } | null {
+  const candidates: { value: number; tag: string }[] = []
   const excl = tags.get(REVENUE_TAG_EXCL_TAX)
   const total = tags.get(REVENUE_TAG_TOTAL)
-  if (typeof excl === 'number' && typeof total === 'number') {
-    return total > excl
-      ? { value: total, tag: REVENUE_TAG_TOTAL }
-      : { value: excl, tag: REVENUE_TAG_EXCL_TAX }
+  if (typeof excl === 'number') candidates.push({ value: excl, tag: REVENUE_TAG_EXCL_TAX })
+  if (typeof total === 'number') candidates.push({ value: total, tag: REVENUE_TAG_TOTAL })
+
+  // 매출 = 매출총이익 + 매출원가. 회계 항등식이므로 추정이 아니라 회사가 신고한
+  // 숫자끼리의 산술이다. 매출 태그만 디멘션 오염된 기간(Astera Labs 2025 Q1:
+  // 매출 태그 44.6M인데 GrossProfit 119.4M + CostOfGoodsAndServicesSold 40.0M
+  // = 159.4M)에서 진짜 총계를 되살린다. 오염값은 부분집합이라 항상 작으므로
+  // 아래 "가장 큰 후보" 규칙과 방향이 같다.
+  const gp = tags.get(GROSS_PROFIT_TAG)
+  const cost = firstOf(tags, COST_CHAIN)
+  if (typeof gp === 'number' && cost) {
+    candidates.push({ value: gp + cost.value, tag: `${GROSS_PROFIT_TAG}+${cost.tag}` })
+  }
+
+  if (candidates.length > 1) {
+    let best = candidates[0]!
+    for (const c of candidates) if (c.value > best.value) best = c
+    return best
   }
   return firstOf(tags, REVENUE_CHAIN)
 }
@@ -214,10 +230,10 @@ export function resolveFlow(
   if (rev) used.revenue = rev.tag
 
   let grossProfit: number | null = null
-  const gp = tags.get('GrossProfit')
+  const gp = tags.get(GROSS_PROFIT_TAG)
   if (typeof gp === 'number') {
     grossProfit = gp
-    used.grossProfit = 'GrossProfit'
+    used.grossProfit = GROSS_PROFIT_TAG
   } else if (rev) {
     const cost = firstOf(tags, COST_CHAIN)
     if (cost) {
