@@ -4,7 +4,7 @@ import type { BulkFundamentalProvider, CompanyFactsProvider } from '@/providers/
 import { normalizeFacts } from '@/providers/fundamental/normalizer'
 import { listUniverseCiks } from '@/db/repositories/companies'
 import {
-  insertFacts, getFacts, replaceFinancials, selectStaleCiks,
+  insertFacts, getFacts, replaceFinancials, selectStaleCiks, selectThinCoverageCiks,
 } from '@/db/repositories/financials'
 import { recentQuarters } from '@/pipeline/quarters'
 import { runJob, type JobStats } from '@/pipeline/runner'
@@ -42,14 +42,34 @@ export async function ingestFundamentals(deps: FundamentalsDeps): Promise<JobSta
       }
     }
 
-    // 벌크가 덮지 못한 기업만 API로 보충한다
+    // 벌크가 덮지 못한 기업만 API로 보충한다. 후보는 두 갈래를 합친다:
+    //  1) selectStaleCiks — filed_date가 오래됐거나 아예 없는 회사(기존 기준).
+    //  2) selectThinCoverageCiks — filed_date는 최신이지만 저장된 사실 자체가
+    //     비정상적으로 적은 회사. (1)만으로는 companyfacts 파서가 응답을 통째로
+    //     버리는 버그(cik가 문자열이라 거부되는 경우 등)를 절대 재조회로 치유할 수
+    //     없다 — bulk가 채운 filed_date가 최신으로 보이기 때문이다. 근거와 임계값
+    //     산출은 companyfacts-cik-report.md 참고.
     const stale = selectStaleCiks(raw, asOf, INCREMENTAL_STALE_DAYS)
+    const thinCoverage = selectThinCoverageCiks(raw, cfg.ingest.thin_coverage_min_facts)
+    const toFetch = [...new Set([...stale, ...thinCoverage])].sort((a, b) => a - b)
+
     let apiFacts = 0
     let apiFailed = 0
+    // 응답은 받았는데(200, null이 아님) 추적 태그가 하나도 안 남은 경우 — 결함
+    // 리포트의 재발을 감지하기 위한 신호. null(확인된 404)은 정상 경로이므로 세지
+    // 않는다.
+    let apiEmptyParse = 0
     const apiFailedCiks: string[] = []
-    for (const cik of stale) {
+    const apiEmptyParseCiks: string[] = []
+    for (const cik of toFetch) {
       try {
-        apiFacts += insertFacts(raw, await companyFacts.fetchCompany(cik))
+        const facts = await companyFacts.fetchCompany(cik)
+        if (facts === null) continue
+        apiFacts += insertFacts(raw, facts)
+        if (facts.length === 0) {
+          apiEmptyParse++
+          apiEmptyParseCiks.push(String(cik))
+        }
       } catch {
         apiFailed++
         apiFailedCiks.push(String(cik))
@@ -112,9 +132,13 @@ export async function ingestFundamentals(deps: FundamentalsDeps): Promise<JobSta
       quartersLoaded,
       bulkFacts,
       staleCompanies: stale.length,
+      thinCoverageCompanies: thinCoverage.length,
+      apiCallsPlanned: toFetch.length,
       apiFacts,
       apiFailed,
       apiFailedCiks,
+      apiEmptyParse,
+      apiEmptyParseCiks,
       normalized,
       noData,
       normalizeFailed,

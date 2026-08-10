@@ -132,3 +132,38 @@ export function selectStaleCiks(
     .all(cutoff) as { cik: number }[]
   return rows.map((r) => r.cik)
 }
+
+// 왜 filed_date 기준 staleness만으로는 부족한가(결함: 문자열 cik 재발 시나리오): 이
+// 함수가 잡아내는 대상은 selectStaleCiks가 "충분히 최신"이라고 판단해 절대 건드리지
+// 않는 회사다. companyfacts 파서가 응답을 통째로 버리는 버그(예: cik가 숫자가 아닌
+// 문자열이라 거부되는 경우)가 있으면 bulk 사실만 쌓이고 API 사실은 하나도 못 들어오는데,
+// bulk의 filed_date는 최근 분기 그대로라 "최신"으로 보인다 — filed_date 기준으로는
+// 절대 재조회 대상이 되지 않는다(실측: 1,179개 유니버스 중 180개가 이 패턴, API 소스
+// 사실 0건·평균 149건 vs 정상군 평균 876건). 이 함수는 filed_date와 무관하게 "저장된
+// 사실 자체가 이 정도로 적을 리 없다"는 신호만으로 재조회 후보를 골라 자가치유시킨다.
+//
+// 임계값 근거(companyfacts-cik-report.md 실측): API 소스가 전혀 없는 180개 회사의
+// fact_count는 평균 149·최댓값 391인 반면, API 소스가 있는 999개 회사는 평균 876·
+// 최솟값 127이며 그중 200 미만은 단 1개(0.1%, SAIHEAT Ltd — 신생 소형주로 실제로도
+// 데이터가 얇다)뿐이다. 200을 기본값으로 쓰면 문제 코호트의 83%(149/180)를 잡아내고
+// 이미 정상 커버리지를 가진 회사를 잘못 재조회 대상에 넣는 비율은 0.1%로 억제된다.
+// 소형/신규 상장사가 진짜로 얇은 경우(예: 아직 상장 이력이 짧은 제약사)는 재조회해도
+// 결과가 똑같이 얇을 뿐 — 값을 왜곡하지 않고 API 호출 한 번을 더 쓸 뿐이므로 안전한
+// 방향의 오탐이다. financial_facts 행이 0건인 회사(신규 상장사, 아직 한 번도 못 받은
+// 경우)는 INNER JOIN이 걸러낸다 — 그건 이미 selectStaleCiks의 NULL 분기가 처리한다.
+export function selectThinCoverageCiks(
+  raw: Database.Database,
+  minFacts: number,
+): number[] {
+  const rows = raw
+    .prepare(
+      `SELECT c.cik FROM companies c
+       JOIN company_industry ci ON ci.cik = c.cik
+       JOIN (SELECT cik, COUNT(*) AS n FROM financial_facts GROUP BY cik) f
+         ON f.cik = c.cik
+       WHERE f.n < ?
+       ORDER BY c.cik`,
+    )
+    .all(minFacts) as { cik: number }[]
+  return rows.map((r) => r.cik)
+}

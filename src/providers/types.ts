@@ -51,7 +51,10 @@ export type BulkFundamentalProvider = {
 }
 
 export type CompanyFactsProvider = {
-  fetchCompany(cik: number): Promise<RawFact[]>
+  // null = 확인된 404(XBRL 신고 이력 없음, 정상). []는 응답을 받았지만(200) 추적
+  // 태그가 하나도 안 남은 경우 — 정상적으로는 거의 없어야 하므로 호출자가 구분해서
+  // 다뤄야 한다 (ingest-fundamentals의 apiEmptyParse 참고).
+  fetchCompany(cik: number): Promise<RawFact[] | null>
 }
 
 export type Quote = { price: number; date: string }

@@ -16,6 +16,7 @@ ingest:
   cache_dir: "./data/cache"
   normalize_failure_rate_threshold: 0.5
   normalize_failure_min_sample: 20
+  thin_coverage_min_facts: 200
 
 classification:
   leader_ratio_of_max: 0.25

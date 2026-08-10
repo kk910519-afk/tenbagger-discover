@@ -19,6 +19,13 @@ ingest:
   # 문제일 가능성이 높다는 신호. 근거는 task-11-report.md 참고.
   normalize_failure_rate_threshold: 0.5
   normalize_failure_min_sample: 20
+  # 저장된 financial_facts 행 수가 이 값보다 적으면 filed_date가 최신이어도(즉
+  # selectStaleCiks가 최신으로 판단해도) API 재조회 대상에 넣는다 — 자가치유 가드.
+  # 근거는 companyfacts-cik-report.md: API 소스 사실이 0건인 180개 회사는 fact_count
+  # 평균 149·최댓값 391인 반면, API 소스가 있는 999개 회사는 평균 876·최솟값 127이고
+  # 200 미만은 0.1%(1개)뿐이다. 200은 문제 코호트의 83%를 잡아내면서 이미 정상인
+  # 회사를 잘못 재조회에 넣는 비율은 0.1%로 억제한다.
+  thin_coverage_min_facts: 200
 
 classification:
   leader_ratio_of_max: 0.25

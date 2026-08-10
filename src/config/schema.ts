@@ -32,6 +32,7 @@ export const configSchema = z
         cache_dir: z.string(),
         normalize_failure_rate_threshold: z.number().min(0).max(1),
         normalize_failure_min_sample: z.number().int().positive(),
+        thin_coverage_min_facts: z.number().int().positive(),
       })
       .strict(),
     classification: z

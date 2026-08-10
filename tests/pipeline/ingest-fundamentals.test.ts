@@ -6,7 +6,7 @@ import type Database from 'better-sqlite3'
 import { getRawDb, runMigrations } from '@/db/client'
 import { parseConfig } from '@/config'
 import { ingestFundamentals } from '@/pipeline/jobs/ingest-fundamentals'
-import { getFinancialsFor, selectStaleCiks } from '@/db/repositories/financials'
+import { getFinancialsFor, selectStaleCiks, selectThinCoverageCiks } from '@/db/repositories/financials'
 import type { BulkFundamentalProvider, CompanyFactsProvider, RawFact } from '@/providers/types'
 
 const cfg = parseConfig(readFileSync('config.yaml', 'utf8'))
@@ -210,5 +210,142 @@ describe('selectStaleCiks', () => {
       // asOf를 오늘로 줘도(cutoff와 무관하게) 항상 포함되어야 한다.
       expect(selectStaleCiks(raw, '2026-08-09', 120)).toContain(NEW_LISTING_CIK)
     })
+  })
+})
+
+// companyfacts-cik-report.md: filed_date가 최신이어도(=selectStaleCiks가 놓쳐도)
+// 저장된 사실 자체가 비정상적으로 적은 회사는 자가치유 재조회 대상이어야 한다.
+describe('selectThinCoverageCiks', () => {
+  const FRESH_THIN_CIK = 5000000
+  const FRESH_RICH_CIK = 5000001
+  const NO_FACTS_CIK = 5000002
+
+  beforeAll(() => {
+    for (const [cik, ticker] of [
+      [FRESH_THIN_CIK, 'THIN'], [FRESH_RICH_CIK, 'RICH'], [NO_FACTS_CIK, 'NONE'],
+    ] as const) {
+      raw.prepare(
+        `INSERT INTO companies (cik, ticker, name, is_active, first_seen, last_updated)
+         VALUES (?, ?, ?, 1, '2026-08-09', '2026-08-09')`,
+      ).run(cik, ticker, `${ticker} CORP`)
+      raw.prepare(
+        `INSERT INTO company_industry (cik, industry_slug, theme_slug, is_primary, source)
+         VALUES (?, 'ai-infrastructure', 'ai-software-semi', 1, 'override')`,
+      ).run(cik)
+    }
+    // FRESH_THIN_CIK: filed_date가 오늘이라 selectStaleCiks 기준으로는 "최신"이지만
+    // 사실이 3건뿐이다 — 이것이 결함의 실제 패턴(bulk만 채워지고 API가 통째로 버려짐).
+    const insertFact = raw.prepare(
+      `INSERT INTO financial_facts
+         (cik, tag, unit, period_start, period_end, qtrs, value, form, filed_date, accession, source)
+       VALUES (?, ?, 'USD', NULL, ?, 1, 1, '10-Q', '2026-08-01', ?, 'bulk')`,
+    )
+    for (let i = 0; i < 3; i++) {
+      insertFact.run(FRESH_THIN_CIK, `Tag${i}`, `2026-0${i + 1}-01`, `thin-${i}`)
+    }
+    // FRESH_RICH_CIK: 사실이 충분히 많다 (임계값 이상) — 재조회 대상이 아니어야 한다.
+    for (let i = 0; i < 10; i++) {
+      insertFact.run(FRESH_RICH_CIK, `Tag${i}`, `2026-0${(i % 9) + 1}-01`, `rich-${i}`)
+    }
+  })
+
+  it('filed_date는 최신이지만 사실 수가 임계값 미만인 회사를 포함한다', () => {
+    expect(selectThinCoverageCiks(raw, 5)).toContain(FRESH_THIN_CIK)
+  })
+
+  it('임계값 이상으로 채워진 회사는 제외한다', () => {
+    expect(selectThinCoverageCiks(raw, 5)).not.toContain(FRESH_RICH_CIK)
+  })
+
+  it('사실이 전혀 없는 회사(신규 상장사)는 제외한다 — selectStaleCiks의 NULL 분기가 이미 처리한다', () => {
+    expect(selectThinCoverageCiks(raw, 5)).not.toContain(NO_FACTS_CIK)
+  })
+
+  it('filed_date 기준 staleness만으로는 이 회사를 잡아내지 못한다 (결함 재현)', () => {
+    // 바로 이 지점이 결함이다: filed_date가 asOf와 같은 날이므로 selectStaleCiks는
+    // 이 회사를 절대 재조회 대상으로 고르지 않는다.
+    expect(selectStaleCiks(raw, '2026-08-09', 120)).not.toContain(FRESH_THIN_CIK)
+  })
+})
+
+describe('ingestFundamentals — thin-coverage 자가치유와 apiEmptyParse 관측 (companyfacts-cik-report.md)', () => {
+  const FRESH_THIN_CIK = 6100000
+  const EMPTY_PARSE_CIK = 6100001
+  const NOT_FOUND_CIK = 6100002
+
+  let thinRaw: Database.Database
+  let thinStats: Record<string, unknown>
+  let calledCiks: number[]
+
+  const bulkNoop: BulkFundamentalProvider = { fetchQuarter: async () => [] }
+
+  function apiFact(cik: number): RawFact {
+    return {
+      cik, tag: 'Revenues', unit: 'USD', periodStart: null, periodEnd: '2026-06-30',
+      qtrs: 1, value: 500, form: '10-Q', filedDate: '2026-08-05',
+      accession: `api-${cik}`, source: 'api',
+    }
+  }
+
+  const companyFactsMixed: CompanyFactsProvider = {
+    fetchCompany: async (cik) => {
+      calledCiks.push(cik)
+      if (cik === FRESH_THIN_CIK) return [apiFact(cik)]
+      if (cik === EMPTY_PARSE_CIK) return [] // 200이지만 추적 태그 0건 — 의심스러움
+      if (cik === NOT_FOUND_CIK) return null // 확인된 404 — 정상
+      return []
+    },
+  }
+
+  beforeAll(async () => {
+    thinRaw = getRawDb(join(mkdtempSync(join(tmpdir(), 'tb-fund-thin-')), 'f.db'))
+    runMigrations(thinRaw)
+    calledCiks = []
+    for (const [cik, ticker] of [
+      [FRESH_THIN_CIK, 'THIN'], [EMPTY_PARSE_CIK, 'EMPTY'], [NOT_FOUND_CIK, 'GONE'],
+    ] as const) {
+      thinRaw.prepare(
+        `INSERT INTO companies (cik, ticker, name, is_active, first_seen, last_updated)
+         VALUES (?, ?, ?, 1, '2026-08-09', '2026-08-09')`,
+      ).run(cik, ticker, `${ticker} CORP`)
+      thinRaw.prepare(
+        `INSERT INTO company_industry (cik, industry_slug, theme_slug, is_primary, source)
+         VALUES (?, 'ai-infrastructure', 'ai-software-semi', 1, 'override')`,
+      ).run(cik)
+    }
+    // 세 회사 모두 filed_date를 asOf 근처(최신)로 채워 selectStaleCiks만으로는
+    // 재조회 대상이 아니게 만든다 — thin-coverage 경로가 아니면 API가 호출되지
+    // 않아야 정상인 시나리오다. 사실 수는 임계값(200) 밑으로 둔다.
+    const insertFact = thinRaw.prepare(
+      `INSERT INTO financial_facts
+         (cik, tag, unit, period_start, period_end, qtrs, value, form, filed_date, accession, source)
+       VALUES (?, 'Revenues', 'USD', NULL, '2026-06-30', 1, 1, '10-Q', '2026-08-05', ?, 'bulk')`,
+    )
+    for (const cik of [FRESH_THIN_CIK, EMPTY_PARSE_CIK, NOT_FOUND_CIK]) {
+      insertFact.run(cik, `seed-${cik}`)
+    }
+    thinStats = await ingestFundamentals({
+      raw: thinRaw, cfg, bulk: bulkNoop, companyFacts: companyFactsMixed, asOf: '2026-08-09',
+    })
+  })
+
+  it('filed_date가 최신이라 selectStaleCiks만으로는 대상이 아니지만, thin coverage라서 API가 호출된다', () => {
+    expect(calledCiks).toContain(FRESH_THIN_CIK)
+    expect(calledCiks).toContain(EMPTY_PARSE_CIK)
+    expect(calledCiks).toContain(NOT_FOUND_CIK)
+  })
+
+  it('thinCoverageCompanies 통계에 세 회사가 모두 반영된다', () => {
+    expect(thinStats.thinCoverageCompanies).toBe(3)
+  })
+
+  it('200이지만 추적 태그 0건인 응답만 apiEmptyParse로 센다 — 404(null)는 세지 않는다', () => {
+    expect(thinStats.apiEmptyParse).toBe(1)
+    expect(thinStats.apiEmptyParseCiks).toEqual([String(EMPTY_PARSE_CIK)])
+  })
+
+  it('정상적으로 사실을 반환한 회사의 데이터는 실제로 저장된다', () => {
+    const fin = getFinancialsFor(thinRaw, FRESH_THIN_CIK)
+    expect(fin.quarterly.some((p) => p.revenue === 500)).toBe(true)
   })
 })
