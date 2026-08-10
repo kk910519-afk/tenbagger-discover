@@ -5,7 +5,9 @@ import { normalizeFacts } from '@/providers/fundamental/normalizer'
 import { listUniverseCiks } from '@/db/repositories/companies'
 import {
   insertFacts, getFacts, replaceFinancials, selectStaleCiks, selectThinCoverageCiks,
+  selectTagSetStaleCiks, markTagSetFetched,
 } from '@/db/repositories/financials'
+import { TRACKED_TAGS_FINGERPRINT } from '@/providers/fundamental/tags'
 import { recentQuarters } from '@/pipeline/quarters'
 import { runJob, type JobStats } from '@/pipeline/runner'
 
@@ -49,9 +51,14 @@ export async function ingestFundamentals(deps: FundamentalsDeps): Promise<JobSta
     //     버리는 버그(cik가 문자열이라 거부되는 경우 등)를 절대 재조회로 치유할 수
     //     없다 — bulk가 채운 filed_date가 최신으로 보이기 때문이다. 근거와 임계값
     //     산출은 companyfacts-cik-report.md 참고.
+    //  3) selectTagSetStaleCiks — 마지막 수집 이후 추적 태그 집합이 바뀐 회사. TRACKED_TAGS는
+    //     파싱 시점에 필터링하므로 목록을 늘려도 (1)·(2)로는 기존 회사가 절대 재조회되지
+    //     않는다 — 신고일도 최신이고 사실 수도 충분하기 때문이다. 이 기준이 없으면 앞으로
+    //     태그를 추가할 때마다 그 추가가 조용히 무효가 된다.
     const stale = selectStaleCiks(raw, asOf, INCREMENTAL_STALE_DAYS)
     const thinCoverage = selectThinCoverageCiks(raw, cfg.ingest.thin_coverage_min_facts)
-    const toFetch = [...new Set([...stale, ...thinCoverage])].sort((a, b) => a - b)
+    const tagSetStale = selectTagSetStaleCiks(raw, TRACKED_TAGS_FINGERPRINT)
+    const toFetch = [...new Set([...stale, ...thinCoverage, ...tagSetStale])].sort((a, b) => a - b)
 
     let apiFacts = 0
     let apiFailed = 0
@@ -64,6 +71,10 @@ export async function ingestFundamentals(deps: FundamentalsDeps): Promise<JobSta
     for (const cik of toFetch) {
       try {
         const facts = await companyFacts.fetchCompany(cik)
+        // 조회를 마친 회사에만 현재 태그 지문을 남긴다 — 404(신고 이력 없음)도 "이 태그
+        // 집합으로 확인 완료"이므로 기록한다. 던진 회사는 기록하지 않아 다음 실행에서
+        // 다시 대상이 된다(재개 가능).
+        markTagSetFetched(raw, cik, TRACKED_TAGS_FINGERPRINT, asOf)
         if (facts === null) continue
         apiFacts += insertFacts(raw, facts)
         if (facts.length === 0) {
@@ -133,6 +144,8 @@ export async function ingestFundamentals(deps: FundamentalsDeps): Promise<JobSta
       bulkFacts,
       staleCompanies: stale.length,
       thinCoverageCompanies: thinCoverage.length,
+      tagSetStaleCompanies: tagSetStale.length,
+      tagsFingerprint: TRACKED_TAGS_FINGERPRINT,
       apiCallsPlanned: toFetch.length,
       apiFacts,
       apiFailed,

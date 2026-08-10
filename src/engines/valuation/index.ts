@@ -1,5 +1,14 @@
-/** 게이트, 페이드 스케줄, 곡선 등 이 엔진의 계산 규칙을 바꾸면 반드시 올린다. */
-export const ENGINE_VERSION = 'valuation-1.0.0'
+/**
+ * 게이트, 페이드 스케줄, 곡선 등 이 엔진의 계산 규칙을 바꾸면 반드시 올린다.
+ * 계산 규칙이 그대로여도 **입력의 정의**가 바뀌면 같은 회사의 판정이 달라지므로
+ * 그때도 올린다 — 그러지 않으면 점수 이력에서 "회사가 바뀌었나"와 "잣대가
+ * 바뀌었나"를 구분할 수 없다.
+ *
+ * 1.1.0 — `totalDebt`의 정의 확장(debt-coverage 과제). ROIC의 투하자본과 DCF의
+ * 순부채가 모두 이 값을 쓰므로 Moat Signal·Fair Value가 함께 움직인다. 규칙 자체는
+ * 손대지 않았다(해자 임계값·WACC·기간 요구치 모두 동일).
+ */
+export const ENGINE_VERSION = 'valuation-1.1.0'
 
 export { computeFairValue } from './fair-value.js'
 export type { FairValueResult, FairValueReason, FairValueAssumptions } from './fair-value.js'

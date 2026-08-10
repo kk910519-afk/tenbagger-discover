@@ -8,6 +8,7 @@ import { parseConfig } from '@/config'
 import { loadTaxonomy } from '@/taxonomy'
 import { computeScores, configHash, valuationConfigHash } from '@/pipeline/jobs/compute-scores'
 import { ENGINE_VERSION } from '@/engines/tenbagger'
+import { ENGINE_VERSION as VALUATION_ENGINE_VERSION } from '@/engines/valuation'
 
 const cfg = parseConfig(readFileSync('config.yaml', 'utf8'))
 const taxonomy = loadTaxonomy()
@@ -346,7 +347,12 @@ describe('computeScores — valuations', () => {
     const r = raw
       .prepare('SELECT engine_version FROM valuations WHERE cik = 1 AND as_of = ?')
       .get('2026-08-09') as { engine_version: string }
-    expect(r.engine_version).toMatch(/^valuation-1\.0\.0\+[0-9a-f]{8}$/)
+    // 버전 문자열을 하드코딩하지 않는다 — 확인하려는 것은 "엔진 버전 + config 해시"라는
+    // 형식이지 특정 버전이 아니다(부채 정의 변경 등으로 버전은 계속 올라간다).
+    expect(r.engine_version).toBe(
+      `${VALUATION_ENGINE_VERSION}+${valuationConfigHash(cfg)}`,
+    )
+    expect(r.engine_version).toMatch(/\+[0-9a-f]{8}$/)
   })
 
   it('동일 as_of 재실행은 valuations도 중복 없이 교체한다', async () => {

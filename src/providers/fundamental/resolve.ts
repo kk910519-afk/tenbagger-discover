@@ -1,4 +1,9 @@
 import type { RawFact } from '../types.js'
+import {
+  DEBT_COMBINED_TOTAL_TAG, DEBT_CURRENT_TOTAL_TAG,
+  LONG_TERM_DEBT_CURRENT_TAG, LONG_TERM_DEBT_FAMILY, LONG_TERM_DEBT_NONCURRENT_TAG,
+  SHORT_TERM_BORROWING_TAGS, SPECIFIC_DEBT_FAMILIES, type DebtFamily,
+} from './tags.js'
 
 export type FactIndex = {
   /** qtrs → periodEnd → tag → value */
@@ -273,6 +278,107 @@ export function resolveFlow(
   }
 }
 
+type Resolved = { value: number; tag: string }
+
+/**
+ * 한 상품 계열의 잔액. 총계 태그와 (비유동+유동) 합이 둘 다 있으면 **큰 쪽**을 쓴다 —
+ * 어느 쪽이 디멘션 슬라이스로 오염될지 고정돼 있지 않고, 오염값은 정의상 진짜 총계의
+ * 부분집합이라 항상 작다(tags.ts의 실측 근거, `resolveRevenue`와 같은 규칙).
+ */
+function familyBalance(tags: Map<string, number>, family: DebtFamily): Resolved | null {
+  const candidates: Resolved[] = []
+  const total = firstOf(tags, [...family.total])
+  if (total) candidates.push(total)
+
+  const noncurrent = firstOf(tags, [...family.noncurrent])
+  const current = firstOf(tags, [...family.current])
+  if (noncurrent || current) {
+    candidates.push({
+      value: (noncurrent?.value ?? 0) + (current?.value ?? 0),
+      tag: [noncurrent?.tag, current?.tag].filter(Boolean).join('+'),
+    })
+  }
+
+  if (candidates.length === 0) return null
+  let best = candidates[0]!
+  for (const c of candidates) if (c.value > best.value) best = c
+  return best
+}
+
+/**
+ * 총부채(이자부 차입금) 해석. 티어 순서이며 **아래 티어는 위 티어가 아무 값도 내지
+ * 못할 때만 작동한다** — 즉 이번 확장은 순수하게 가산적이라, 지금 부채가 산출되는
+ * 회사(NVIDIA 포함)의 값은 정의상 바뀌지 않는다. 커버리지 변화는 전부 null → 값이다.
+ *
+ * 티어 1·2는 확장 전 코드와 글자 그대로 같은 규칙이고, 티어 3·4가 이번에 추가됐다.
+ * 태그 선정과 계열 간 최댓값 규칙의 실측 근거는 tags.ts 주석과
+ * debt-coverage-report.md 1절 참고.
+ */
+export function resolveTotalDebt(tags: Map<string, number>): Resolved | null {
+  // 티어 1 — 장기차입금을 비유동/유동으로 나눠 신고한 경우(가장 흔한 형태).
+  const ltNon = tags.get(LONG_TERM_DEBT_NONCURRENT_TAG)
+  const ltCur = tags.get(LONG_TERM_DEBT_CURRENT_TAG)
+  if (typeof ltNon === 'number' || typeof ltCur === 'number') {
+    return {
+      value: (ltNon ?? 0) + (ltCur ?? 0),
+      tag: [
+        typeof ltNon === 'number' ? LONG_TERM_DEBT_NONCURRENT_TAG : null,
+        typeof ltCur === 'number' ? LONG_TERM_DEBT_CURRENT_TAG : null,
+      ].filter(Boolean).join('+'),
+    }
+  }
+
+  // 티어 2 — 유동 차입금 총계만 신고한 경우. 정의상 유동 만기분·단기차입금·유동
+  // 어음을 모두 포함하는 총계라 구성요소와 섞지 않는다.
+  const debtCurrent = tags.get(DEBT_CURRENT_TOTAL_TAG)
+  if (typeof debtCurrent === 'number') {
+    return { value: debtCurrent, tag: DEBT_CURRENT_TOTAL_TAG }
+  }
+
+  // 티어 3 — 장·단기를 하나로 합쳐 신고한 총계 태그.
+  const combined = tags.get(DEBT_COMBINED_TOTAL_TAG)
+  if (typeof combined === 'number') {
+    return { value: combined, tag: DEBT_COMBINED_TOTAL_TAG }
+  }
+
+  // 티어 4 — 상품별 이름으로만 태깅한 발행사. 상품별 계열은 서로 다른 상품이라
+  // 합산하고, 그 합과 `LongTermDebt`(같은 부채를 품고 있을 수 있는 롤업) 사이에서만
+  // 큰 쪽을 고른다. 단기차입금은 장기차입금에 포함될 수 없으므로 언제나 더한다.
+  // (tags.ts의 TLS·SND·XEL 실사례 참고)
+  const rollup = familyBalance(tags, LONG_TERM_DEBT_FAMILY)
+  let specific: Resolved | null = null
+  for (const family of SPECIFIC_DEBT_FAMILIES) {
+    const balance = familyBalance(tags, family)
+    if (!balance) continue
+    specific = specific === null
+      ? balance
+      : { value: specific.value + balance.value, tag: `${specific.tag}+${balance.tag}` }
+  }
+  let core: Resolved | null = null
+  for (const candidate of [rollup, specific]) {
+    if (candidate && (core === null || candidate.value > core.value)) core = candidate
+  }
+
+  const shortTerm = firstOf(tags, [...SHORT_TERM_BORROWING_TAGS])
+  if (core === null && shortTerm === null) return null
+
+  const value = (core?.value ?? 0) + (shortTerm?.value ?? 0)
+
+  // 티어 4가 0을 내면 그것은 "부채가 없다"가 아니라 "이 상품들이 비어 있다"이다.
+  // 티어 1~3의 태그는 대차대조표의 총계 개념이라 0이 곧 신고된 사실이지만, 티어 4가
+  // 보는 것은 상품 단위 잔액이라 정의상 부분적이다 — 다른 이름으로 신고된 부채가
+  // 남아 있어도 알 수 없다. 실측(CDNS, Cadence Design Systems): 2024-12-31 대차대조표에
+  // 선순위채 약 $2.5B이 있는데 그 기간에는 추적 가능한 부채 태그가 하나도 없고,
+  // 400일 소급으로 2023-12-31의 `LinesOfCreditCurrent`=0(리볼버 미인출)만 딸려 들어와
+  // 총부채가 0으로 확정됐다. 확신에 찬 틀린 0은 정직한 null보다 나쁘다.
+  if (value === 0) return null
+
+  return {
+    value,
+    tag: [core?.tag, shortTerm?.tag].filter(Boolean).join('+'),
+  }
+}
+
 export type ResolvedStock = {
   cash: number | null
   totalDebt: number | null
@@ -304,24 +410,9 @@ export function resolveStock(
   // "fixing" it by accident.
   // See test: 단기투자자산만 있고 현금성자산이 없으면 null
 
-  let totalDebt: number | null = null
-  const ltNon = tags.get('LongTermDebtNoncurrent')
-  const ltCur = tags.get('LongTermDebtCurrent')
-  if (typeof ltNon === 'number' || typeof ltCur === 'number') {
-    totalDebt = (ltNon ?? 0) + (ltCur ?? 0)
-    used.totalDebt = [
-      typeof ltNon === 'number' ? 'LongTermDebtNoncurrent' : null,
-      typeof ltCur === 'number' ? 'LongTermDebtCurrent' : null,
-    ]
-      .filter(Boolean)
-      .join('+')
-  } else {
-    const dc = tags.get('DebtCurrent')
-    if (typeof dc === 'number') {
-      totalDebt = dc
-      used.totalDebt = 'DebtCurrent'
-    }
-  }
+  const debt = resolveTotalDebt(tags)
+  const totalDebt = debt?.value ?? null
+  if (debt) used.totalDebt = debt.tag
 
   const simple = (field: string, tag: string): number | null => {
     const v = tags.get(tag)

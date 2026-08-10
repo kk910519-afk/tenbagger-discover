@@ -167,3 +167,47 @@ export function selectThinCoverageCiks(
     .all(minFacts) as { cik: number }[]
   return rows.map((r) => r.cik)
 }
+
+// 왜 세 번째 재조회 기준이 필요한가: `TRACKED_TAGS`는 **파싱 시점에** 태그를 걸러내므로,
+// 목록에 없던 태그는 SEC가 보내줘도 저장되지 않는다. 목록을 늘려도 이미 수집된 회사는
+// 다시 조회되지 않는다 — `selectStaleCiks`는 신고일만 보는데 이 회사들의 저장된 신고일은
+// 최신이고(bulk가 매 분기 갱신한다), `selectThinCoverageCiks`도 사실 수가 충분하니
+// 발동하지 않는다. 즉 태그를 추가할 때마다 그 추가는 신규 상장사에만 적용되고 기존
+// 유니버스에서는 조용히 무효가 된다(이번 과제의 부채 태그 확장이 정확히 그 경우다).
+//
+// 이 함수는 회사별로 "마지막 API 수집 시점의 추적 태그 집합 지문"을 저장한
+// `ingest_tag_state`와 현재 지문을 비교해, 다르거나 아예 기록이 없는 회사를 고른다.
+// 이번 한 번을 위한 수동 조치가 아니라 앞으로 태그를 추가·삭제할 때마다 자동으로
+// 작동하는 구조다. 회사별로 기록하므로 실행이 중간에 끊겨도 이미 받은 회사는 다시
+// 받지 않는다(재개 가능).
+export function selectTagSetStaleCiks(
+  raw: Database.Database,
+  fingerprint: string,
+): number[] {
+  const rows = raw
+    .prepare(
+      `SELECT c.cik FROM companies c
+       JOIN company_industry ci ON ci.cik = c.cik
+       LEFT JOIN ingest_tag_state t ON t.cik = c.cik
+       WHERE t.tags_fingerprint IS NULL OR t.tags_fingerprint <> ?
+       ORDER BY c.cik`,
+    )
+    .all(fingerprint) as { cik: number }[]
+  return rows.map((r) => r.cik)
+}
+
+/** API 조회를 실제로 마친 회사에만 현재 지문을 기록한다(실패한 회사는 다음 실행에서 다시 대상). */
+export function markTagSetFetched(
+  raw: Database.Database,
+  cik: number,
+  fingerprint: string,
+  at: string,
+): void {
+  raw
+    .prepare(
+      `INSERT INTO ingest_tag_state (cik, tags_fingerprint, updated_at) VALUES (?, ?, ?)
+       ON CONFLICT(cik) DO UPDATE SET tags_fingerprint = excluded.tags_fingerprint,
+                                      updated_at = excluded.updated_at`,
+    )
+    .run(cik, fingerprint, at)
+}

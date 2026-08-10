@@ -6,10 +6,20 @@ import type Database from 'better-sqlite3'
 import { getRawDb, runMigrations } from '@/db/client'
 import { parseConfig } from '@/config'
 import { ingestFundamentals } from '@/pipeline/jobs/ingest-fundamentals'
-import { getFinancialsFor, selectStaleCiks, selectThinCoverageCiks } from '@/db/repositories/financials'
+import {
+  getFinancialsFor, selectStaleCiks, selectThinCoverageCiks, selectTagSetStaleCiks,
+  markTagSetFetched,
+} from '@/db/repositories/financials'
+import { TRACKED_TAGS, TRACKED_TAGS_FINGERPRINT } from '@/providers/fundamental/tags'
+import { createHash } from 'node:crypto'
 import type { BulkFundamentalProvider, CompanyFactsProvider, RawFact } from '@/providers/types'
 
 const cfg = parseConfig(readFileSync('config.yaml', 'utf8'))
+
+/** 지문 계산이 "정렬된 태그 내용"에만 의존하는지 독립적으로 재현해 확인한다. */
+function fingerprintOf(tags: Set<string>): string {
+  return createHash('sha256').update([...tags].sort().join('\n')).digest('hex').slice(0, 16)
+}
 
 function f(tag: string, qtrs: number, periodEnd: string, value: number): RawFact {
   return {
@@ -347,5 +357,117 @@ describe('ingestFundamentals — thin-coverage 자가치유와 apiEmptyParse 관
   it('정상적으로 사실을 반환한 회사의 데이터는 실제로 저장된다', () => {
     const fin = getFinancialsFor(thinRaw, FRESH_THIN_CIK)
     expect(fin.quarterly.some((p) => p.revenue === 500)).toBe(true)
+  })
+})
+
+// 추적 태그 집합이 바뀌면 재수집이 일어나야 한다(debt-coverage 과제 3항). TRACKED_TAGS는
+// 파싱 시점에 필터링하므로, 이 기준이 없으면 태그를 추가해도 기존 유니버스에서는 조용히
+// 무효가 된다 — 신고일도 최신이고 사실 수도 충분해 다른 두 기준이 발동하지 않기 때문이다.
+describe('selectTagSetStaleCiks — 태그 집합 변경 감지', () => {
+  const CIK = 7200000
+  let tagRaw: Database.Database
+
+  beforeAll(() => {
+    tagRaw = getRawDb(join(mkdtempSync(join(tmpdir(), 'tb-fund-tag-')), 'f.db'))
+    runMigrations(tagRaw)
+    tagRaw.prepare(
+      `INSERT INTO companies (cik, ticker, name, is_active, first_seen, last_updated)
+       VALUES (?, 'TAGS', 'TAGS CORP', 1, '2026-08-09', '2026-08-09')`,
+    ).run(CIK)
+    tagRaw.prepare(
+      `INSERT INTO company_industry (cik, industry_slug, theme_slug, is_primary, source)
+       VALUES (?, 'ai-infrastructure', 'ai-software-semi', 1, 'override')`,
+    ).run(CIK)
+    // 신고일은 오늘, 사실 수는 임계값을 넉넉히 넘긴다 — 기존 두 기준으로는 절대
+    // 재조회 대상이 되지 않는 상태를 만든다.
+    const insertFact = tagRaw.prepare(
+      `INSERT INTO financial_facts
+         (cik, tag, unit, period_start, period_end, qtrs, value, form, filed_date, accession, source)
+       VALUES (?, ?, 'USD', NULL, ?, 1, 1, '10-Q', '2026-08-08', ?, 'bulk')`,
+    )
+    for (let i = 0; i < cfg.ingest.thin_coverage_min_facts + 10; i++) {
+      insertFact.run(CIK, `Tag${i}`, '2026-06-30', `tag-${i}`)
+    }
+  })
+
+  it('기록이 전혀 없는 회사는 재조회 대상이다', () => {
+    expect(selectTagSetStaleCiks(tagRaw, 'fingerprint-A')).toContain(CIK)
+  })
+
+  it('같은 지문으로 기록되면 더 이상 대상이 아니다', () => {
+    markTagSetFetched(tagRaw, CIK, 'fingerprint-A', '2026-08-09')
+    expect(selectTagSetStaleCiks(tagRaw, 'fingerprint-A')).not.toContain(CIK)
+  })
+
+  it('지문이 달라지면(태그 추가) 다시 대상이 된다 — 이 기준의 존재 이유', () => {
+    expect(selectTagSetStaleCiks(tagRaw, 'fingerprint-B')).toContain(CIK)
+  })
+
+  it('다른 두 기준은 이 회사를 절대 잡지 못한다 (결함 재현)', () => {
+    expect(selectStaleCiks(tagRaw, '2026-08-09', 120)).not.toContain(CIK)
+    expect(selectThinCoverageCiks(tagRaw, cfg.ingest.thin_coverage_min_facts)).not.toContain(CIK)
+  })
+
+  it('TRACKED_TAGS_FINGERPRINT는 집합 내용에만 의존하고 안정적이다', () => {
+    expect(TRACKED_TAGS_FINGERPRINT).toMatch(/^[0-9a-f]{16}$/)
+    expect(TRACKED_TAGS_FINGERPRINT).toBe(fingerprintOf(TRACKED_TAGS))
+    // 순서만 다른 같은 집합은 같은 지문, 태그 하나가 늘면 다른 지문.
+    expect(fingerprintOf(new Set([...TRACKED_TAGS].reverse()))).toBe(TRACKED_TAGS_FINGERPRINT)
+    expect(fingerprintOf(new Set([...TRACKED_TAGS, 'SomeNewTag']))).not.toBe(TRACKED_TAGS_FINGERPRINT)
+  })
+})
+
+describe('ingestFundamentals — 태그 집합이 바뀌면 실제로 재조회한다', () => {
+  const CIK = 7300000
+  let changedRaw: Database.Database
+  let called: number[]
+
+  beforeAll(async () => {
+    changedRaw = getRawDb(join(mkdtempSync(join(tmpdir(), 'tb-fund-tagrun-')), 'f.db'))
+    runMigrations(changedRaw)
+    changedRaw.prepare(
+      `INSERT INTO companies (cik, ticker, name, is_active, first_seen, last_updated)
+       VALUES (?, 'TCHG', 'TAG CHANGE CORP', 1, '2026-08-09', '2026-08-09')`,
+    ).run(CIK)
+    changedRaw.prepare(
+      `INSERT INTO company_industry (cik, industry_slug, theme_slug, is_primary, source)
+       VALUES (?, 'ai-infrastructure', 'ai-software-semi', 1, 'override')`,
+    ).run(CIK)
+    const insertFact = changedRaw.prepare(
+      `INSERT INTO financial_facts
+         (cik, tag, unit, period_start, period_end, qtrs, value, form, filed_date, accession, source)
+       VALUES (?, ?, 'USD', NULL, '2026-06-30', 1, 1, '10-Q', '2026-08-08', ?, 'bulk')`,
+    )
+    for (let i = 0; i < cfg.ingest.thin_coverage_min_facts + 10; i++) {
+      insertFact.run(CIK, `Tag${i}`, `tag-${i}`)
+    }
+    // 이미 "현재 지문으로 수집 완료"라고 표시해 둔다 — 이 상태에서는 호출되면 안 된다.
+    markTagSetFetched(changedRaw, CIK, TRACKED_TAGS_FINGERPRINT, '2026-08-08')
+    called = []
+    const facts: CompanyFactsProvider = {
+      fetchCompany: async (cik) => { called.push(cik); return [] },
+    }
+    await ingestFundamentals({
+      raw: changedRaw, cfg, bulk: { fetchQuarter: async () => [] }, companyFacts: facts,
+      asOf: '2026-08-09',
+    })
+  })
+
+  it('지문이 같으면 API를 호출하지 않는다', () => {
+    expect(called).not.toContain(CIK)
+  })
+
+  it('지문이 달라지면 API를 호출하고 새 지문으로 갱신한다', async () => {
+    markTagSetFetched(changedRaw, CIK, 'stale-fingerprint', '2026-08-08')
+    called = []
+    const stats = await ingestFundamentals({
+      raw: changedRaw, cfg, bulk: { fetchQuarter: async () => [] },
+      companyFacts: { fetchCompany: async (cik) => { called.push(cik); return [] } },
+      asOf: '2026-08-09',
+    })
+    expect(called).toContain(CIK)
+    expect(stats.tagSetStaleCompanies).toBe(1)
+    expect(stats.tagsFingerprint).toBe(TRACKED_TAGS_FINGERPRINT)
+    expect(selectTagSetStaleCiks(changedRaw, TRACKED_TAGS_FINGERPRINT)).not.toContain(CIK)
   })
 })

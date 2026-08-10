@@ -42,6 +42,15 @@ export const financialFacts = sqliteTable('financial_facts', {
   source: text('source').notNull(),
 })
 
+// 회사별 "마지막 API 수집 시점의 추적 태그 집합 지문". TRACKED_TAGS가 파싱 시점에
+// 필터링하는 구조라, 집합이 바뀌면 기존 회사를 재조회해야 새 태그가 들어온다
+// (financials.ts `selectTagSetStaleCiks`).
+export const ingestTagState = sqliteTable('ingest_tag_state', {
+  cik: integer('cik').primaryKey(),
+  tagsFingerprint: text('tags_fingerprint').notNull(),
+  updatedAt: text('updated_at').notNull(),
+})
+
 export const marketData = sqliteTable(
   'market_data',
   {

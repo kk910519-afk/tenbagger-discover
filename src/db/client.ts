@@ -64,6 +64,17 @@ CREATE TABLE IF NOT EXISTS financial_facts (
 );
 CREATE INDEX IF NOT EXISTS idx_facts_cik_tag ON financial_facts(cik, tag, period_end);
 
+-- 회사별로 "마지막 API 수집이 어떤 추적 태그 집합에서 이뤄졌는가"를 남긴다.
+-- TRACKED_TAGS는 파싱 시점에 필터링하므로 집합이 바뀌면 기존 회사의 저장된 사실에는
+-- 새 태그가 영원히 들어오지 않는데, filed_date 기준 staleness도 fact_count 기준
+-- thin-coverage도 이 회사들을 "최신이고 두껍다"고 보아 재조회하지 않는다.
+-- 지문이 다른 회사를 재조회 대상으로 뽑는 근거 테이블이다.
+CREATE TABLE IF NOT EXISTS ingest_tag_state (
+  cik INTEGER PRIMARY KEY,
+  tags_fingerprint TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS market_data (
   cik INTEGER NOT NULL,
   date TEXT NOT NULL,

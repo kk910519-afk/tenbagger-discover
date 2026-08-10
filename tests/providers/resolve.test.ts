@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { indexFacts, resolveFlow, resolveStock } from '@/providers/fundamental/resolve'
+import {
+  indexFacts, resolveFlow, resolveStock, resolveTotalDebt,
+} from '@/providers/fundamental/resolve'
 import type { RawFact } from '@/providers/types'
 
 function fact(p: Partial<RawFact>): RawFact {
@@ -443,5 +445,118 @@ describe('resolveStock', () => {
     const r = resolveStock(new Map())
     expect(r.fields.sharesOutstanding).toBeNull()
     expect(r.used.sharesOutstanding).toBeUndefined()
+  })
+})
+
+// 부채 태그 확장(debt-coverage 과제). 티어 1·2는 확장 전 규칙 그대로이고 티어 3·4가
+// 신설됐다 — 아래 첫 describe가 "확장이 순수하게 가산적"임을(기존에 값이 나오던
+// 조합은 하나도 변하지 않음) 명시적으로 못 박는다.
+describe('resolveTotalDebt — 기존 조합은 값이 변하지 않는다 (가산적 확장 회귀)', () => {
+  it('LongTermDebtNoncurrent+Current가 있으면 다른 태그가 있어도 그 합만 쓴다', () => {
+    const r = resolveTotalDebt(new Map([
+      ['LongTermDebtNoncurrent', 800], ['LongTermDebtCurrent', 200],
+      // 아래는 전부 이번에 새로 추적하기 시작한 태그들 — 티어 1 결과를 건드리면 안 된다.
+      ['LongTermDebt', 1000], ['ShortTermBorrowings', 400], ['LineOfCredit', 900],
+      ['DebtCurrent', 250], ['DebtLongtermAndShorttermCombinedAmount', 1400],
+    ]))
+    expect(r).toEqual({ value: 1000, tag: 'LongTermDebtNoncurrent+LongTermDebtCurrent' })
+  })
+
+  it('비유동만 있어도 그것만 쓴다', () => {
+    expect(resolveTotalDebt(new Map([['LongTermDebtNoncurrent', 800], ['NotesPayable', 5000]])))
+      .toEqual({ value: 800, tag: 'LongTermDebtNoncurrent' })
+  })
+
+  it('DebtCurrent 폴백이 새 티어보다 우선한다', () => {
+    expect(resolveTotalDebt(new Map([['DebtCurrent', 300], ['LongTermDebt', 7000]])))
+      .toEqual({ value: 300, tag: 'DebtCurrent' })
+  })
+
+  it('부채 개념이 하나도 없으면 null — 0으로 가정하지 않는다', () => {
+    expect(resolveTotalDebt(new Map([['StockholdersEquity', 100]]))).toBeNull()
+  })
+
+  it('리스부채만 있으면 null — 리스는 차입금 정의에 넣지 않는다', () => {
+    expect(resolveTotalDebt(new Map([
+      ['OperatingLeaseLiability', 5000], ['OperatingLeaseLiabilityNoncurrent', 4000],
+      ['FinanceLeaseLiability', 900], ['FinanceLeaseLiabilityCurrent', 100],
+    ]))).toBeNull()
+  })
+})
+
+describe('resolveTotalDebt — 상품별 이름으로만 태깅한 발행사 (티어 3·4)', () => {
+  it('장·단기 합산 총계 태그를 그대로 쓴다', () => {
+    expect(resolveTotalDebt(new Map([['DebtLongtermAndShorttermCombinedAmount', 4200]])))
+      .toEqual({ value: 4200, tag: 'DebtLongtermAndShorttermCombinedAmount' })
+  })
+
+  it('LongTermDebt만 있으면 그것이 총 장기차입금이다 (유동 만기분 포함)', () => {
+    expect(resolveTotalDebt(new Map([['LongTermDebt', 2065]])))
+      .toEqual({ value: 2065, tag: 'LongTermDebt' })
+  })
+
+  it('TLS 실사례 — 롤업(LongTermDebt)과 상품합은 더하지 않고 큰 쪽을 쓴다 (이중계상 방지)', () => {
+    // TLS 2012-12-31: LongTermDebt와 신용한도 계열이 정확히 같은 부채를 가리켰다.
+    const r = resolveTotalDebt(new Map([
+      ['LongTermDebt', 18_934_000],
+      ['LinesOfCreditCurrent', 12_934_000], ['LongTermLineOfCredit', 6_000_000],
+    ]))
+    expect(r!.value).toBe(18_934_000)
+  })
+
+  it('SND 실사례 — 서로 다른 상품 계열은 합산하고, 오염된 롤업보다 그 합이 크면 그쪽을 쓴다', () => {
+    // SND 2016-12-31: LongTermDebt=570,000(슬라이스) vs 어음+신용한도=56,052,000.
+    const r = resolveTotalDebt(new Map([
+      ['LongTermDebt', 570_000],
+      ['NotesPayableCurrent', 6_052_000], ['LongTermLineOfCredit', 50_000_000],
+    ]))
+    expect(r!.value).toBe(56_052_000)
+  })
+
+  it('XEL 실사례 — 단기차입금은 장기차입금에 포함될 수 없으므로 더한다', () => {
+    const r = resolveTotalDebt(new Map([
+      ['LongTermDebt', 16_209_000_000], ['ShortTermBorrowings', 1_038_000_000],
+    ]))
+    expect(r).toEqual({ value: 17_247_000_000, tag: 'LongTermDebt+ShortTermBorrowings' })
+  })
+
+  it('한 계열 안에서 총계와 (비유동+유동) 중 큰 쪽을 쓴다', () => {
+    // 총계 태그가 오염돼 작을 때 구성요소 합이 이긴다.
+    expect(resolveTotalDebt(new Map([
+      ['LineOfCredit', 100], ['LongTermLineOfCredit', 700], ['LinesOfCreditCurrent', 300],
+    ]))!.value).toBe(1000)
+    // 반대로 구성요소가 일부만 태깅됐으면 총계 태그가 이긴다.
+    expect(resolveTotalDebt(new Map([
+      ['LineOfCredit', 1000], ['LinesOfCreditCurrent', 300],
+    ]))!.value).toBe(1000)
+  })
+
+  it('전환사채는 이름 변형(ConvertibleDebt*/ConvertibleNotesPayable*)을 같은 계열로 본다', () => {
+    // 같은 계열의 이름 변형 둘이 함께 있어도 처음 하나만 쓴다 — 더하면 이중계상.
+    expect(resolveTotalDebt(new Map([
+      ['ConvertibleDebtCurrent', 500], ['ConvertibleNotesPayableCurrent', 500],
+    ]))!.value).toBe(500)
+  })
+
+  it('단기차입금만 있어도 값을 낸다', () => {
+    expect(resolveTotalDebt(new Map([['ShortTermBorrowings', 42]])))
+      .toEqual({ value: 42, tag: 'ShortTermBorrowings' })
+  })
+
+  it('CDNS 실사례 — 티어 4가 0이면 null이다 (상품 잔액 0은 무차입의 증거가 아니다)', () => {
+    // 리볼버 미인출(LinesOfCreditCurrent=0)만 잡히고 선순위채는 추적 태그에 없던 경우.
+    expect(resolveTotalDebt(new Map([['LinesOfCreditCurrent', 0]]))).toBeNull()
+    expect(resolveTotalDebt(new Map([
+      ['ConvertibleDebtNoncurrent', 0], ['ConvertibleDebtCurrent', 0],
+    ]))).toBeNull()
+  })
+
+  it('티어 1~3의 0은 신고된 총계이므로 그대로 0이다', () => {
+    expect(resolveTotalDebt(new Map([['LongTermDebtNoncurrent', 0]])))
+      .toEqual({ value: 0, tag: 'LongTermDebtNoncurrent' })
+    expect(resolveTotalDebt(new Map([['DebtCurrent', 0]])))
+      .toEqual({ value: 0, tag: 'DebtCurrent' })
+    expect(resolveTotalDebt(new Map([['DebtLongtermAndShorttermCombinedAmount', 0]])))
+      .toEqual({ value: 0, tag: 'DebtLongtermAndShorttermCombinedAmount' })
   })
 })
