@@ -77,6 +77,7 @@ scoring:
         zero_if_revenue_growth_below: 0.0
         zero_if_revenue_below: 10000000
         warning_multiplier: 0.5
+        revenue_fallback_periods: 4
     competitive_advantage:
       weight: 10
       min_signals: 2
@@ -113,7 +114,10 @@ valuation:
   terminal_growth_rate: 0.025
   max_implied_revenue_multiple: 3.00
   fade_curve: [[0, 1.00], [1, 0.80], [2, 0.60], [3, 0.40], [4, 0.20], [5, 0.00]]
-  mature_fcf_margin: 0.15
+  mature_margin:
+    lookback_periods: 8
+    min_periods: 4
+    max_dispersion: 1.00
   price_to_fair_value:
     undervalued_max_ratio: 0.85
     overvalued_min_ratio: 1.15

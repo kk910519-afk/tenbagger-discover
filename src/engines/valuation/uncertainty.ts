@@ -52,7 +52,7 @@ const APPLICABLE_DRIVERS: UncertaintyDriverKey[] = [
   'data_completeness',
 ]
 
-/** 내재가치 산출에 실제로 쓰이는 핵심 필드들 — data_completeness 드라이버의 분모다. */
+/** 내재가치 산출에 실제로 쓰이는 핵심 필드들. */
 const CORE_FIELDS: (keyof FinancialPeriod)[] = [
   'revenue',
   'grossProfit',
@@ -65,6 +65,32 @@ const CORE_FIELDS: (keyof FinancialPeriod)[] = [
   'rdExpense',
   'sbc',
 ]
+
+/**
+ * **다른 드라이버가 이미 그 결측을 청구하는 필드.** 최신 TTM 구간에서 이 셋이 비면
+ * 그것을 입력으로 쓰는 드라이버가 UNAVAILABLE이 되고, 커버리지 채움이 그 드라이버를
+ * 최대 위험 1.0으로 청구한다. 같은 결측을 data_completeness가 또 청구하면 **하나의
+ * 공백이 두 번 값을 매기는** 것이 된다 — 1,200개 중 394개가 그 상태였고, 40년 된
+ * 급여처리 대기업 ADP가 영업이익 하나가 해소되지 않아 ELEVATED(0.614)가, XEL이
+ * SEVERE(0.863)가 된 것이 그 결과다.
+ *
+ *   revenue        → revenue_predictability (매출 YoY 계열을 만들 수 없다)
+ *   operatingIncome→ operating_leverage(영업이익률 계열) · financial_leverage(부채/영업이익)
+ *   totalDebt      → financial_leverage
+ *
+ * 그래서 필드를 **분할**한다: 각 결측은 정확히 한 곳에서만 값이 매겨진다. 위 셋은 그
+ * 드라이버가, 나머지 일곱은 data_completeness가 청구한다. 커버리지 분모는 4로 그대로
+ * 두므로 이 엔진이 이미 검증한 항등식
+ *   score = (Σ 측정된 risk + (4 − 측정 수)) / 4
+ * 이 그대로 성립하고, 증거에 대한 단조성도 그대로다 — 결측이 채워지면 그 필드를 청구하던
+ * 쪽(드라이버든 data_completeness든)의 위험이 반드시 내려간다.
+ */
+const DRIVER_BLOCKING_FIELDS: (keyof FinancialPeriod)[] = ['revenue', 'operatingIncome', 'totalDebt']
+
+/** data_completeness가 청구하는 필드 = 핵심 필드 − 드라이버가 이미 청구하는 필드. */
+const COMPLETENESS_FIELDS: (keyof FinancialPeriod)[] = CORE_FIELDS.filter(
+  (f) => !DRIVER_BLOCKING_FIELDS.includes(f),
+)
 
 function revenueYoySeries(ttm: FinancialPeriod[], n: number): number[] {
   const out: number[] = []
@@ -87,10 +113,10 @@ function operatingMarginSeries(ttm: FinancialPeriod[], n: number): number[] {
 function dataCompleteness(p: FinancialPeriod | undefined): number {
   if (!p) return 0
   let present = 0
-  for (const field of CORE_FIELDS) {
+  for (const field of COMPLETENESS_FIELDS) {
     if (p[field] !== null) present++
   }
-  return present / CORE_FIELDS.length
+  return present / COMPLETENESS_FIELDS.length
 }
 
 /**
@@ -167,12 +193,18 @@ export function computeUncertainty(snapshot: CompanySnapshot, cfg: AppConfig): U
   }
 
   // 4. 데이터 완전성 — 항상 계산 가능하다 (필드가 전부 없으면 0, 있으면 1).
+  //    분모는 핵심 필드 전체가 아니라 **다른 드라이버가 청구하지 않는 필드**다. 매출·
+  //    영업이익·총부채의 결측은 위 세 드라이버가 UNAVAILABLE이 되면서 커버리지 채움이
+  //    이미 최대 위험으로 청구했으므로, 여기서 또 청구하면 같은 공백에 두 번 값을
+  //    매기게 된다(DRIVER_BLOCKING_FIELDS 주석 참고).
   const completeness = dataCompleteness(snapshot.ttm[0])
   drivers.push({
     key: 'data_completeness',
     status: 'MEASURED',
     risk: interpolate(u.data_completeness_curve, completeness),
-    detail: `핵심 재무 필드 ${Math.round(completeness * CORE_FIELDS.length)}/${CORE_FIELDS.length}개 확보`,
+    detail:
+      `핵심 재무 필드 ${Math.round(completeness * COMPLETENESS_FIELDS.length)}/${COMPLETENESS_FIELDS.length}개 확보 ` +
+      '(매출·영업이익·총부채는 각 드라이버가 따로 반영)',
   })
 
   // 5. 사업 집중도 — 미구현. 계산하지 않았다는 사실 자체를 드라이버로 남긴다.

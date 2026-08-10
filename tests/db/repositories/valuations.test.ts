@@ -22,6 +22,7 @@ const okFairValue: FairValueResult = {
   assumptions: {
     projectionYears: 5, discountRate: 0.09, terminalGrowthRate: 0.025,
     initialGrowthRate: 0.2, initialGrowthSource: 'blend', matureFcfMargin: 0.15,
+    matureMarginPeriods: 8, matureMarginDispersion: 0.1,
     initialFcfMargin: 0.2, initialMarginSource: 'fcf', impliedRevenueMultiple: 1.6, taxRate: 0.21,
     netCash: 1e8, shares: 1e8, sharesSource: 'diluted',
   },

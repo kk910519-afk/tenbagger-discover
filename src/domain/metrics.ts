@@ -123,6 +123,59 @@ export function roicGap(
   return null
 }
 
+/**
+ * "이 기간의 ROIC가 자본비용을 넘었는가"라는 **부호 질문**에 대한 답. `roic()`가 답하는
+ * "ROIC가 얼마인가"라는 크기 질문과 다르다.
+ *
+ * 두 질문을 가르는 것은 투하자본 규모 하한이다. 하한이 존재하는 이유는 큰 수들이 상쇄되고
+ * 남은 잔차를 분모로 쓰면 ROIC의 **크기**가 자본생산성이 아니라 자본구조의 산물이 되기
+ * 때문이다(NTAP의 520%, DBX의 374%). 그런데 NOPAT이 0 이하면 부호는 분모의 크기와
+ * 무관하게 이미 정해져 있다 — 투하자본이 양수인 한 ROIC ≤ 0이고, 자본비용은 양수이므로
+ * 반드시 미달이다. 그런 기간까지 하한으로 버리면 두 가지가 잘못된다.
+ *
+ *   1. **결론을 비결론으로 바꾼다.** "이 회사는 자본비용을 넘지 못했다"는 완결된 관측이
+ *      "우리는 판정할 수 없다"로 격하된다.
+ *   2. **불리한 증거만 지운다.** 하한에 걸리는 기간은 대차대조표가 작았던 해이고, 젊은
+ *      기업에서 그것은 대개 적자 해다. 실패 기간만 빠지면 상회 비율이 올라가 등급이
+ *      **올라간다**(SEZL: 3/6 = 0.500 → 3/4 = 0.750). 증거를 지워서 등급을 얻는 일이다.
+ *
+ * 그래서 하한은 `MEASURED` 판정(NOPAT > 0)에만 건다. 결과적으로 하한이 제거할 수 있는
+ * 기간은 상회 기간뿐이고, 상회 기간을 빼면 비율은 반드시 내려가거나 그대로다 —
+ * **이 하한은 등급을 올릴 수 없다.**
+ */
+export type RoicVerdict =
+  /** 분모가 실질적이라 크기까지 의미가 있다. clears는 spread > 0. */
+  | { kind: 'MEASURED'; roic: number; spread: number; clears: boolean }
+  /** NOPAT ≤ 0 — 분모의 크기와 무관하게 자본비용 미달이 확정된 기간. */
+  | { kind: 'DETERMINATE_MISS' }
+  /** 판정 자체가 불가능한 기간. 이유는 gap이 구분한다. */
+  | { kind: 'UNDEFINED'; gap: RoicGap }
+
+export function roicVerdict(
+  p: FinancialPeriod | undefined,
+  taxRate: number,
+  wacc: number,
+  minInvestedCapitalRatio: number,
+): RoicVerdict {
+  if (!p || p.operatingIncome === null || p.totalDebt === null || p.equity === null || p.cash === null) {
+    return { kind: 'UNDEFINED', gap: 'MISSING_FIELDS' }
+  }
+  const invested = p.totalDebt + p.equity - p.cash
+  if (invested <= 0) return { kind: 'UNDEFINED', gap: 'NON_POSITIVE_INVESTED_CAPITAL' }
+
+  const nopat = p.operatingIncome * (1 - taxRate)
+  // 세율이 1 이상이면 부호가 뒤집히므로 영업이익 자체의 부호로 판단한다 — 세금은 이익을
+  // 줄일 뿐 손실을 이익으로 만들지 않는다.
+  if (p.operatingIncome <= 0) return { kind: 'DETERMINATE_MISS' }
+
+  const ratio = investedCapitalRatio(p.totalDebt, p.equity, p.cash)
+  if (ratio === null || ratio < minInvestedCapitalRatio) {
+    return { kind: 'UNDEFINED', gap: 'IMMATERIAL_INVESTED_CAPITAL' }
+  }
+  const r = nopat / invested
+  return { kind: 'MEASURED', roic: r, spread: r - wacc, clears: r - wacc > 0 }
+}
+
 /** FCF가 음수인 기업만 의미가 있다. 분기 평균 소모액 기준 잔여 분기 수. */
 export function cashRunwayQuarters(ttm: FinancialPeriod[]): number | null {
   const p = ttm[0]

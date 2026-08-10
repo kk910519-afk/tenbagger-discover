@@ -13,6 +13,10 @@ import {
   capexHeavyCompany,
   ttmYoyOnlyCompany,
   cagr3yOnlyCompany,
+  lowDemonstratedMarginCompany,
+  shortMarginHistoryCompany,
+  negativeMarginHistoryCompany,
+  volatileMarginHistoryCompany,
 } from '../fixtures/valuation-companies'
 
 const cfg = parseConfig(readFileSync('config.yaml', 'utf8'))
@@ -25,7 +29,7 @@ function ok(snapshotResult: ReturnType<typeof computeFairValue>) {
   return snapshotResult
 }
 
-describe('computeFairValue — 6개 충분성 게이트', () => {
+describe('computeFairValue — 7개 충분성 게이트', () => {
   it('모든 게이트를 통과하면 OK와 주당 내재가치를 반환한다', () => {
     const r = computeFairValue(eligibleForFairValue(), cfg)
     expect(r.status).toBe('OK')
@@ -66,8 +70,30 @@ describe('computeFairValue — 6개 충분성 게이트', () => {
     if (r.status === 'INSUFFICIENT_DATA') expect(r.reason).toBe('NO_SHARE_COUNT')
   })
 
-  it('현금 또는 총부채가 없으면 NO_BALANCE_SHEET_DATA — 순현금을 0으로 대신 채우지 않는다', () => {
+  // 이 테스트의 이름은 "현금 **또는** 총부채"인데 픽스처는 둘 다 null이었다. 그래서
+  // 조건을 `||`에서 `&&`로 바꾸는 변이가 살아남았다 — 둘 다 없으면 어느 쪽 조건이든
+  // 참이기 때문이다. 이름이 주장하는 것을 실제로 관측하려면 **한 쪽만** 없는 입력이
+  // 필요하다. 셋을 모두 덮는다.
+  it('현금과 총부채가 모두 없으면 NO_BALANCE_SHEET_DATA — 순현금을 0으로 대신 채우지 않는다', () => {
     const r = computeFairValue(noBalanceSheetCompany(), cfg)
+    expect(r.status).toBe('INSUFFICIENT_DATA')
+    if (r.status === 'INSUFFICIENT_DATA') expect(r.reason).toBe('NO_BALANCE_SHEET_DATA')
+  })
+
+  it('현금만 없어도 NO_BALANCE_SHEET_DATA (총부채는 있다)', () => {
+    const s = eligibleForFairValue()
+    s.ttm = s.ttm.map((p) => ({ ...p, cash: null }))
+    expect(s.ttm[0]!.totalDebt).not.toBeNull()
+    const r = computeFairValue(s, cfg)
+    expect(r.status).toBe('INSUFFICIENT_DATA')
+    if (r.status === 'INSUFFICIENT_DATA') expect(r.reason).toBe('NO_BALANCE_SHEET_DATA')
+  })
+
+  it('총부채만 없어도 NO_BALANCE_SHEET_DATA (현금은 있다)', () => {
+    const s = eligibleForFairValue()
+    s.ttm = s.ttm.map((p) => ({ ...p, totalDebt: null }))
+    expect(s.ttm[0]!.cash).not.toBeNull()
+    const r = computeFairValue(s, cfg)
     expect(r.status).toBe('INSUFFICIENT_DATA')
     if (r.status === 'INSUFFICIENT_DATA') expect(r.reason).toBe('NO_BALANCE_SHEET_DATA')
   })
@@ -135,7 +161,8 @@ describe('computeFairValue — 6개 충분성 게이트', () => {
 /**
  * 게이트가 아니라 **산술** 자체를 고정한다. eligibleForFairValue()는 완전히 결정적이므로
  * 모든 중간값이 하나의 수로 정해진다 — config.yaml 값(할인율 9%, 터미널 2.5%, 페이드
- * 1/0.8/0.6/0.4/0.2/0, 성숙마진 15%)만 보고 엔진과 무관하게 재계산한 숫자다.
+ * 1/0.8/0.6/0.4/0.2/0)과 픽스처의 연간 마진 이력만 보고 엔진과 무관하게 재계산한
+ * 숫자다. 성숙마진은 더 이상 config에 상수로 있지 않고 픽스처의 이력 중앙값 0.175다.
  * 이 블록이 없으면 DCF 전체를 `const perShare = 1`로 바꿔도 스위트가 통과한다(F1).
  */
 describe('computeFairValue — 산술 고정', () => {
@@ -167,9 +194,12 @@ describe('computeFairValue — 산술 고정', () => {
   })
 
   it('기업가치·자기자본가치·주당가치를 정확한 값으로 고정한다', () => {
-    expect(r.enterpriseValue).toBeCloseTo(3_319_177_146.41, 1)
-    expect(r.equityValue).toBeCloseTo(3_719_177_146.41, 1)
-    expect(r.perShare).toBeCloseTo(37.19177146, 6)
+    expect(r.enterpriseValue).toBeCloseTo(3_783_597_583.26, 1)
+    expect(r.equityValue).toBeCloseTo(4_183_597_583.26, 1)
+    expect(r.perShare).toBeCloseTo(41.83597583, 6)
+    // 옛 전역 성숙마진 0.15를 그대로 쓰면 37.19177146이 나온다 — 두 값이 다르다는 것이
+    // 성숙마진이 이제 회사별 측정이라는 증거다(상수 복귀 변이를 이 블록이 잡는다).
+    expect(r.perShare).not.toBeCloseTo(37.19177146, 4)
   })
 
   it('할인율을 올리면 주당가치가 내려간다 (단조성)', () => {
@@ -177,7 +207,7 @@ describe('computeFairValue — 산술 고정', () => {
     higher.scoring.wacc_assumption = 0.12
     const h = ok(computeFairValue(eligibleForFairValue(), higher))
     expect(h.assumptions.discountRate).toBe(0.12)
-    expect(h.perShare).toBeCloseTo(27.13298244, 6)
+    expect(h.perShare).toBeCloseTo(30.14739481, 6)
     expect(h.perShare).toBeLessThan(r.perShare)
   })
 
@@ -205,6 +235,19 @@ describe('computeFairValue — 초기값의 출처 분기', () => {
     expect(r.assumptions.taxRate).toBe(cfg.scoring.tax_rate)
   })
 
+  // 페이드는 초기값에서 성숙값으로 가는 경로다. 양 끝이 서로 다른 측정이면 그 경로는
+  // 회사의 마진 수렴이 아니라 두 지표의 혼합을 그린다 — 그래서 성숙마진의 기준은
+  // 초기 마진의 출처를 그대로 따라간다.
+  it('초기 마진이 nopat_proxy면 성숙마진도 NOPAT 이력에서 나온다 (FCF 이력이 아니라)', () => {
+    const r = ok(computeFairValue(capexHeavyCompany(), cfg))
+    // 연간 영업이익률 중앙값 0.175 × 0.79 = 0.13825
+    expect(r.assumptions.matureFcfMargin).toBeCloseTo(0.13825, 10)
+    // 같은 픽스처의 연간 FCF마진 중앙값은 0.40이다 — 기준을 섞으면 이 값이 나온다
+    expect(r.assumptions.matureFcfMargin).not.toBeCloseTo(0.4, 3)
+    expect(r.perShare).toBeCloseTo(34.73201506, 6)
+    expect(r.detail).toContain('NOPAT마진 중앙값')
+  })
+
   it('3Y CAGR을 못 구하면 TTM YoY만 쓴다 (blend가 아니다)', () => {
     const r = ok(computeFairValue(ttmYoyOnlyCompany(), cfg))
     expect(r.assumptions.initialGrowthSource).toBe('ttm_yoy_only')
@@ -223,7 +266,7 @@ describe('computeFairValue — 초기값의 출처 분기', () => {
     const r = ok(computeFairValue(s, cfg))
     expect(r.assumptions.sharesSource).toBe('diluted')
     expect(r.assumptions.shares).toBe(100_000_000)
-    expect(r.perShare).toBeCloseTo(37.19177146, 6)
+    expect(r.perShare).toBeCloseTo(41.83597583, 6)
   })
 
   it('희석주식수가 없으면 발행주식수로 내려간다', () => {
@@ -232,7 +275,112 @@ describe('computeFairValue — 초기값의 출처 분기', () => {
     s.sharesOutstanding = 50_000_000
     const r = ok(computeFairValue(s, cfg))
     expect(r.assumptions.sharesSource).toBe('outstanding')
-    expect(r.perShare).toBeCloseTo(37.19177146 * 2, 6)
+    expect(r.perShare).toBeCloseTo(41.83597583 * 2, 6)
+  })
+})
+
+/**
+ * 리뷰 Part 1: 성숙 FCF마진이 308개 기업 전부에서 단 하나의 값(0.15)이었다. 페이드가
+ * projection_years에서 0이 되므로 최종연도 FCF는 정의상 `매출₅ × 0.15`이고, 그 위에 선
+ * 터미널가치가 기업가치의 약 75%다 — 즉 DCF는 매출배수를 DCF 옷을 입혀 내놓고 있었고
+ * P/FV가 회사의 현재 마진과 ρ = +0.394로 상관했다. 이 블록은 그 상수가 회사별 측정으로
+ * 바뀌었다는 것과, 측정할 수 없을 때 **기본값으로 메우지 않는다**는 것을 고정한다.
+ */
+describe('computeFairValue — 성숙마진 앵커', () => {
+  it('성숙마진은 그 회사의 연간 마진 이력 중앙값이다 — 평균도, 전역 상수도 아니다', () => {
+    const r = ok(computeFairValue(eligibleForFairValue(), cfg))
+    // 이력 [0.30, 0.19, 0.18, 0.18, 0.17, 0.16, 0.10, 0.02]
+    expect(r.assumptions.matureFcfMargin).toBeCloseTo(0.175, 10)
+    expect(r.assumptions.matureFcfMargin).not.toBeCloseTo(0.1625, 4) // 평균
+    expect(r.assumptions.matureFcfMargin).not.toBeCloseTo(0.15, 4) // 옛 전역 상수
+    expect(r.assumptions.matureMarginPeriods).toBe(8)
+    // MAD 0.015 / 중앙값 0.175
+    expect(r.assumptions.matureMarginDispersion).toBeCloseTo(0.08571429, 8)
+    expect(r.detail).toContain('최근 연간 8개 기간 FCF마진 중앙값')
+  })
+
+  it('서로 다른 회사는 서로 다른 성숙마진을 받는다 — 이 값은 더 이상 전역 상수가 아니다', () => {
+    const rich = ok(computeFairValue(eligibleForFairValue(), cfg))
+    const thin = ok(computeFairValue(lowDemonstratedMarginCompany(), cfg))
+    expect(rich.assumptions.matureFcfMargin).toBeCloseTo(0.175, 10)
+    expect(thin.assumptions.matureFcfMargin).toBeCloseTo(0.02, 10)
+  })
+
+  /**
+   * XRX 실사례: 마진 2.1%인 회사가 주당 $166.91(주가 $3.24)을 받았다. 성장이 아니라
+   * 마진 가정이 만든 값이며, 암시 매출배수 1.47배로 **상한 게이트의 한참 아래**에서
+   * 벌어지던 일이다 — 그래서 배수 상한으로는 잡을 수 없었다.
+   */
+  it('마진이 얇은 회사에 15%를 얹어주지 않는다 — 옛 전역 상수였다면 값이 몇 배가 됐다', () => {
+    const s = lowDemonstratedMarginCompany()
+    const anchored = ok(computeFairValue(s, cfg))
+    // 초기 0.02 · 성숙 0.02 → 전 구간이 실제 마진 위에 선다
+    expect(anchored.assumptions.initialFcfMargin).toBeCloseTo(0.02, 10)
+    expect(anchored.perShare).toBeCloseTo(8.14148712, 6)
+    // 옛 전역 상수 0.15였다면 같은 입력에서 $32.29 — 3.96배다. 이 회사에 대해 달라진
+    // 것은 아무것도 없고 우리가 고른 가정 하나가 사라졌을 뿐이다.
+    expect(anchored.perShare * 3.9).toBeLessThan(32.29134983)
+    // 배수 게이트는 이 회사를 전혀 건드리지 않는다(1.51배 < 3.00배) — 마진 아티팩트는
+    // 상한 안쪽에서 발생했다는 리뷰의 지적을 그대로 못박는다.
+    expect(anchored.assumptions.impliedRevenueMultiple).toBeCloseTo(1.50961028, 8)
+    expect(anchored.assumptions.impliedRevenueMultiple).toBeLessThan(
+      cfg.valuation.max_implied_revenue_multiple,
+    )
+  })
+
+  it('성숙마진이 커지면 주당가치도 커진다 (단조성)', () => {
+    const low = ok(computeFairValue(lowDemonstratedMarginCompany(), cfg))
+    const high = ok(computeFairValue(eligibleForFairValue(), cfg))
+    expect(high.perShare).toBeGreaterThan(low.perShare)
+  })
+
+  describe('앵커할 수 없으면 거부한다 — 전역 기본값으로 메우지 않는다', () => {
+    it('연간 마진 관측이 min_periods 미만이면 MARGIN_NOT_ANCHORABLE', () => {
+      const r = computeFairValue(shortMarginHistoryCompany(), cfg)
+      expect(r.status).toBe('INSUFFICIENT_DATA')
+      if (r.status === 'INSUFFICIENT_DATA') {
+        expect(r.reason).toBe('MARGIN_NOT_ANCHORABLE')
+        expect(r.detail).toContain('3개뿐')
+      }
+    })
+
+    it('연간 마진 중앙값이 0 이하면 MARGIN_NOT_ANCHORABLE — 최근 한 해 흑자로 영구 마진을 주지 않는다', () => {
+      const s = negativeMarginHistoryCompany()
+      // 현금전환 게이트는 통과한다(최신 TTM FCF는 양수) — 거부는 **이력** 때문이다
+      expect(s.ttm[0]!.fcf!).toBeGreaterThan(0)
+      const r = computeFairValue(s, cfg)
+      expect(r.status).toBe('INSUFFICIENT_DATA')
+      if (r.status === 'INSUFFICIENT_DATA') {
+        expect(r.reason).toBe('MARGIN_NOT_ANCHORABLE')
+        expect(r.detail).toContain('중앙값이 -1.9%')
+      }
+    })
+
+    it('산포가 상한을 넘으면 MARGIN_NOT_ANCHORABLE — 흩어짐은 수준이 아니다', () => {
+      const r = computeFairValue(volatileMarginHistoryCompany(), cfg)
+      expect(r.status).toBe('INSUFFICIENT_DATA')
+      if (r.status === 'INSUFFICIENT_DATA') {
+        expect(r.reason).toBe('MARGIN_NOT_ANCHORABLE')
+        expect(r.detail).toContain('3.17배만큼 흩어져')
+      }
+    })
+
+    it('산포 상한을 그 값 위로 올리면 같은 기업이 값을 낸다 — 문턱이 무엇을 막는지 고정한다', () => {
+      const loose = structuredClone(cfg)
+      loose.valuation.mature_margin.max_dispersion = 4.0
+      const r = ok(computeFairValue(volatileMarginHistoryCompany(), loose))
+      expect(r.assumptions.matureFcfMargin).toBeCloseTo(0.0145, 10)
+      expect(r.assumptions.matureMarginDispersion).toBeCloseTo(3.17241379, 8)
+    })
+
+    it('앵커 창을 좁히면 다른 기간이 중앙값을 만든다 — 창이 결론을 바꾼다', () => {
+      const narrow = structuredClone(cfg)
+      narrow.valuation.mature_margin.lookback_periods = 4
+      const r = ok(computeFairValue(eligibleForFairValue(), narrow))
+      // 최근 4개 [0.30, 0.19, 0.18, 0.18] → 중앙값 0.185 (8개 창의 0.175가 아니다)
+      expect(r.assumptions.matureFcfMargin).toBeCloseTo(0.185, 10)
+      expect(r.assumptions.matureMarginPeriods).toBe(4)
+    })
   })
 })
 

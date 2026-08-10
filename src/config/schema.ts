@@ -105,6 +105,9 @@ export const configSchema = z
                     zero_if_revenue_growth_below: z.number(),
                     zero_if_revenue_below: z.number(),
                     warning_multiplier: z.number(),
+                    // 최신 TTM 매출이 null일 때 게이트의 규모 조건에 쓸 대체 관측치를
+                    // 찾는 범위(TTM → 연간 순). 0이면 대체하지 않는다.
+                    revenue_fallback_periods: z.number().int().nonnegative(),
                   })
                   .strict(),
               })
@@ -165,7 +168,17 @@ export const configSchema = z
         // x = 예측 연차(1..projection_years), y = 초기값(성장률/마진)에 남아있는 가중치(1=초기값 그대로,
         // 0=터미널/성숙값으로 완전 수렴). 성장률 페이드와 FCF마진 페이드가 같은 스케줄을 공유한다.
         fade_curve: curve,
-        mature_fcf_margin: z.number(),
+        // 성숙 FCF마진은 전역 상수가 아니라 각 기업이 보여준 마진의 중앙값이다.
+        // 여기 있는 것은 그 중앙값을 "측정으로 인정할 최소 조건"뿐이다 — 조건을 못
+        // 채우면 대체값을 쓰지 않고 INSUFFICIENT_DATA(MARGIN_NOT_ANCHORABLE)로 돌린다.
+        mature_margin: z
+          .object({
+            lookback_periods: z.number().int().positive(),
+            min_periods: z.number().int().positive(),
+            // median(|xᵢ − median|) / median의 상한. 1.00 = 흩어짐이 수준과 같아지는 항등점.
+            max_dispersion: z.number().positive(),
+          })
+          .strict(),
         price_to_fair_value: z
           .object({
             undervalued_max_ratio: z.number().positive(),

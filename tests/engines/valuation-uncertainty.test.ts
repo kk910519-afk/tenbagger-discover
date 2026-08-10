@@ -78,8 +78,9 @@ describe('computeUncertainty', () => {
 /**
  * 드라이버별 risk와 집계 규칙을 실제 수치로 고정한다. eligibleForFairValue()는 완전히
  * 결정적이다: 매출 YoY 8개 구간의 표준편차 0.05227875, 영업이익률은 0.30으로 일정(표준편차 0),
- * 부채/영업이익 = 1e8/3e8 = 0.3333배, 핵심 필드 8/10. 범위만 확인하면 어떤 집계를 써도
- * 통과한다(테스트 리뷰 F2).
+ * 부채/영업이익 = 1e8/3e8 = 0.3333배. data_completeness가 청구하는 필드는 핵심 10개 중
+ * **다른 드라이버가 청구하지 않는 7개**(매출·영업이익·총부채 제외)이고 그중 5개가 있다.
+ * 범위만 확인하면 어떤 집계를 써도 통과한다(테스트 리뷰 F2).
  */
 describe('computeUncertainty — 드라이버 수치 고정', () => {
   const r = computeUncertainty(eligibleForFairValue(), cfg)
@@ -100,10 +101,12 @@ describe('computeUncertainty — 드라이버 수치 고정', () => {
     expect(byKey.financial_leverage!.risk).toBeCloseTo(0.05, 10)
   })
 
-  it('데이터 완전성 = 핵심 필드 비율 곡선', () => {
-    // 8/10 → 0.8 → 곡선 [[0.70,0.45],[0.85,0.20]] 구간 → 0.28333333
-    expect(byKey.data_completeness!.risk).toBeCloseTo(0.28333333, 8)
-    expect(byKey.data_completeness!.detail).toContain('8/10')
+  it('데이터 완전성 = (다른 드라이버가 청구하지 않는) 필드 비율 곡선', () => {
+    // 5/7 = 0.71428571 → 곡선 [[0.70,0.45],[0.85,0.20]] 구간 → 0.42619048
+    // 옛 분모(10개)였다면 8/10 → 0.28333333이 나온다 — 그 차이가 곧 이중청구 제거분이다.
+    expect(byKey.data_completeness!.risk).toBeCloseTo(0.42619048, 8)
+    expect(byKey.data_completeness!.risk).not.toBeCloseTo(0.28333333, 4)
+    expect(byKey.data_completeness!.detail).toContain('5/7')
   })
 
   it('집계는 평균이다 — 최댓값도 최솟값도 아니다', () => {
@@ -111,7 +114,7 @@ describe('computeUncertainty — 드라이버 수치 고정', () => {
     const risks = measured.map((d) => d.risk!)
     const mean = risks.reduce((a, b) => a + b, 0) / risks.length
     expect(r.score).toBeCloseTo(mean, 12)
-    expect(r.score).toBeCloseTo(0.11600755, 8)
+    expect(r.score).toBeCloseTo(0.15172184, 8)
     expect(r.score).not.toBeCloseTo(Math.max(...risks), 3)
     expect(r.score).not.toBeCloseTo(Math.min(...risks), 3)
     expect(r.level).toBe('MINIMAL')
@@ -132,16 +135,16 @@ describe('computeUncertainty — 방향과 임계값', () => {
 
   it('level_thresholds 경계를 정확히 걷는다 (임계값을 뒤바꾸면 깨진다)', () => {
     // score를 직접 만들 수 없으므로 임계값을 옮겨 같은 회사의 등급이 어떻게 갈리는지 본다.
-    // 기준 픽스처의 score는 0.11600755다.
+    // 기준 픽스처의 score는 0.15172184다.
     const at = (moderate: number, elevated: number, severe: number) => {
       const c = structuredClone(cfg)
       c.valuation.uncertainty.level_thresholds = { moderate, elevated, severe }
       return computeUncertainty(eligibleForFairValue(), c).level
     }
     expect(at(0.25, 0.50, 0.75)).toBe('MINIMAL')
-    expect(at(0.11600755, 0.50, 0.75)).toBe('MODERATE') // 경계는 이상(>=)
-    expect(at(0.05, 0.11600755, 0.75)).toBe('ELEVATED')
-    expect(at(0.05, 0.08, 0.11600755)).toBe('SEVERE')
+    expect(at(0.15172183923812593, 0.50, 0.75)).toBe('MODERATE') // 경계는 이상(>=)
+    expect(at(0.05, 0.15172183923812593, 0.75)).toBe('ELEVATED')
+    expect(at(0.05, 0.08, 0.15172183923812593)).toBe('SEVERE')
   })
 })
 
@@ -183,5 +186,75 @@ describe('computeUncertainty — 커버리지가 낮으면 불확실성이 높�
     const r = computeUncertainty(eligibleForFairValue(), cfg)
     const risks = r.drivers.filter((d) => d.status === 'MEASURED').map((d) => d.risk!)
     expect(r.score).toBeCloseTo(risks.reduce((a, b) => a + b, 0) / risks.length, 12)
+  })
+})
+
+/**
+ * 리뷰 Part 2: 하나의 결측이 두 번 청구되고 있었다. data_completeness는 "핵심 필드가
+ * 몇 개 있는가"를 재는 드라이버이고, 커버리지 채움은 "드라이버를 몇 개 측정했는가"를
+ * 잰다. 그런데 드라이버가 UNAVAILABLE이 되는 이유가 바로 그 핵심 필드의 결측일 때,
+ * 같은 공백이 양쪽에서 값이 매겨진다 — 1,200개 중 394개가 그 상태였고, 40년 된 급여처리
+ * 대기업 ADP가 영업이익 하나가 해소되지 않아 ELEVATED(0.614)가 됐다.
+ *
+ * 고친 방식은 **필드 분할**이다: 매출·영업이익·총부채는 그 필드를 쓰는 드라이버가,
+ * 나머지 일곱은 data_completeness가 청구한다. 커버리지 분모는 4로 그대로이므로 이 엔진이
+ * 이미 검증한 항등식과 단조성은 깨지지 않는다.
+ */
+describe('computeUncertainty — 같은 결측을 두 번 청구하지 않는다', () => {
+  /** ADP의 모양: 영업이익이 전 구간 결측이라 두 드라이버가 함께 UNAVAILABLE이 된다. */
+  function noOperatingIncome(): CompanySnapshot {
+    const s = eligibleForFairValue()
+    s.ttm = s.ttm.map((p) => ({ ...p, operatingIncome: null }))
+    return s
+  }
+
+  it('영업이익 결측은 두 드라이버가 청구한다 — data_completeness는 건드리지 않는다', () => {
+    const full = computeUncertainty(eligibleForFairValue(), cfg)
+    const gap = computeUncertainty(noOperatingIncome(), cfg)
+    const dc = (r: typeof full) => r.drivers.find((d) => d.key === 'data_completeness')!
+
+    // 영업이익이 사라지면 두 드라이버가 UNAVAILABLE이 되어 커버리지 채움이 1.0으로 청구한다
+    const unavailable = gap.drivers.filter((d) => d.status === 'UNAVAILABLE').map((d) => d.key)
+    expect(unavailable).toContain('operating_leverage')
+    expect(unavailable).toContain('financial_leverage')
+
+    // 그리고 data_completeness의 risk는 **한 톨도 움직이지 않는다** — 그것이 이중청구의
+    // 부재다. 분모에 operatingIncome이 남아 있으면 여기서 risk가 올라간다.
+    expect(dc(gap).risk).toBeCloseTo(dc(full).risk!, 12)
+    expect(dc(gap).risk).toBeCloseTo(0.42619048, 8)
+  })
+
+  it('매출·총부채 결측도 마찬가지다 — data_completeness 분모는 7개로 고정이다', () => {
+    const s = eligibleForFairValue()
+    s.ttm = s.ttm.map((p) => ({ ...p, totalDebt: null }))
+    const dc = computeUncertainty(s, cfg).drivers.find((d) => d.key === 'data_completeness')!
+    expect(dc.detail).toContain('5/7')
+    expect(dc.risk).toBeCloseTo(0.42619048, 8)
+  })
+
+  it('다른 드라이버가 청구하지 않는 필드가 사라지면 data_completeness가 올라간다', () => {
+    const s = eligibleForFairValue()
+    s.ttm = s.ttm.map((p) => ({ ...p, grossProfit: null }))
+    const dc = computeUncertainty(s, cfg).drivers.find((d) => d.key === 'data_completeness')!
+    // 4/7 = 0.57142857 → 곡선 [[0.50,0.75],[0.70,0.45]] 구간 → 0.64285714
+    expect(dc.detail).toContain('4/7')
+    expect(dc.risk).toBeCloseTo(0.64285714, 8)
+  })
+
+  it('증거에 대한 단조성은 그대로다 — 결측이 채워지면 score는 반드시 내려간다', () => {
+    const full = computeUncertainty(eligibleForFairValue(), cfg)
+    expect(computeUncertainty(noOperatingIncome(), cfg).score).toBeGreaterThan(full.score)
+    const noGp = eligibleForFairValue()
+    noGp.ttm = noGp.ttm.map((p) => ({ ...p, grossProfit: null }))
+    expect(computeUncertainty(noGp, cfg).score).toBeGreaterThan(full.score)
+  })
+
+  it('항등식 score = (Σ 측정된 risk + (4 − 측정 수)) / 4 가 그대로 성립한다', () => {
+    for (const s of [eligibleForFairValue(), noOperatingIncome(), noHistoryCompany()]) {
+      const r = computeUncertainty(s, cfg)
+      const measured = r.drivers.filter((d) => d.status === 'MEASURED')
+      const sum = measured.reduce((a, d) => a + d.risk!, 0)
+      expect(r.score).toBeCloseTo((sum + (4 - measured.length)) / 4, 12)
+    }
   })
 })

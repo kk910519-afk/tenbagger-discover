@@ -18,6 +18,7 @@ function okFairValue(perShare: number): FairValueResult {
     assumptions: {
       projectionYears: 5, discountRate: 0.09, terminalGrowthRate: 0.025,
       initialGrowthRate: 0.1, initialGrowthSource: 'blend', matureFcfMargin: 0.15,
+      matureMarginPeriods: 8, matureMarginDispersion: 0.1,
       initialFcfMargin: 0.15, initialMarginSource: 'fcf', impliedRevenueMultiple: 1.3, taxRate: 0.21,
       netCash: 0, shares: 1e8, sharesSource: 'diluted',
     },
@@ -78,11 +79,12 @@ describe('computePriceToFairValue', () => {
     const r = computePriceToFairValue(fv, s.price, cfg)
     expect(fv.status).toBe('OK')
     expect(r.status).toBe('OK')
-    // 주당 내재가치 37.19177146, 현재가 20 → 비율 0.53775336, 안전마진 0.46224664.
+    // 주당 내재가치 41.83597583(성숙마진은 픽스처의 연간 이력 중앙값 0.175), 현재가 20
+    // → 비율 0.47805745, 안전마진 0.52194255.
     // 상태만 확인하면 perShare가 어떤 양수여도 통과한다(테스트 리뷰 F1).
     if (r.status === 'OK') {
-      expect(r.ratio).toBeCloseTo(0.53775336, 7)
-      expect(r.marginOfSafety).toBeCloseTo(0.46224664, 7)
+      expect(r.ratio).toBeCloseTo(0.47805745, 7)
+      expect(r.marginOfSafety).toBeCloseTo(0.52194255, 7)
       expect(r.valuationStatus).toBe('UNDERVALUED')
     }
   })

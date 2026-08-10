@@ -1,6 +1,6 @@
 import type { AppConfig } from '@/config'
 import type { CompanySnapshot, FinancialPeriod } from '@/domain/types'
-import { roic, roicGap, type RoicGap } from '@/domain/metrics'
+import { roicVerdict, type RoicGap } from '@/domain/metrics'
 
 /**
  * 이 척도가 실제로 재는 것은 "초과수익이 얼마나 오래 이어졌는가"뿐이다 — 등급 이름도
@@ -57,34 +57,54 @@ export type MoatResult = {
 export function computeMoatSignal(snapshot: CompanySnapshot, cfg: AppConfig): MoatResult {
   const m = cfg.valuation.moat
   const wacc = cfg.scoring.wacc_assumption
-  const periods: FinancialPeriod[] = snapshot.annual.slice(0, m.lookback_periods)
+  // **매출이 없는 연간 행은 회계연도가 아니다.** bulk(num.txt)에는 API 대응이 없는
+  // 디멘션 슬라이스가 연간 기간처럼 들어오는 경우가 있고(실측 284행 / 85개사), 그 행은
+  // `revenue`가 NULL인 채 `gross_profit` 하나만 들고 있다 — eBay의 A 2025-09-30이
+  // gross_profit 44,000,000 / revenue NULL로 정확히 그 모습이며, 2022~2025년의 9월 30일
+  // 유령 연간 기간 네 개가 lookback 창을 잠식해 eBay가 유효 기간 3개로 INSUFFICIENT_DATA를
+  // 받는다(QCOM도 같은 모양). 매출이 아예 없는 기간은 그 회사의 한 해를 대표하지 않으므로
+  // 창에 넣지 않는다 — 오염 값을 뒤집는 규칙이 아니라 **세지 않는** 규칙이라, 신고된
+  // 값을 형제 분기로 뒤집는 판단(cumulative.ts:210이 의도적으로 하지 않기로 한 것)을
+  // 건드리지 않는다.
+  const annual: FinancialPeriod[] = snapshot.annual.filter((p) => p.revenue !== null)
+  const periods: FinancialPeriod[] = annual.slice(0, m.lookback_periods)
 
   const minInvested = cfg.scoring.min_invested_capital_ratio
 
-  const spreads: number[] = []
+  // 이 엔진이 각 기간에 묻는 것은 부호 하나 — "ROIC가 자본비용을 넘었는가"다. NOPAT이
+  // 0 이하인 기간은 분모의 크기와 무관하게 답이 정해져 있으므로, 투하자본 규모 하한으로
+  // 버리지 않고 **미달로 세어** 판정에 넣는다(roicVerdict의 주석 참고). 그래야 회사에
+  // 대한 결론(ABSENT)이 우리에 대한 진술(INSUFFICIENT_DATA)로 격하되지 않고, 실패 기간만
+  // 지워서 등급이 올라가는 일도 생기지 않는다.
+  let periodsEvaluated = 0
+  let periodsClearing = 0
+  const clearSpreads: number[] = []
   const gaps: RoicGap[] = []
   for (const p of periods) {
-    const r = roic(p, cfg.scoring.tax_rate, minInvested)
-    if (r !== null) {
-      spreads.push(r - wacc)
-    } else {
-      const gap = roicGap(p, minInvested)
-      if (gap !== null) gaps.push(gap)
+    const v = roicVerdict(p, cfg.scoring.tax_rate, wacc, minInvested)
+    if (v.kind === 'UNDEFINED') {
+      gaps.push(v.gap)
+      continue
+    }
+    periodsEvaluated++
+    if (v.kind === 'MEASURED' && v.clears) {
+      periodsClearing++
+      clearSpreads.push(v.spread)
     }
   }
 
-  if (spreads.length < m.min_periods_required) {
+  if (periodsEvaluated < m.min_periods_required) {
     // 연간 실적 자체가 lookback 창이 요구하는 최소치보다 적게 보고됐으면, 개별 기간의
     // 결측·투하자본 사정과 무관하게 애초에 채울 수 없다 — 가장 근본적인 원인이므로
     // 최우선으로 보고한다(신규 상장 등).
-    if (snapshot.annual.length < m.min_periods_required) {
+    if (annual.length < m.min_periods_required) {
       return {
         signal: 'INSUFFICIENT_DATA',
-        periodsEvaluated: spreads.length,
+        periodsEvaluated,
         periodsClearing: 0,
         insufficientReason: 'TOO_FEW_PERIODS',
         evidence: [
-          `보고된 연간 실적이 ${snapshot.annual.length}개뿐 — 판정에 필요한 최소 ${m.min_periods_required}개에 못 미침`,
+          `보고된 연간 실적이 ${annual.length}개뿐 — 판정에 필요한 최소 ${m.min_periods_required}개에 못 미침`,
         ],
       }
     }
@@ -92,7 +112,7 @@ export function computeMoatSignal(snapshot: CompanySnapshot, cfg: AppConfig): Mo
     // 실패 원인이 섞여 있을 수 있다(일부 기간은 결측, 일부는 투하자본 0 이하) — "최선의
     // 경우" 감도 분석으로 어느 쪽이 진짜 병목인지 가른다. 결측 기간이 전부 계산 가능했다고
     // 낙관적으로 되돌렸을 때 최소 요건을 채울 수 있었는가?
-    //   - 채울 수 있었다면(spreads.length + missingCount >= min_periods_required):
+    //   - 채울 수 있었다면(periodsEvaluated + missingCount >= min_periods_required):
     //     그 데이터가 있었다면 결론이 달라질 수 있었다는 뜻이므로 "모른다"고 말한다
     //     (MISSING_FINANCIALS) — 투하자본 미달 기간이 섞여 있어도 마찬가지다, 결측만
     //     해소돼도 문턱을 넘었을 것이기 때문이다.
@@ -106,38 +126,39 @@ export function computeMoatSignal(snapshot: CompanySnapshot, cfg: AppConfig): Mo
       (g) => g === 'NON_POSITIVE_INVESTED_CAPITAL' || g === 'IMMATERIAL_INVESTED_CAPITAL',
     ).length
     const missingCouldHaveClearedThreshold =
-      spreads.length + missingCount >= m.min_periods_required
+      periodsEvaluated + missingCount >= m.min_periods_required
 
     if (notApplicableCount === 0 || missingCouldHaveClearedThreshold) {
       return {
         signal: 'INSUFFICIENT_DATA',
-        periodsEvaluated: spreads.length,
+        periodsEvaluated,
         periodsClearing: 0,
         insufficientReason: 'MISSING_FINANCIALS',
         evidence: [
           `ROIC 계산에 필요한 재무 항목(영업이익·부채·자본·현금)이 일부 연간 기간에 보고되지 않음 — ` +
-            `유효 기간 ${spreads.length}개, 최소 ${m.min_periods_required}개 필요`,
+            `유효 기간 ${periodsEvaluated}개, 최소 ${m.min_periods_required}개 필요`,
         ],
       }
     }
 
     return {
       signal: 'INSUFFICIENT_DATA',
-      periodsEvaluated: spreads.length,
+      periodsEvaluated,
       periodsClearing: 0,
       insufficientReason: 'NOT_APPLICABLE',
       evidence: [
         `투하자본(부채+자본−현금)이 0 이하이거나 그 셋을 합친 규모에 비해 무시할 만큼 작아 ` +
           `ROIC를 정의할 수 없는 연간 기간이 있음 — 데이터 부족이 아니라 이 지표가 적용되지 ` +
-          `않는 경우 (유효 기간 ${spreads.length}개, 최소 ${m.min_periods_required}개 필요)`,
+          `않는 경우 (유효 기간 ${periodsEvaluated}개, 최소 ${m.min_periods_required}개 필요)`,
       ],
     }
   }
 
-  const clearing = spreads.filter((s) => s > 0)
-  const ratio = clearing.length / spreads.length
+  const ratio = periodsClearing / periodsEvaluated
   const avgClearSpread =
-    clearing.length > 0 ? clearing.reduce((a, b) => a + b, 0) / clearing.length : null
+    clearSpreads.length > 0
+      ? clearSpreads.reduce((a, b) => a + b, 0) / clearSpreads.length
+      : null
 
   const signal: MoatSignal =
     ratio >= m.persistent_clear_ratio
@@ -147,7 +168,7 @@ export function computeMoatSignal(snapshot: CompanySnapshot, cfg: AppConfig): Mo
         : 'ABSENT'
 
   const evidence = [
-    `최근 연간 ${spreads.length}개 기간 중 ${clearing.length}개에서 ROIC가 자본비용(WACC ${(wacc * 100).toFixed(1)}%)을 상회`,
+    `최근 연간 ${periodsEvaluated}개 기간 중 ${periodsClearing}개에서 ROIC가 자본비용(WACC ${(wacc * 100).toFixed(1)}%)을 상회`,
   ]
   evidence.push(
     avgClearSpread !== null
@@ -157,8 +178,8 @@ export function computeMoatSignal(snapshot: CompanySnapshot, cfg: AppConfig): Mo
 
   return {
     signal,
-    periodsEvaluated: spreads.length,
-    periodsClearing: clearing.length,
+    periodsEvaluated,
+    periodsClearing,
     insufficientReason: null,
     evidence,
   }

@@ -10,7 +10,7 @@ import type {
 /**
  * fair_value_reason은 엔진 내부 코드 문자열이다(예: NOT_CASH_GENERATIVE) — 화면에 코드
  * 그대로 노출하지 않고 사람이 읽을 한국어 한 줄로 옮긴다. FairValueReason은 정확히 이
- * 7개뿐이다(src/engines/valuation/fair-value.ts) — Record<FairValueReason, string>으로
+ * 8개뿐이다(src/engines/valuation/fair-value.ts) — Record<FairValueReason, string>으로
  * 선언해 새 사유가 엔진에 추가되면 이 파일이 컴파일 타임에 깨지도록 한다(누락 방지).
  */
 export const FAIR_VALUE_REASON_LABELS: Record<FairValueReason, string> = {
@@ -23,6 +23,11 @@ export const FAIR_VALUE_REASON_LABELS: Record<FairValueReason, string> = {
     '최근 매출 성장률을 예측에 그대로 태우면 예측 구간이 끝날 때 매출이 지금의 몇 배로 ' +
     '불어나야 합니다 — 그만큼의 확대를 전제한 값은 이 회사에 대한 측정이 아니라 우리가 ' +
     '고른 가정이므로 숫자를 내지 않습니다',
+  MARGIN_NOT_ANCHORABLE:
+    '내재가치의 대부분은 "이 회사가 자리를 잡으면 매출의 몇 %를 현금으로 남기는가"에서 ' +
+    '나옵니다. 그 비율은 회사마다 다르므로 이 회사가 지난 몇 해 동안 실제로 남긴 값에서 ' +
+    '가져오는데, 그 이력이 너무 짧거나·대체로 현금을 남기지 못했거나·해마다 너무 들쭉날쭉해 ' +
+    '하나의 값으로 말할 수 없습니다. 평균적인 회사의 값을 대신 넣지 않고 숫자를 내지 않습니다',
   INVALID_ASSUMPTIONS: '할인율이 터미널 성장률보다 낮거나 같아 계산이 발산합니다',
 }
 

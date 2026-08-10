@@ -85,17 +85,54 @@ function eligibleShape(rev: number): Partial<FinancialPeriod> {
 }
 
 /**
+ * 성숙마진 앵커가 보는 연간 마진 이력. 매출을 매해 $1B으로 고정하고 마진만 바꾸므로
+ * 중앙값·산포가 손으로 검산된다.
+ *
+ *   중앙값 0.175  (정렬 …0.17, 0.18… 의 평균)  ← 엔진이 성숙마진으로 써야 하는 값
+ *   평균   0.1625                              ← 평균으로 바꾸면 값이 달라진다
+ *   MAD    0.015 → 산포 0.08571429             ← 상한 1.00 아래
+ *
+ * 영업이익률은 일부러 0.50(=NOPAT 0.395)으로 멀리 떨어뜨려 뒀다: 초기 마진이 FCF 기준인
+ * 이 픽스처에서 엔진이 NOPAT 이력을 보면 성숙마진이 0.175가 아니라 0.395가 되어 즉시
+ * 드러난다(기준 일치 규칙을 관측 가능하게 만드는 장치).
+ */
+const DEMONSTRATED_FCF_MARGINS = [0.30, 0.19, 0.18, 0.18, 0.17, 0.16, 0.10, 0.02]
+
+function annualMarginHistory(
+  margins: number[],
+  field: 'fcf' | 'operatingIncome',
+  over: (rev: number) => Partial<FinancialPeriod> = () => ({}),
+): FinancialPeriod[] {
+  const revenue = 1_000_000_000
+  return margins.map((m, i) =>
+    period(`${2025 - i}-12-31`, 'A', {
+      revenue,
+      [field]: revenue * m,
+      ...over(revenue),
+    }),
+  )
+}
+
+/** 초기 마진이 FCF 기준인 픽스처들이 공유하는 연간 이력 — 중앙값 0.175. */
+function eligibleAnnual(): FinancialPeriod[] {
+  return annualMarginHistory(DEMONSTRATED_FCF_MARGINS, 'fcf', (rev) => ({
+    operatingIncome: rev * 0.5,
+  }))
+}
+
+/**
  * 게이트를 모두 통과 — OK가 나와야 하는 기준 픽스처. 모든 중간값이 결정적이다:
  *   TTM YoY  = 1.05^4 − 1                        = 0.21550625
  *   3Y CAGR  = (1.05^4 · 1.02^8)^(1/3) − 1       = 0.12508722
  *   초기성장률 = 0.6·YoY + 0.4·CAGR               = 0.17933864  (가중치를 바꾸면 0.16125483)
- *   초기 FCF마진 = 0.25 (성숙마진 0.15와 달라 마진 페이드가 관측된다)
+ *   초기 FCF마진 = 0.25, 성숙마진 = 0.175 (연간 이력 중앙값 — 둘이 달라 마진 페이드가 관측된다)
  *   순현금 = 5e8 − 1e8 = 4e8, 희석주식수 1e8
  */
 export function eligibleForFairValue(): CompanySnapshot {
   return base({
     ticker: 'GOOD', price: 20,
     ttm: phasedTtmSeries(13, 1_000_000_000, 4, 0.05, 0.02, eligibleShape),
+    annual: eligibleAnnual(),
   })
 }
 
@@ -112,6 +149,9 @@ export function hyperGrowthCompany(): CompanySnapshot {
       cash: 178_087_000, totalDebt: 144_626, sharesDiluted: 92_985_000,
       equity: 300_000_000,
     })),
+    // 마진 앵커는 통과시킨다 — 이 픽스처가 고정하려는 것은 **배수 게이트**이므로
+    // 뒤의 게이트에 먼저 걸리면 그 관측이 사라진다.
+    annual: eligibleAnnual(),
   })
 }
 
@@ -127,6 +167,13 @@ export function capexHeavyCompany(): CompanySnapshot {
       cash: 500_000_000, totalDebt: 100_000_000, sharesDiluted: 100_000_000,
       equity: 800_000_000,
     })),
+    // 연간 FCF마진 중앙값은 0.40, 영업이익률 중앙값은 0.175(NOPAT 0.13825)로 멀리
+    // 떨어뜨렸다. 초기 마진이 nopat_proxy인 이 기업의 성숙마진은 0.13825여야 한다 —
+    // 0.40이 나오면 엔진이 두 기준을 섞은 것이다.
+    annual: annualMarginHistory(
+      DEMONSTRATED_FCF_MARGINS, 'operatingIncome',
+      (rev) => ({ fcf: rev * 0.4 }),
+    ),
   })
 }
 
@@ -135,6 +182,7 @@ export function ttmYoyOnlyCompany(): CompanySnapshot {
   return base({
     ticker: 'YOYONLY', price: 20,
     ttm: phasedTtmSeries(5, 1_000_000_000, 4, 0.05, 0.02, eligibleShape),
+    annual: eligibleAnnual(),
   })
 }
 
@@ -142,7 +190,7 @@ export function ttmYoyOnlyCompany(): CompanySnapshot {
 export function cagr3yOnlyCompany(): CompanySnapshot {
   const ttm = phasedTtmSeries(13, 1_000_000_000, 4, 0.05, 0.02, eligibleShape)
   ttm[4] = { ...ttm[4]!, revenue: null }
-  return base({ ticker: 'CAGRONLY', price: 20, ttm })
+  return base({ ticker: 'CAGRONLY', price: 20, ttm, annual: eligibleAnnual() })
 }
 
 /** 최근 TTM 매출이 0 이하 — NON_POSITIVE_REVENUE */
@@ -201,6 +249,64 @@ export function noBalanceSheetCompany(): CompanySnapshot {
   return base({
     ticker: 'NOBS',
     ttm: ttmSeries(13, 500_000_000, 0.04, shape),
+  })
+}
+
+// --- 성숙마진 앵커 픽스처 -----------------------------------------------------
+
+/**
+ * XRX·SMCI 실사례의 모양: 게이트를 다 통과하고 성장률도 얌전한데, 이 회사가 실제로 남긴
+ * 마진은 2%대다. 성숙마진이 전역 상수 0.15였을 때 이런 기업들이 "내재가치 $166.91 대
+ * 주가 $3.24" 같은 값을 받았다 — 성장이 아니라 마진 가정이 만든 값이다.
+ * 초기·성숙이 모두 0.02이므로 값은 순수하게 그 마진 위에 선다.
+ */
+export function lowDemonstratedMarginCompany(): CompanySnapshot {
+  return base({
+    ticker: 'THINM', price: 20,
+    ttm: phasedTtmSeries(13, 1_000_000_000, 4, 0.05, 0.02, (rev) => ({
+      grossProfit: rev * 0.3, operatingIncome: rev * 0.04, fcf: rev * 0.02,
+      cash: 500_000_000, totalDebt: 100_000_000, sharesDiluted: 100_000_000,
+      equity: 800_000_000,
+    })),
+    annual: annualMarginHistory([0.021, 0.020, 0.020, 0.019, 0.022, 0.018, 0.020, 0.021], 'fcf'),
+  })
+}
+
+/** 연간 마진 관측이 3개뿐(최소 4개) — 앵커할 이력이 없다. 기본값으로 메우지 않는다. */
+export function shortMarginHistoryCompany(): CompanySnapshot {
+  return base({
+    ticker: 'SHORTM', price: 20,
+    ttm: phasedTtmSeries(13, 1_000_000_000, 4, 0.05, 0.02, eligibleShape),
+    annual: annualMarginHistory([0.20, 0.19, 0.21], 'fcf'),
+  })
+}
+
+/**
+ * 최근 TTM은 흑자라 현금전환 게이트를 통과하지만, 8년 중 대부분은 현금을 남기지 못했다
+ * (중앙값 −1.9%). CMTL·KTCC·SEZL의 모양 — 한 해의 흑자를 근거로 영구 양(+)의 마진을
+ * 부여하지 않는다.
+ */
+export function negativeMarginHistoryCompany(): CompanySnapshot {
+  return base({
+    ticker: 'NEGM', price: 20,
+    ttm: phasedTtmSeries(13, 1_000_000_000, 4, 0.05, 0.02, eligibleShape),
+    annual: annualMarginHistory(
+      [0.032, 0.017, -0.035, -0.022, -0.050, -0.088, -0.016, -0.003], 'fcf',
+    ),
+  })
+}
+
+/**
+ * 중앙값은 양수지만 해마다 부호가 뒤집힐 만큼 흩어져 있다 — MPAA의 모양(산포 3.26).
+ * 중앙값 0.0141을 중심으로 MAD가 그보다 크므로 "하나의 성숙 수준"이라고 말할 수 없다.
+ */
+export function volatileMarginHistoryCompany(): CompanySnapshot {
+  return base({
+    ticker: 'VOLM', price: 20,
+    ttm: phasedTtmSeries(13, 1_000_000_000, 4, 0.05, 0.02, eligibleShape),
+    annual: annualMarginHistory(
+      [0.020, 0.054, 0.053, -0.038, -0.081, 0.078, 0.009, -0.109], 'fcf',
+    ),
   })
 }
 
@@ -337,6 +443,57 @@ export function staleGloryMoatCompany(): CompanySnapshot {
       annualPeriod(2017, 30), annualPeriod(2016, 30), annualPeriod(2015, 30),
       annualPeriod(2014, 30), annualPeriod(2013, 30), annualPeriod(2012, 30),
     ],
+  })
+}
+
+/**
+ * SEZL 실사례. 최근 3개 해는 투하자본이 실질적이고 자본비용을 상회했고, 나머지 3개는
+ * **전부 영업적자**다. 그중 두 해(2022, 2020)는 투하자본이 총액 대비 3.3%·9.2%라 규모
+ * 하한에 걸린다.
+ *
+ *   하한을 NOPAT 부호와 무관하게 걸면: 상회 3 / 유효 4 = 0.750 → PERSISTENT
+ *   NOPAT ≤ 0인 해를 미달로 세면:      상회 3 / 유효 6 = 0.500 → INTERMITTENT
+ *
+ * 앞은 **불리한 증거만 지워서** 최상위 등급을 얻은 것이다. 영업적자 해의 ROIC는 분모가
+ * 어떻든 0 이하이므로 그 해의 결론은 이미 정해져 있다 — 버릴 이유가 없다.
+ */
+export function lossYearsDroppedByFloorCompany(): CompanySnapshot {
+  // 투하자본 비율 = (부채+자본−현금) / (|부채|+|자본|+|현금|)
+  const material = (year: number, operatingIncome: number): FinancialPeriod =>
+    period(`${year}-12-31`, 'A', {
+      revenue: 500, operatingIncome, totalDebt: 300, equity: 400, cash: 100, // 600/800 = 0.75
+    })
+  const immaterial = (year: number, operatingIncome: number): FinancialPeriod =>
+    period(`${year}-12-31`, 'A', {
+      revenue: 500, operatingIncome, totalDebt: 300, equity: 100, cash: 380, // 20/780 = 0.0256
+    })
+  return base({
+    ticker: 'LOSSDROP',
+    annual: [
+      material(2025, 100), material(2024, 90), material(2023, 80), // 상회 3개
+      immaterial(2022, -50), // 영업적자 + 규모 하한 미달
+      material(2021, -40), // 영업적자 (하한은 통과)
+      immaterial(2020, -30), // 영업적자 + 규모 하한 미달
+    ],
+  })
+}
+
+/**
+ * 영업적자만 6년. 하한을 부호와 무관하게 걸면 그중 4개가 규모 하한에 걸려 유효 기간이
+ * 2개로 줄고 판정이 ABSENT → INSUFFICIENT_DATA로 격하된다 — 리뷰가 센 48개 기업의 모양이다.
+ * 분모가 무엇이든 답이 "미달"인 기간을 버려서 결론을 비결론으로 만드는 일이다.
+ */
+export function allLossYearsCompany(): CompanySnapshot {
+  const loss = (year: number, immaterialCapital: boolean): FinancialPeriod =>
+    period(`${year}-12-31`, 'A', {
+      revenue: 200, operatingIncome: -60,
+      ...(immaterialCapital
+        ? { totalDebt: 300, equity: 100, cash: 380 } // 20/780 = 0.0256
+        : { totalDebt: 300, equity: 400, cash: 100 }), // 600/800 = 0.75
+    })
+  return base({
+    ticker: 'ALLLOSS',
+    annual: [loss(2025, true), loss(2024, true), loss(2023, false), loss(2022, true), loss(2021, false), loss(2020, true)],
   })
 }
 

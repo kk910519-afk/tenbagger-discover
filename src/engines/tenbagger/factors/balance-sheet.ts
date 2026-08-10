@@ -3,7 +3,6 @@ import { cashRunwayQuarters, debtToEbitda, netCashToMarketCap } from '@/domain/m
 import { scored, noData, pct, type FactorFn } from '../factor-utils.js'
 
 const KEY = 'balance_sheet'
-const SIGNAL_COUNT = 2
 
 /**
  * 흑자 기업은 순현금 포지션과 레버리지 두 신호를 blend로 섞고, **커버리지 감쇠**를 곱한다
@@ -41,9 +40,18 @@ export const balanceSheetFactor: FactorFn = ({ snapshot, cfg }) => {
   const netCash = netCashToMarketCap(ttm, snapshot.marketCap)
   const leverage = debtToEbitda(ttm)
 
-  // 시가총액이 없으면 순현금 신호는 평가 가능했어야 할 신호가 아니다(우리 쪽 사정).
+  // 시가총액이 없거나 0 이하면 순현금 비율 자체가 정의되지 않으므로(netCashToMarketCap이
+  // 같은 조건으로 null을 낸다) 순현금은 "평가 가능했어야 할 신호"가 아니다 — 우리 쪽
+  // 시세 데이터의 사정이지 회사의 결함이 아니다. 이 조건은 netCashToMarketCap의 가드와
+  // 글자 그대로 같아야 한다: 어긋나면 분모에는 남아 있는데 값은 절대 나오지 않는 신호가
+  // 생겨 그 회사만 영구 감쇠를 받는다.
   const netCashComparable = snapshot.marketCap !== null && snapshot.marketCap > 0
-  const applicable = netCashComparable ? SIGNAL_COUNT : SIGNAL_COUNT - 1
+  // 커버리지는 개수가 아니라 **blend 가중치**로 센다. 개수로 세면 mean × coverage가
+  // "빠진 신호 = 0점"과 같아지지 않아, 순현금이 아주 낮은 기업은 현금을 보고하지 않는
+  // 편이 점수가 높아진다(GEN 실사례). config.yaml의 coverage_curve 주석 참고.
+  const applicableWeight = netCashComparable
+    ? f.profitable_blend.net_cash + f.profitable_blend.leverage
+    : f.profitable_blend.leverage
 
   const signals: { weight: number; score: number; label: string }[] = []
   if (netCash !== null) {
@@ -66,9 +74,12 @@ export const balanceSheetFactor: FactorFn = ({ snapshot, cfg }) => {
   }
 
   // 신호가 둘 다 있으면 profitable_blend 그대로, 하나뿐이면 그 신호 자체가 평균이다.
-  const totalWeight = signals.reduce((s, x) => s + x.weight, 0)
-  const mean = signals.reduce((s, x) => s + x.weight * x.score, 0) / totalWeight
-  const coverage = signals.length / applicable
+  // 커버리지를 가중치로 세면 mean × damping이 `Σ wᵢ·sᵢ / Σ w(평가 가능)`로 정확히
+  // 접히므로(항등 곡선에서), 빠진 신호는 언제나 0점과 같아진다 — 증거를 더할수록 점수가
+  // 내려갈 수 없다.
+  const presentWeight = signals.reduce((s, x) => s + x.weight, 0)
+  const mean = signals.reduce((s, x) => s + x.weight * x.score, 0) / presentWeight
+  const coverage = presentWeight / applicableWeight
   const damping = interpolate(f.coverage_curve, coverage)
   const normalized = mean * damping
 
@@ -78,8 +89,8 @@ export const balanceSheetFactor: FactorFn = ({ snapshot, cfg }) => {
   if (!netCashComparable) parts.push('시가총액 없음 — 순현금은 평가 불가로 분모에서 제외')
   parts.push(
     damping < 1
-      ? `평가 가능 ${applicable}개 중 ${signals.length}개 신호 · 커버리지 감쇠 ×${damping.toFixed(2)}`
-      : `평가 가능 ${applicable}개 신호 전부 · 감쇠 없음`,
+      ? `평가 가능 신호 가중치의 ${(coverage * 100).toFixed(0)}%만 산출 · 커버리지 감쇠 ×${damping.toFixed(2)}`
+      : '평가 가능 신호 전부 · 감쇠 없음',
   )
 
   // raw는 원시 지표(§8.1) — 순현금 비율을 우선하고, 없으면 레버리지 배수를 남긴다.

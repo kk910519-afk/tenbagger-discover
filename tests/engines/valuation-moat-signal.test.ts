@@ -7,6 +7,7 @@ import {
   missingFinancialsMoatCompany, notApplicableMoatCompany,
   mixedGapCannotFlipMoatCompany, mixedGapCouldFlipMoatCompany,
   staleGloryMoatCompany, buybackNegativeEquityCompany,
+  lossYearsDroppedByFloorCompany, allLossYearsCompany,
 } from '../fixtures/valuation-companies'
 
 const cfg = parseConfig(readFileSync('config.yaml', 'utf8'))
@@ -34,6 +35,31 @@ describe('computeMoatSignal', () => {
     const r = computeMoatSignal(insufficientMoatHistoryCompany(), cfg)
     expect(r.signal).toBe('INSUFFICIENT_DATA')
     expect(r.periodsEvaluated).toBeLessThan(cfg.valuation.moat.min_periods_required)
+  })
+
+  it('매출이 없는 연간 행은 회계연도로 세지 않는다 (eBay 유령 연간 기간)', () => {
+    // 실측: financials EBAY A 2025-09-30 revenue NULL / gross_profit 44,000,000.
+    // bulk에만 있는 디멘션 슬라이스가 연간 기간 행으로 남아, 2022~2025년의 9월 30일
+    // 유령 기간 네 개가 lookback 창을 잠식했다. eBay는 그래서 유효 기간 3개로
+    // INSUFFICIENT_DATA(MISSING_FINANCIALS)를 받았다(QCOM도 같은 모양).
+    // 전체 규모: 매출이 NULL인데 매출총이익이 있는 연간 행 284개 / 85개사.
+    const real = wideMoatCompany()
+    const phantom = real.annual.slice(0, 4).map((p) => ({
+      ...p,
+      periodEnd: `${p.periodEnd.slice(0, 4)}-09-30`,
+      revenue: null,
+      operatingIncome: null,
+      grossProfit: 44_000_000,
+    }))
+    const contaminated = {
+      ...real,
+      annual: [...phantom, ...real.annual].sort((a, b) => b.periodEnd.localeCompare(a.periodEnd)),
+    }
+    const r = computeMoatSignal(contaminated, cfg)
+    const clean = computeMoatSignal(real, cfg)
+    expect(r.signal).toBe(clean.signal)
+    expect(r.periodsEvaluated).toBe(clean.periodsEvaluated)
+    expect(r.periodsClearing).toBe(clean.periodsClearing)
   })
 
   describe('INSUFFICIENT_DATA 사유 구분', () => {
@@ -110,6 +136,54 @@ describe('computeMoatSignal', () => {
     const r = computeMoatSignal(buybackNegativeEquityCompany(), loose)
     expect(r.signal).toBe('PERSISTENT')
     expect(r.periodsEvaluated).toBe(5)
+  })
+
+  /**
+   * 리뷰 Part 2 — 투하자본 규모 하한이 **결론까지 버리고 있었다.**
+   *
+   * 이 엔진이 각 기간에 묻는 것은 "ROIC가 자본비용을 넘었는가"라는 부호 질문이고,
+   * NOPAT ≤ 0이면 그 답은 분모의 크기와 무관하게 이미 "아니오"다. 그런 기간을 하한으로
+   * 버리면 (a) 회사에 대한 결론이 우리에 대한 진술로 격하되고(50개 중 48개),
+   * (b) 실패 기간만 사라져 등급이 **올라간다**(SEZL).
+   */
+  describe('규모 하한은 분모가 답을 바꿀 수 있을 때만 적용된다', () => {
+    it('영업적자 기간은 규모 하한에 걸려도 미달로 세어 판정에 넣는다 (SEZL)', () => {
+      const r = computeMoatSignal(lossYearsDroppedByFloorCompany(), cfg)
+      expect(r.periodsEvaluated).toBe(6) // 하한이 부호를 무시하면 4가 된다
+      expect(r.periodsClearing).toBe(3)
+      expect(r.signal).toBe('INTERMITTENT') // 3/6 = 0.500
+      // 3/4 = 0.750은 persistent_clear_ratio에 정확히 걸린다 — 불리한 증거 두 개를
+      // 지운 대가로 최상위 등급을 받던 값이다.
+      expect(r.signal).not.toBe('PERSISTENT')
+    })
+
+    it('전부 영업적자인 기업은 ABSENT다 — INSUFFICIENT_DATA로 격하되지 않는다', () => {
+      const r = computeMoatSignal(allLossYearsCompany(), cfg)
+      expect(r.signal).toBe('ABSENT')
+      expect(r.insufficientReason).toBeNull()
+      expect(r.periodsEvaluated).toBe(6) // 규모 하한이 4개를 버리면 2개가 되어 최소 요건 미달
+      expect(r.periodsClearing).toBe(0)
+    })
+
+    it('하한은 상회 기간만 제거할 수 있다 — 등급을 올리는 것이 구조적으로 불가능하다', () => {
+      // 하한을 0(꺼짐)부터 1(전부 차단)까지 훑으며 상회 비율이 단조 비증가인지 본다.
+      const ratios = [0, 0.05, 0.1, 0.2, 0.5, 0.9].map((floor) => {
+        const c = structuredClone(cfg)
+        c.scoring.min_invested_capital_ratio = floor
+        const r = computeMoatSignal(lossYearsDroppedByFloorCompany(), c)
+        return r.periodsEvaluated === 0 ? 0 : r.periodsClearing / r.periodsEvaluated
+      })
+      for (let i = 1; i < ratios.length; i++) {
+        expect(ratios[i]!).toBeLessThanOrEqual(ratios[i - 1]! + 1e-12)
+      }
+      expect(ratios[0]).toBeCloseTo(0.5, 10)
+    })
+
+    it('NOPAT > 0인 잔차 분모는 여전히 막는다 — 하한이 하던 일 자체는 그대로다', () => {
+      const r = computeMoatSignal(buybackNegativeEquityCompany(), cfg)
+      expect(r.signal).toBe('INSUFFICIENT_DATA')
+      expect(r.periodsEvaluated).toBe(0)
+    })
   })
 
   it('근거 문자열은 측정한 것만 말하고 해자의 "원천"은 이름 붙이지 않는다', () => {

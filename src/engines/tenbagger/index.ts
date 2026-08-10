@@ -29,8 +29,17 @@ import { institutionalInsiderFactor } from './factors/institutional-insider.js'
  *     아니라 NO_DATA(리뷰 Finding 5).
  *   · ROIC 분모에 투하자본 규모 하한 도입(리뷰 Finding 2) — competitive_advantage의
  *     roic_spread 신호가 일부 기업에서 사라진다.
+ *
+ * 1.3.0 — 두 팩터의 판정이 바뀐다(검증 리뷰 재작업).
+ *   · `market_cap_opportunity`: 최신 TTM 매출이 null이어도 최근 TTM 구간·최근 연간
+ *     기간에서 매출을 찾아 게이트를 평가한다. 확보하고 있는 사실을 버리고 NO_DATA로
+ *     돌리던 것을 고친 것이며(274개 NO_DATA 중 최소 89개가 그런 경우였다) SCORED 수와
+ *     completeness가 함께 움직인다.
+ *   · `balance_sheet`: 커버리지를 신호 **개수**가 아니라 **blend 가중치**로 세고
+ *     coverage_curve를 항등으로 바꾼다. 순현금 비율이 아주 낮은 기업이 현금을 보고하지
+ *     않는 편으로 점수가 높아지던 비단조성을 없앤다(GEN 실사례).
  */
-export const ENGINE_VERSION = 'tenbagger-1.2.0'
+export const ENGINE_VERSION = 'tenbagger-1.3.0'
 
 const FACTORS: FactorFn[] = [
   revenueGrowthFactor,

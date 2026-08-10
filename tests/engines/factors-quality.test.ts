@@ -127,6 +127,95 @@ describe('marketCapOpportunityFactor', () => {
     expect(silent.status).toBe('NO_DATA')
   })
 
+  /**
+   * 리뷰 Part 2: NO_DATA 274개 중 31개는 최근 4개 TTM 구간 중 하나에 매출이 있었고
+   * (VICR: 2025-09-30에 $738.9M, 이후 두 구간 null), 58개는 최신 연간 기간에 매출이
+   * 있었다(XEL: 연 $11.686B인데 TTM은 전 구간 null). 게이트가 묻는 것은 "이 회사의
+   * 매출 규모"이지 "최신 TTM 구간의 값"이 아니다 — 확보하고 있는 사실을 버리지 않는다.
+   */
+  describe('매출 규모 게이트의 대체 관측치', () => {
+    /** VICR의 모양: 최신 두 구간은 null, 그 앞 구간에 $738.9M이 있다. */
+    function staleTtmRevenue(): FinancialPeriod[] {
+      return [
+        fp('2026-03-31'), fp('2025-12-31'),
+        fp('2025-09-30', { revenue: 738_900_000 }),
+        fp('2025-06-30'), fp('2025-03-31'),
+      ]
+    }
+
+    it('최신 TTM 매출이 없으면 최근 TTM 구간에서 찾는다 (VICR)', () => {
+      const r = marketCapOpportunityFactor(ctx({ marketCap: 5e8, ttm: staleTtmRevenue() }))
+      expect(r.status).toBe('SCORED')
+      expect(r.points).toBe(15)
+      expect(r.detail).toContain('직전 TTM 구간(2025-09-30)')
+    })
+
+    it('TTM 어디에도 없으면 최근 연간 기간에서 찾는다 (XEL)', () => {
+      const r = marketCapOpportunityFactor(
+        ctx({
+          marketCap: 2e10,
+          ttm: [fp('2026-03-31'), fp('2025-12-31')],
+          annual: [fp('2025-12-31', { revenue: 11_686_000_000, periodType: 'A' })],
+        }),
+      )
+      expect(r.status).toBe('SCORED')
+      expect(r.points).toBe(8) // $10B~$30B 구간
+      expect(r.detail).toContain('최근 연간 기간(2025-12-31)')
+    })
+
+    it('대체 관측치도 게이트를 그대로 통과해야 한다 — 규모가 작으면 여전히 0점', () => {
+      const r = marketCapOpportunityFactor(
+        ctx({
+          marketCap: 5e8,
+          ttm: [fp('2026-03-31'), fp('2025-12-31', { revenue: 9_000_000 })],
+        }),
+      )
+      expect(r.status).toBe('SCORED')
+      expect(r.points).toBe(0)
+      expect(r.detail).toContain('매출 규모')
+    })
+
+    it('탐색 범위 밖의 매출은 쓰지 않는다 — NO_DATA로 남는다', () => {
+      const far = [
+        fp('2026-03-31'), fp('2025-12-31'), fp('2025-09-30'), fp('2025-06-30'),
+        fp('2025-03-31', { revenue: 738_900_000 }), // 5번째 구간 — 범위(4) 밖
+      ]
+      const r = marketCapOpportunityFactor(ctx({ marketCap: 5e8, ttm: far }))
+      expect(r.status).toBe('NO_DATA')
+    })
+
+    it('범위를 0으로 두면 폴백이 완전히 꺼진다 — 이 설정이 무엇을 켜는지 고정한다', () => {
+      const off = structuredClone(cfg)
+      off.scoring.factors.market_cap_opportunity.gate.revenue_fallback_periods = 0
+      const r = marketCapOpportunityFactor({
+        ...ctx({ marketCap: 5e8, ttm: staleTtmRevenue() }),
+        cfg: off,
+      })
+      expect(r.status).toBe('NO_DATA')
+    })
+
+    it('TTM·연간 어디에도 매출이 없으면 여전히 NO_DATA — 폴백이 게이트를 무력화하지 않는다', () => {
+      const r = marketCapOpportunityFactor(
+        ctx({ marketCap: 5e8, ttm: [fp('2026-03-31'), fp('2025-12-31')], annual: [] }),
+      )
+      expect(r.status).toBe('NO_DATA')
+      expect(r.points).toBeNull()
+    })
+  })
+
+  it('시가총액이 0이어도 NO_DATA — 0으로 나눈 구간 점수(만점 15점)를 주지 않는다', () => {
+    // 가드를 `marketCap === null`로만 두면 시가총액 0인 회사가 최저 구간에 떨어져
+    // 만점 15/15를 받는다. 라이브 유니버스에 그런 행이 실제로 하나 있다.
+    const r = marketCapOpportunityFactor(ctx({ marketCap: 0, ttm: growingTtm() }))
+    expect(r.status).toBe('NO_DATA')
+    expect(r.points).toBeNull()
+  })
+
+  it('시가총액이 음수여도 NO_DATA', () => {
+    const r = marketCapOpportunityFactor(ctx({ marketCap: -1, ttm: growingTtm() }))
+    expect(r.status).toBe('NO_DATA')
+  })
+
   it('시가총액이 없으면 NO_DATA', () => {
     expect(marketCapOpportunityFactor(ctx({ marketCap: null, ttm: growingTtm() })).status)
       .toBe('NO_DATA')
@@ -362,11 +451,12 @@ describe('balanceSheetFactor', () => {
       }),
     )
     expect(r.raw).toBeCloseTo(0.25, 5)
-    // 순현금 0.25 → 1.00, 평가 가능 2개 중 1개 → 감쇠 ×0.50 → 5 × 1.00 × 0.50 = 2.5
-    expect(r.points!).toBeCloseTo(2.5, 5)
+    // 순현금 0.25 → 1.00. 커버리지는 개수가 아니라 blend 가중치로 센다: 0.6/1.0 = 0.60
+    // → 5 × 1.00 × 0.60 = 3.0. 개수로 세면 0.50이 되어 "빠진 신호 = 0점"과 어긋난다.
+    expect(r.points!).toBeCloseTo(3.0, 5)
     expect(r.detail).toContain('순현금')
     expect(r.detail).toContain('레버리지 산출 불가')
-    expect(r.detail).toContain('커버리지 감쇠 ×0.50')
+    expect(r.detail).toContain('커버리지 감쇠 ×0.60')
   })
 
   it('레버리지만 산출 가능하면 커버리지 감쇠를 받는다 (현금 없음)', () => {
@@ -376,8 +466,8 @@ describe('balanceSheetFactor', () => {
       }),
     )
     expect(r.raw).toBeCloseTo(1.666667, 5)
-    // 레버리지 1.667배 → 0.68333, 감쇠 ×0.50 → 5 × 0.68333 × 0.50 = 1.708333
-    expect(r.points!).toBeCloseTo(1.708333, 5)
+    // 레버리지 1.667배 → 0.68333, 가중치 커버리지 0.4/1.0 → 5 × 0.68333 × 0.40 = 1.366667
+    expect(r.points!).toBeCloseTo(1.366667, 5)
     expect(r.detail).toContain('부채/영업이익')
     expect(r.detail).toContain('순현금 산출 불가')
   })
@@ -408,7 +498,7 @@ describe('balanceSheetFactor', () => {
     expect(full.status).toBe('SCORED')
     // 수정 전에는 partial 5.00 > full 4.20으로 뒤집혀 있었다.
     expect(partial.points!).toBeLessThan(full.points!)
-    expect(partial.points!).toBeCloseTo(2.5, 5)
+    expect(partial.points!).toBeCloseTo(3.0, 5)
     expect(full.points!).toBeCloseTo(5 * (0.6 * 1.0 + 0.4 * 0.6), 5) // = 4.2
   })
 
@@ -423,6 +513,62 @@ describe('balanceSheetFactor', () => {
     expect(r.points!).toBeCloseTo(3.416667, 5)
     expect(r.detail).toContain('감쇠 없음')
     expect(r.detail).toContain('시가총액 없음')
+  })
+
+  // `netCashToMarketCap`은 marketCap ≤ 0에서 null을 낸다. 분모의 카브아웃 조건이
+  // `!== null`뿐이면 시가총액 0인 회사는 분모에는 남아 있는데 값은 절대 나오지 않아
+  // 영구히 절반으로 감쇠된다 — 두 조건이 글자 그대로 같아야 하는 이유다.
+  it('시가총액이 0이어도 순현금은 분모에서 빠진다 (netCashToMarketCap의 가드와 같은 조건)', () => {
+    const r = balanceSheetFactor(
+      ctx({
+        marketCap: 0,
+        ttm: [fp('2025-03-31', { operatingIncome: 3e8, totalDebt: 5e8, cash: 3e9 })],
+      }),
+    )
+    expect(r.points!).toBeCloseTo(3.416667, 5)
+    expect(r.detail).toContain('감쇠 없음')
+  })
+
+  /**
+   * 리뷰 Part 2: 커버리지를 **개수**로 세면 `mean × coverage`가 "빠진 신호 = 0점"과
+   * 같아지지 않는다. 순현금이 빠지면 0.5·l이 되어 순현금 비율 a가 l/6보다 작은 기업은
+   * **현금을 보고하지 않는 편이 점수가 높아진다** — GEN(현금 결측, 부채 $8.156B,
+   * 영업이익 $2.117B, 시총 $17.57B)이 그 실례이고, 현금을 보고한 223개 중 7개가
+   * 이 구간에 있었다. 가중치로 세면 그 구간 자체가 사라진다.
+   */
+  it('현금을 보고한 쪽이 보고하지 않은 쪽보다 절대 불리하지 않다 (GEN 케이스)', () => {
+    const shared = { revenue: 1e10, operatingIncome: 2.117e9, fcf: 1e9, totalDebt: 8.156e9 }
+    const missingCash = balanceSheetFactor(
+      ctx({ marketCap: 1.757e10, ttm: [fp('2025-03-31', { ...shared, cash: null })] }),
+    )
+    // 현금 $0 — 순현금 비율이 가장 나쁜 경우다. 그래도 결측보다 낮아서는 안 된다.
+    const reportedZeroCash = balanceSheetFactor(
+      ctx({ marketCap: 1.757e10, ttm: [fp('2025-03-31', { ...shared, cash: 0 })] }),
+    )
+    expect(missingCash.status).toBe('SCORED')
+    expect(reportedZeroCash.status).toBe('SCORED')
+    expect(reportedZeroCash.points!).toBeGreaterThanOrEqual(missingCash.points!)
+    // 레버리지 8.156/2.117 = 3.8526배 → 곡선 [[2,0.60],[4,0.30]] → 0.32210675
+    // 결측:  5 × 0.32210675 × 0.40                             = 0.64421351
+    // 현금0: 순현금 −0.46420034 → 0.02983305
+    //        5 × (0.6 × 0.02983305 + 0.4 × 0.32210675)         = 0.73371266
+    // 개수 커버리지였다면 결측이 5 × 0.32210675 × 0.50 = 0.80526689로 **더 높았다**.
+    expect(missingCash.points!).toBeCloseTo(0.64421351, 7)
+    expect(reportedZeroCash.points!).toBeCloseTo(0.73371266, 7)
+  })
+
+  it('신호를 하나 더하면 점수는 절대 내려가지 않는다 — 두 신호 조합 전체에서 단조롭다', () => {
+    // 순현금 점수를 0에 가깝게 만드는 구간(부채 > 현금)에서 레버리지 점수를 훑는다.
+    for (const operatingIncome of [1e8, 3e8, 1e9, 4e9]) {
+      const base = { revenue: 1e10, fcf: 1e9, totalDebt: 8e9, operatingIncome }
+      const both = balanceSheetFactor(
+        ctx({ marketCap: 1e10, ttm: [fp('2025-03-31', { ...base, cash: 0 })] }),
+      )
+      const noCash = balanceSheetFactor(
+        ctx({ marketCap: 1e10, ttm: [fp('2025-03-31', { ...base, cash: null })] }),
+      )
+      expect(both.points!).toBeGreaterThanOrEqual(noCash.points!)
+    }
   })
 })
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { median, percentileOf, olsSlope, stdev } from '@/domain/stats'
+import { median, medianAbsoluteDeviation, percentileOf, olsSlope, stdev } from '@/domain/stats'
 
 describe('median', () => {
   it('홀수 개수', () => expect(median([3, 1, 2])).toBe(2))
@@ -37,4 +37,32 @@ describe('stdev', () => {
     expect(stdev([2, 4, 4, 4, 5, 5, 7, 9])).toBeCloseTo(2.138, 2)
   })
   it('2개 미만은 null', () => expect(stdev([1])).toBeNull())
+})
+
+/**
+ * 성숙마진 앵커의 산포 척도. 표준편차와 달리 한 해의 대규모 일회성 항목에 끌려가지
+ * 않는다 — 중앙값을 추정치로 쓰는 곳에서는 산포도 같은 통계로 재야 한다.
+ */
+describe('medianAbsoluteDeviation', () => {
+  it('중앙값에서의 절대편차들의 중앙값이다', () => {
+    // 중앙값 0.175, 편차 [0.125,0.015,0.005,0.005,0.005,0.015,0.075,0.155] → 중앙값 0.015
+    expect(medianAbsoluteDeviation([0.30, 0.19, 0.18, 0.18, 0.17, 0.16, 0.10, 0.02]))
+      .toBeCloseTo(0.015, 12)
+  })
+
+  it('한 해의 극단값에 끌려가지 않는다 — 표준편차와 갈리는 지점', () => {
+    const calm = [0.20, 0.20, 0.20, 0.20, 0.20]
+    const oneOutlier = [0.20, 0.20, 0.20, 0.20, 5.0]
+    expect(medianAbsoluteDeviation(calm)).toBeCloseTo(0, 12)
+    expect(medianAbsoluteDeviation(oneOutlier)).toBeCloseTo(0, 12)
+    // 같은 입력에서 표준편차는 2배 넘게 벌어진다
+    expect(stdev(oneOutlier)!).toBeGreaterThan(2)
+  })
+
+  it('평균절대편차가 아니다 — 두 통계가 갈리는 입력', () => {
+    // 중앙값 3, 편차 [2,1,0,1,10] → MAD = 1. 평균절대편차는 2.8이다.
+    expect(medianAbsoluteDeviation([1, 2, 3, 4, 13])).toBeCloseTo(1, 12)
+  })
+
+  it('빈 배열은 null', () => expect(medianAbsoluteDeviation([])).toBeNull())
 })
