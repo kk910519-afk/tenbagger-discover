@@ -16,9 +16,62 @@ function isoDate(yyyymmdd: string): string | null {
   return `${yyyymmdd.slice(0, 4)}-${yyyymmdd.slice(4, 6)}-${yyyymmdd.slice(6, 8)}`
 }
 
-function col(fields: string[], header: string[], name: string): string {
+/**
+ * 한 파일에서 반드시 있어야 하는 컬럼. 없으면 그 파일은 우리가 아는 형식이 아니다.
+ * `segments`·`coreg`가 특히 중요하다 — 이 둘은 **필터의 유일한 근거**라서 값이
+ * 비어 있는 것이 "연결 총계"라는 뜻이기 때문이다(아래 SUB_REQUIRED 주석 참고).
+ */
+const SUB_REQUIRED = ['adsh', 'cik', 'form', 'filed'] as const
+const NUM_REQUIRED = ['adsh', 'tag', 'ddate', 'qtrs', 'uom', 'value', 'coreg', 'segments'] as const
+
+/**
+ * 헤더가 필수 컬럼을 모두 갖췄는지 확인한다. 없으면 **던진다**.
+ *
+ * 이전 구현의 `col()`은 헤더에 없는 이름에 대해 `''`를 돌려줬다. 그 한 줄이
+ * 이 코드베이스가 가장 비싸게 배운 결함 유형 — *틀린 값으로 계속 진행하기* —
+ * 를 파일 형식 변화에 그대로 열어 뒀다. 컬럼별로 무슨 일이 벌어지는지 보면:
+ *
+ *  - `cik` 부재 → `Number('')`는 **0이고 `Number.isFinite(0)`은 true**다. 그
+ *    아카이브의 모든 사실이 CIK 0에 귀속된다. 유니버스 필터(`ciks.has(0)`)가
+ *    보통 이를 걸러 내지만, 걸러 내는 순간 그 분기 전체가 **조용히 0건**이 되어
+ *    "SEC가 아직 안 올렸다"와 구분되지 않는다.
+ *  - `qtrs` 부재 → 마찬가지로 0. 모든 **기간** 사실이 **시점(instant)** 사실로
+ *    저장된다. 분기·연간 손익이 통째로 대차대조표 축으로 넘어간다.
+ *  - `segments`/`coreg` 부재 → 모든 행이 `''`, 즉 **"연결 총계"로 판정**된다.
+ *    디멘션 슬라이스 필터가 통째로 무력화되어, 세그먼트·지역·자본구성요소 값이
+ *    연결 총계와 같은 키로 저장된다 — 이 파일 상단 주석이 서술하는 eBay 유령
+ *    연간 기간·AZTA 잘못된 매출·XEL 음수 자기자본이 정확히 그 결과였다.
+ *  - `uom`/`ddate`/`tag`/`adsh`/`value` 부재 → 모든 행이 탈락해 결과가 빈 배열이
+ *    된다. 이것도 실패가 아니라 "데이터 없음"으로 보인다.
+ *
+ * 어느 경우든 예외는 나지 않고 파이프라인은 성공으로 끝난다. 그래서 부재를
+ * 값으로 바꾸지 않고 **여기서 크게 실패시킨다** — 무엇이 없는지와 실제 헤더가
+ * 무엇이었는지를 함께 담아 원인을 바로 짚을 수 있게 한다.
+ */
+export function requireColumns(
+  file: string,
+  header: readonly string[],
+  required: readonly string[],
+): void {
+  const missing = required.filter((name) => !header.includes(name))
+  if (missing.length > 0) {
+    throw new Error(
+      `SEC bulk ${file}: 필수 컬럼 없음 [${missing.join(', ')}] — 실제 헤더: [${header.join(', ')}]`,
+    )
+  }
+}
+
+/**
+ * 컬럼 값을 읽는다. **헤더에 이름이 없으면 던진다** — 부재는 빈 문자열이 아니다.
+ * 빈 문자열은 "그 셀이 비어 있다"는 정상적인 데이터이고, 그 둘을 같은 값으로
+ * 뭉개는 것이 위 주석의 결함이었다. 행 길이가 짧아 셀이 없는 경우만 `''`이다.
+ */
+function col(fields: string[], header: readonly string[], name: string): string {
   const i = header.indexOf(name)
-  return i === -1 ? '' : (fields[i] ?? '')
+  if (i === -1) {
+    throw new Error(`SEC bulk: 컬럼 "${name}" 없음 — 실제 헤더: [${header.join(', ')}]`)
+  }
+  return fields[i] ?? ''
 }
 
 export function parseSubLine(
@@ -26,7 +79,9 @@ export function parseSubLine(
   header: string[],
 ): { adsh: string; cik: number; form: string; filed: string } | null {
   const f = line.split('\t')
-  const cik = Number(col(f, header, 'cik'))
+  const cikRaw = col(f, header, 'cik')
+  // `Number('')`는 0이라 빈 셀이 CIK 0으로 통과한다. 빈 셀은 값이 아니라 결측이다.
+  const cik = cikRaw === '' ? NaN : Number(cikRaw)
   const filed = isoDate(col(f, header, 'filed'))
   const adsh = col(f, header, 'adsh')
   if (!Number.isFinite(cik) || !filed || !adsh) return null
@@ -44,7 +99,10 @@ export function parseNumLine(
   const valueRaw = col(f, header, 'value')
   if (valueRaw === '') return null
   const value = Number(valueRaw)
-  const qtrs = Number(col(f, header, 'qtrs'))
+  // `qtrs`도 빈 셀을 0으로 읽으면 안 된다 — 0은 "시점(instant) 사실"이라는 뜻이라,
+  // 기간 길이를 모르는 행이 대차대조표 값으로 둔갑한다.
+  const qtrsRaw = col(f, header, 'qtrs')
+  const qtrs = qtrsRaw === '' ? NaN : Number(qtrsRaw)
   if (!Number.isFinite(value) || !Number.isFinite(qtrs)) return null
   return {
     adsh: col(f, header, 'adsh'),
@@ -122,7 +180,11 @@ export async function extractFactsFromZip(
   {
     let header: string[] | null = null
     for await (const line of lines(await openEntry(zip, 'sub.txt'))) {
-      if (!header) { header = line.split('\t'); continue }
+      if (!header) {
+        header = line.split('\t')
+        requireColumns('sub.txt', header, SUB_REQUIRED)
+        continue
+      }
       const s = parseSubLine(line, header)
       if (s && ciks.has(s.cik)) subs.set(s.adsh, { cik: s.cik, form: s.form, filed: s.filed })
     }
@@ -132,7 +194,11 @@ export async function extractFactsFromZip(
   const out: RawFact[] = []
   let header: string[] | null = null
   for await (const line of lines(await openEntry(zip, 'num.txt'))) {
-    if (!header) { header = line.split('\t'); continue }
+    if (!header) {
+      header = line.split('\t')
+      requireColumns('num.txt', header, NUM_REQUIRED)
+      continue
+    }
     const n = parseNumLine(line, header)
     if (!n) continue
     if (n.coreg !== '') continue              // 자회사 단위 제외, 연결기준만

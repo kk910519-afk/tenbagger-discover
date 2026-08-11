@@ -1,10 +1,11 @@
 import type { RawFact } from '../types.js'
 import {
   BASIC_SHARES_CHAIN, CASH_TAG_SHAPES, DEBT_COMBINED_TOTAL_TAG, DEBT_CURRENT_TOTAL_TAG,
-  DEBT_TAGS, DEBT_TAG_SHAPES, INDUSTRY_REVENUE_TOTAL_TAGS, LONG_TERM_DEBT_CURRENT_TAG,
+  DEBT_TAGS, DEBT_TAG_SHAPES, DEBT_WITH_LEASES_NONCURRENT_TAG, DEBT_WITH_LEASES_SPANNING_TAG,
+  FINANCE_LEASE_BY_REGION, INDUSTRY_REVENUE_TOTAL_TAGS, LONG_TERM_DEBT_CURRENT_TAG,
   LONG_TERM_DEBT_FAMILY, LONG_TERM_DEBT_NONCURRENT_TAG, LONG_TERM_DEBT_TOTAL_TAG,
   OPERATING_COST_TOTAL_TAG, OPERATING_EXPENSES_TAG, SHORT_TERM_BORROWING_TAGS,
-  SPECIFIC_DEBT_FAMILIES, type DebtFamily, type DebtTagShape,
+  SPECIFIC_DEBT_FAMILIES, type DebtFamily, type DebtRegion, type DebtTagShape,
 } from './tags.js'
 
 export type FactIndex = {
@@ -80,7 +81,8 @@ function isWeightedAverageShares(key: string): boolean {
   return WEIGHTED_AVERAGE_SHARE_TAGS.has(bar < 0 ? key : key.slice(bar + 1))
 }
 
-type FactEntry = { value: number; filedDate: string }
+/** `native` — 신고자가 찍은 period_end가 canonical 날짜와 같은가(옮겨져 오지 않았는가). */
+type FactEntry = { value: number; filedDate: string; native: boolean }
 
 /**
  * 사실이 놓이는 날짜 축. 기간(qtrs>=1) 사실의 period_end와 시점(qtrs=0) 사실의
@@ -212,7 +214,35 @@ function canonicaliseApiDates(facts: RawFact[]): Record<DateAxis, Map<string, st
     // (BLFS 4-of-5 일치, COHU 3-of-4, LIND 3-of-4), 반면 합치면 안 되는 전신/후신
     // 법인 쌍(VTRS·RPAY·SYM)은 겹치는 20개 항목이 **하나도** 일치하지 않는다 —
     // 두 집단은 다수결로 깨끗이 갈린다.
-    if (agree + disagree > 0) return agree > disagree
+    if (agree > disagree) return true
+    // **다수결이 성립하려면 관측이 둘 이상이어야 한다.** 겹치는 항목이 딱 하나이고
+    // 그것이 어긋난 경우는 다수결이 아니라 단일 관측이다. 그런데 그 하나가 어긋나는
+    // 것은 오기 날짜에서 정확히 예상되는 일이다 — 오기 날짜에 딸려 오는 소수의
+    // 사실은 보통 그 날짜에만 존재하는 디멘션 슬라이스나 위임장(DEF 14A) 수치라서
+    // 진짜 마감일의 같은 태그와 값이 다르다. 그래서 이 경우에만 아래 **밀도 비대칭**
+    // 검사로 넘긴다(0건일 때와 같은 처리). 실측으로 이 한 줄이 가르는 것 —
+    // 잔여 중복 분기 31쌍 전수와 유니버스 1,200개사 전체를 재판정했을 때 새로 병합되는
+    // 기간 축 쌍은 정확히 아래 다섯이고, 병합이 취소되는 쌍은 하나도 없다:
+    //   ALGM 2022-06-12~06-24 (1 vs 19건) — 유령 쪽의 유일한 사실이 DEF 14A의
+    //        `NetIncomeLoss` 187,494,000이다. 이 유령이 TTM 앵커를 차지해 매출 NULL ·
+    //        순이익 279,380,000(실제 102,133,000)짜리 TTM을 만들고, 진짜 분기
+    //        2022-06-24의 TTM은 창 길이 182일로 거부돼 사라졌다.
+    //   TER  2020-03-29~03-31 (24 vs 1건) — 매출 704,355,000 / 704,356,000, 1달러 차이.
+    //   LFCR 2012-08-26~08-28 (41 vs 2건) — 매출·순이익 전 항목 동일.
+    //   STEX 2022-03-30~03-31 (2 vs 17건) — 유령 쪽 전 필드 NULL.
+    //   IIIV 2018-06-25~06-30 (2 vs 29건) — 유령 쪽 매출 NULL.
+    // 다섯 모두 유령 쪽에 TTM 행이 하나 생기고 진짜 분기의 TTM이 사라져 있었다.
+    //
+    // **기간(duration) 축에서만 넘긴다.** 이 축의 후보 쌍은 이미 시작일과 종료일이
+    // *둘 다* 허용치 이내임이 확인된 것이라(아래 startsClose) 같은 회계기간이라는
+    // 증거가 날짜만으로도 이미 서 있고, 남은 질문은 "둘 중 어느 날짜가 오기인가"뿐이다.
+    // 시점(instant) 축에는 시작일이라는 개념이 없어 근접성만으로는 그 증거가 서지
+    // 않는다 — 표지 발행주식수 날짜는 대차대조표 일자 며칠 옆에 정당하게 존재하며
+    // 같은 기간이 아니다. 같은 규칙을 시점 축까지 넓히면 유니버스 전체에서 158쌍이
+    // 새로 병합되고 그중에는 ADP 2019-06-30~07-01(36 vs 2건) 같은 표지 날짜가 들어
+    // 있다. 그래서 넓히지 않는다.
+    if (agree + disagree >= 2) return false
+    if (agree + disagree === 1 && axis === 'instant') return false
     // 겹치는 항목이 전혀 없으면 값으로는 판정할 수 없다. 이때만 **밀도 비대칭**을 본다:
     // 진짜 회계 마감일에는 재무제표 전체가 붙지만 오기 날짜에는 태그 몇 개만 딸려 온다
     // (TRNS 22건 vs 2건, SYPR 22건 vs 2건). 한쪽이 SPARSE_DATE_MAX_FACTS건 이하이고
@@ -400,9 +430,24 @@ export function indexFacts(facts: RawFact[]): FactIndex {
     let byTag = byPeriod.get(periodEnd)
     if (!byTag) { byTag = new Map(); byPeriod.set(periodEnd, byTag) }
     const prev = byTag.get(f.tag)
-    // 동률(같은 filedDate)이면 먼저 만난 값을 쓴다 — 원래 chosenAt 로직과 동일.
-    if (prev !== undefined && prev.filedDate >= f.filedDate) continue
-    byTag.set(f.tag, { value: f.value, filedDate: f.filedDate })
+    // **자기 날짜로 신고된 값이, 옮겨져 온 값보다 우선한다.** `periodEnd`는 canonical
+    // 날짜이고 `f.periodEnd`는 신고자가 실제로 찍은 날짜다. 둘이 다르면 그 사실은
+    // "이 기간의 정정 공시"가 아니라 **다른 날짜에 잘못 찍혔다가 여기로 옮겨진 값**
+    // 이다. 옮겨진 값이 늦게 신고됐다는 이유로 자기 날짜의 값을 덮으면, 날짜 정합이
+    // 오히려 숫자를 망가뜨린다.
+    //
+    // 실측(ALGM, CIK 866291): 2022-06-12에 찍힌 `NetIncomeLoss` 187,494,000은 2026년에
+    // 제출된 DEF 14A(위임장)의 값이다. 이 날짜가 진짜 마감일 2022-06-24로 흡수되면
+    // filedDate 2026-06-24가 10-Q의 2023-08-04를 이겨, 그 분기의 순이익이 실제
+    // 10,247,000 대신 187,494,000으로 저장된다. 옮겨져 온 값은 **빈 칸을 채울 수는
+    // 있어도**(그 태그가 canonical 날짜에 아예 없을 때) 자기 날짜의 값을 대체하지
+    // 못한다. 같은 등급 안에서는 종전대로 filedDate가 늦은 쪽이 이기고(정정 공시
+    // 우선), 동률이면 먼저 만난 값을 쓴다(재실행 결정성).
+    const native = f.periodEnd === periodEnd
+    if (prev !== undefined && (prev.native !== native
+      ? prev.native
+      : prev.filedDate >= f.filedDate)) continue
+    byTag.set(f.tag, { value: f.value, filedDate: f.filedDate, native })
   }
 
   for (const [qtrs, bySource] of chosen) {
@@ -795,6 +840,20 @@ function carryForwardGroup(
       let aliased = false
       for (const [other, otherDate] of dates) {
         if (otherDate !== anchor || other === tag) continue
+        // **별칭 증거는 우리가 구역·계열을 확정한 태그에서만 나온다.** `dates`는
+        // pickInstant가 고른 *모든* 태그를 담고 있어서, 이 필터가 없으면 shapes에
+        // 없는 태그까지 "같은 줄의 새 이름"으로 인정된다. 리스 포함 롤업
+        // (`…AndCapitalLeaseObligations`)이 정확히 그 함정이다 — 그것은 리스 없는
+        // 구성요소와 **같은 줄이 아니라 그 줄 + 금융리스**이고, 어느 한 일자에
+        // 값이 같은 것은 그날 금융리스가 0이었다는 뜻일 뿐 앞으로도 그 개념을
+        // 대표한다는 뜻이 아니다. 실측(NXPI 2026-03-29): 10-Q가 2025-12-31에
+        // `LongTermDebtAndCapitalLeaseObligations` 10,972,000,000을 태깅하는데 이는
+        // 같은 일자의 `LongTermDebtNoncurrent` 10,972,000,000과 값이 같다. 이것을
+        // 별칭으로 인정하면 리스 없는 비유동 잔액이 버려지고 총부채가 리스를 품은
+        // 11,724,000,000이 된다(기준선 11,722,000,000). 문서화된 별칭 실사례
+        // (LPTH `LongTermLoansPayable`, IONS `ConvertibleDebtCurrent`)는 전부
+        // shapes 안의 태그라 이 필터에 걸리지 않는다.
+        if (!shapes.has(other)) continue
         const v = atOwnDate.get(other)
         if (v !== undefined && sameNumber(v, value)) { aliased = true; break }
       }
@@ -940,6 +999,59 @@ function nonZero(r: Resolved): Resolved | null {
   return r.value === 0 ? null : r
 }
 
+/**
+ * 두 태그의 값이 **같은 대차대조표 일자**에서 왔는지. 롤업에서 리스를 빼는 것은
+ * 뺄셈이라, 서로 다른 일자의 잔액을 섞으면 어느 대차대조표에도 없던 숫자가 된다.
+ * `ctx`가 없으면(단위 테스트처럼 한 시점만 다루는 호출) 검사할 것이 없다.
+ */
+function sameInstantAs(
+  ctx: InstantContext | undefined, a: string, b: string,
+): boolean {
+  if (ctx === undefined) return true
+  const da = ctx.dates.get(a)
+  const db = ctx.dates.get(b)
+  if (da === undefined || db === undefined) return true
+  return da === db
+}
+
+/** 같은 일자에 있는 금융리스 잔액(구역별 첫 후보). 없으면 0 — 뺄 것이 없다는 뜻이다. */
+function financeLeaseAt(
+  allTags: Map<string, number>,
+  ctx: InstantContext | undefined,
+  anchorTag: string,
+  region: DebtRegion,
+): Resolved | null {
+  for (const tag of FINANCE_LEASE_BY_REGION[region]) {
+    const v = allTags.get(tag)
+    if (typeof v === 'number' && sameInstantAs(ctx, anchorTag, tag)) return { value: v, tag }
+  }
+  return null
+}
+
+/**
+ * 리스 포함 롤업에서 같은 구역의 금융리스를 뺀 **이자부 차입금**. 근거와 반례는
+ * tags.ts의 `LEASE_INCLUSIVE_DEBT_TAGS` 주석 참고.
+ *
+ * 뺀 결과가 0 이하면 버린다. 롤업이 리스보다 작다는 것은 둘이 같은 대차대조표
+ * 줄을 재고 있지 않다는 뜻이라(실측 PRPO 2025-12-31: 롤업 77,000 < 리스 960,000),
+ * 그 차분에는 의미가 없다. ASYS처럼 롤업 = 금융리스 비유동(둘 다 162,000)이라
+ * 차분이 정확히 0인 경우도 여기서 걸러진다 — "차입금 없음"은 `nonZero`가 이미
+ * null로 다루는 것과 같은 판단이다.
+ */
+function leaseFreeRollup(
+  allTags: Map<string, number>,
+  ctx: InstantContext | undefined,
+  rollupTag: string,
+  region: DebtRegion,
+): Resolved | null {
+  const gross = allTags.get(rollupTag)
+  if (typeof gross !== 'number') return null
+  const lease = financeLeaseAt(allTags, ctx, rollupTag, region)
+  const net = gross - (lease?.value ?? 0)
+  if (net <= 0) return null
+  return { value: net, tag: lease === null ? rollupTag : `${rollupTag}-${lease.tag}` }
+}
+
 /** 상품별 계열의 합. 계열끼리는 서로 다른 상품이라 겹치지 않으므로 더한다. */
 function specificFamilySum(tags: Map<string, number>): Resolved | null {
   let specific: Resolved | null = null
@@ -1015,6 +1127,64 @@ export function resolveTotalDebt(
   // 상품별 계열 합. 장기차입금 롤업이 디멘션 슬라이스로 오염됐을 때 진짜 총계는
   // 이쪽이다(tags.ts SND 실사례) — 롤업과는 **더하지 않고 큰 쪽**을 쓴다.
   const specific = specificFamilySum(tags)
+
+  // 티어 2b — 리스 포함 롤업밖에 없는 대차대조표.
+  //
+  // **발동 조건이 이 티어의 안전장치 전부다.** 리스 없는 총계 개념
+  // (`DebtLongtermAndShorttermCombinedAmount` · `LongTermDebt` ·
+  // `LongTermDebtNoncurrent`)이 이월 후에도 하나도 없을 때만 본다. 그 셋 중 하나라도
+  // 있으면 위 티어가 이미 리스 없는 답을 내고 있고, 그 답을 이 티어가 건드리면 안
+  // 된다 — tags.ts가 기록한 반례(GOOGL의 롤업 = `LongTermDebtNoncurrent`, NXPI의
+  // 롤업이 어느 쪽과도 안 맞는 경우)가 전부 이 조건에서 걸러진다.
+  //
+  // 실측 확인(유니버스 1,200개사, 최신 TTM 대차대조표): 이 조건 때문에 값이
+  // 그대로인 회사 — GOOGL 100,164,000,000, NXPI 11,722,000,000, VRSK 4,475,600,000,
+  // XEL 39,457,000,000, LRCX, AMPH. 값이 바뀌는 회사 — MU 582M→, CELU 6.3M→,
+  // EBAY·FISV·VSAT·PODD·LNTH·QDEL·CNDT·DRS·FELE·FCEL·TECH·NSIT·RXRX·PLAB·AVR.
+  //
+  // `ltCur`(`LongTermDebtCurrent`)와 `debtCurrent`는 조건에 넣지 않는다. 둘 다
+  // **유동 구역만** 재는 태그라 비유동 차입금에 대해 아무 말도 하지 않는다 —
+  // 이 티어가 채우려는 것이 정확히 그 비유동 구역이다(MU·CELU 둘 다 이 경우다).
+  // (`DebtLongtermAndShorttermCombinedAmount`는 티어 1이 이미 반환했으므로 여기 없다.)
+  if (ltNon === undefined && ltTotal === undefined) {
+    // 스패닝 롤업은 유동까지 이미 덮으므로 유동 부분을 다시 더하지 않는다.
+    //
+    // **상품별 계열 합이 더 크면 이 티어는 물러난다.** 롤업과 상품합 사이에서 큰
+    // 쪽을 쓰는 것은 이 파일이 이미 쓰는 규칙이고(오염값은 정의상 총계보다 작다),
+    // 상품합이 이긴다는 것은 롤업이 최선의 증거가 아니라는 뜻이다 — 그때는 아래
+    // 기존 티어가 상품합을 자기 규칙대로 조립하게 둔다(실측 TECH 2026-03-31:
+    // `LinesOfCreditCurrent` 346,000,000 > 롤업 200,000,000).
+    const beatsSpecific = (r: Resolved): boolean => specific === null || r.value >= specific.value
+
+    const spanning = leaseFreeRollup(allTags, ctx, DEBT_WITH_LEASES_SPANNING_TAG, 'spanning')
+    if (spanning !== null && beatsSpecific(spanning)) {
+      // 스패닝 롤업은 유동까지 이미 덮으므로 유동 부분을 다시 더하지 않는다.
+      return nonZero(spanning)
+    }
+    const noncurrent = leaseFreeRollup(allTags, ctx, DEBT_WITH_LEASES_NONCURRENT_TAG, 'noncurrent')
+    if (noncurrent !== null && beatsSpecific(noncurrent)) {
+      // 비유동 롤업이므로 유동 차입금을 더한다. 다만 `DebtCurrent`는 공식 정의가
+      // "short-term debt and current maturity of long-term debt **and capital lease
+      // obligations**"라 그 자체로 리스를 품는다 — 리스를 뺀 비유동에 리스를 품은
+      // 유동을 더하면 절반만 뺀 셈이 된다. 그래서 유동 쪽에서도 같은 구역의
+      // 금융리스를 뺀다(실측 MU 2026-05-28: `DebtCurrent` 582,000,000 =
+      // `FinanceLeaseLiabilityCurrent` 582,000,000 — 유동 차입금은 실제로 0이다).
+      const raw = currentDebtPortion(tags)
+      let current: Resolved | null = raw
+      if (raw !== null && raw.tag.includes(DEBT_CURRENT_TOTAL_TAG)) {
+        const lease = financeLeaseAt(allTags, ctx, DEBT_CURRENT_TOTAL_TAG, 'current')
+        if (lease !== null) {
+          const netted = Math.max(0, raw.value - lease.value)
+          current = netted === 0 ? null : { value: netted, tag: `${raw.tag}-${lease.tag}` }
+        }
+      }
+      return nonZero({
+        value: noncurrent.value + (current?.value ?? 0),
+        tag: joinTags(current === null ? [noncurrent.tag] : [noncurrent.tag, current.tag]),
+      })
+    }
+  }
+
   if (hasTier2) {
     const current = currentDebtPortion(tags)
     if (typeof ltNon === 'number') {

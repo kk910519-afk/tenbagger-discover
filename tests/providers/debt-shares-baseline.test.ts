@@ -176,6 +176,208 @@ describe('총부채 기준선 — 신고서 대차대조표 대조 (FILING-CONFI
 })
 
 /**
+ * **리스 포함 롤업(`…AndCapitalLeaseObligations`) 기준선.**
+ *
+ * 이 두 태그는 리스를 품고 있어 그대로 쓰면 debt-coverage 과제가 기각한 리스부채가
+ * 다시 들어온다. 그래서 (1) 같은 구역의 **금융리스를 빼고**, (2) 리스 없는 총계
+ * 개념이 그 대차대조표에 **하나도 없을 때만** 쓴다. 아래 두 블록이 그 두 조건을
+ * 각각 고정한다 — 값과 "움직이지 않음"을 함께 못박아야 규칙이 한쪽으로 새지 않는다.
+ * 근거·반례는 tags.ts의 `LEASE_INCLUSIVE_DEBT_TAGS` 주석 참고.
+ */
+describe('리스 포함 롤업 — 금융리스를 뺀 뒤에만 쓴다', () => {
+  it('MU 2026-05-28 = 3,052,000,000 (DACLO 5,722 − 금융리스 2,670)', () => {
+    // SOURCE: 10-Q accession 0000723125-26-000047 (filed 2026-06-25).
+    // 이전 동작: 앵커에 `DebtCurrent` 582,000,000만 남아 총부채가 **582M**이었다.
+    // 그 582M은 `FinanceLeaseLiabilityCurrent`와 정확히 같은 값 — 100% 금융리스다.
+    expect(debt({
+      DebtAndCapitalLeaseObligations: 5_722_000_000,
+      LongTermDebtAndCapitalLeaseObligations: 5_140_000_000,
+      DebtCurrent: 582_000_000,
+      FinanceLeaseLiability: 2_670_000_000,
+      FinanceLeaseLiabilityCurrent: 582_000_000,
+      FinanceLeaseLiabilityNoncurrent: 2_088_000_000,
+      OperatingLeaseLiabilityNoncurrent: 654_000_000,
+    })).toBe(3_052_000_000)
+  })
+
+  it('MU — 비유동 롤업만 있어도 같은 답이 나온다 (유동 쪽 리스도 뺀다)', () => {
+    // `LongTermDebtAndCapitalLeaseObligations` 5,140 − 금융리스 비유동 2,088 = 3,052,
+    // 유동은 `DebtCurrent` 582 − 금융리스 유동 582 = 0. 두 경로가 같은 값으로 만난다.
+    expect(debt({
+      LongTermDebtAndCapitalLeaseObligations: 5_140_000_000,
+      DebtCurrent: 582_000_000,
+      FinanceLeaseLiabilityCurrent: 582_000_000,
+      FinanceLeaseLiabilityNoncurrent: 2_088_000_000,
+    })).toBe(3_052_000_000)
+  })
+
+  it('MU 2025-08-28 — 차분이 신고자 자신의 `LongTermDebt`와 정확히 일치한다', () => {
+    // 이 항등식이 규칙의 근거다. MU는 2019-02-28~2026-05-28의 22개 대차대조표 전부에서
+    // DACLO − FinanceLeaseLiability = LongTermDebt를 오차 0으로 유지한다.
+    // FY2025 10-K(0000723125-25-000041): 14,577 − 3,044 = 11,533 = `LongTermDebt`.
+    expect(14_577_000_000 - 3_044_000_000).toBe(11_533_000_000)
+    // 그리고 그 대차대조표에는 `LongTermDebt`가 실제로 있으므로 롤업 경로는 발동하지
+    // 않는다 — 기존 티어가 그대로 답한다.
+    expect(debt({
+      DebtAndCapitalLeaseObligations: 14_577_000_000,
+      LongTermDebt: 11_533_000_000,
+      DebtCurrent: 560_000_000,
+      FinanceLeaseLiability: 3_044_000_000,
+    })).toBe(12_093_000_000)
+  })
+
+  it('CELU 2025-12-31 = 40,112,000 (LTDACLO 33,812 + 이월된 유동 만기분 6,300)', () => {
+    // SOURCE: FY2025 10-K accession 0001752828-26-000031 (filed 2026-04-30). 이 신고서의
+    // 유일한 장기차입금 줄이 `LongTermDebtAndCapitalLeaseObligations` 33,812,000이다.
+    // 금융리스 태그는 이력 전체에 없고 `OperatingLeaseLiability` 26,898,000만 있다 —
+    // 운용리스는 이 롤업에 들어가지 않으므로 뺄 것이 없다.
+    // 이전 동작: 6개월 전 `LongTermDebtCurrent` 6,300,000만 이월돼 총부채 **6.3M**.
+    expect(debt(
+      {
+        LongTermDebtAndCapitalLeaseObligations: 33_812_000,
+        ConvertibleNotesPayable: 922_000,
+        LongTermDebtCurrent: 6_300_000,
+        OperatingLeaseLiability: 26_898_000,
+        OperatingLeaseLiabilityNoncurrent: 26_898_000,
+      },
+      {
+        LongTermDebtAndCapitalLeaseObligations: '2025-12-31',
+        ConvertibleNotesPayable: '2025-12-31',
+        LongTermDebtCurrent: '2025-06-30',
+        OperatingLeaseLiability: '2025-12-31',
+        OperatingLeaseLiabilityNoncurrent: '2025-12-31',
+      },
+    )).toBe(40_112_000)
+  })
+
+  it('EBAY 2026-06-30 = 6,735,000,000 (DACLO, 금융리스 없음)', () => {
+    // SOURCE: 10-Q accession 0001065088-26-000060 (filed 2026-08-06).
+    // 이전 동작: `DebtCurrent` 1,593,000,000만 잡혀 총부채가 4분의 1로 축소돼 있었다.
+    // 검산: 비유동 롤업 5,142 + 유동 1,593 = 6,735 — 두 경로가 일치한다.
+    expect(debt({
+      DebtAndCapitalLeaseObligations: 6_735_000_000,
+      LongTermDebtAndCapitalLeaseObligations: 5_142_000_000,
+      LongTermDebtCurrent: 850_000_000,
+      DebtCurrent: 1_593_000_000,
+    })).toBe(6_735_000_000)
+  })
+
+  it('ASYS — 롤업이 통째로 금융리스면 null이다 (0도, 리스도 아니다)', () => {
+    // SOURCE: 2025-12-31 `LongTermDebtAndCapitalLeaseObligations` 162,000 =
+    // `FinanceLeaseLiabilityNoncurrent` 162,000. 차입금은 실제로 없다.
+    expect(debt({
+      LongTermDebtAndCapitalLeaseObligations: 162_000,
+      FinanceLeaseLiability: 301_000,
+      FinanceLeaseLiabilityCurrent: 139_000,
+      FinanceLeaseLiabilityNoncurrent: 162_000,
+    })).toBeNull()
+  })
+
+  it('PRPO — 롤업이 리스보다 작으면 차분을 쓰지 않는다', () => {
+    // SOURCE: 2025-12-31 `DebtAndCapitalLeaseObligations` 77,000 <
+    // `FinanceLeaseLiability` 960,000. 둘이 같은 줄을 재고 있지 않다는 뜻이다.
+    expect(debt({
+      DebtAndCapitalLeaseObligations: 77_000,
+      FinanceLeaseLiability: 960_000,
+    })).toBeNull()
+  })
+
+  it('다른 일자의 리스 잔액은 빼지 않는다 — 뺄셈은 같은 대차대조표 안에서만', () => {
+    expect(debt(
+      {
+        DebtAndCapitalLeaseObligations: 5_722_000_000,
+        FinanceLeaseLiability: 2_670_000_000,
+      },
+      {
+        DebtAndCapitalLeaseObligations: '2026-05-28',
+        FinanceLeaseLiability: '2025-08-28',
+      },
+    )).toBe(5_722_000_000)
+  })
+})
+
+describe('리스 포함 롤업 — 리스 없는 총계가 있으면 아예 보지 않는다', () => {
+  it('GOOGL 2024-12-31 = 11,882,000,000 — 롤업이 `LongTermDebtNoncurrent`의 동의어다', () => {
+    // SOURCE: FY2024 10-K accession 0001652044-26-000019 재신고분.
+    // `LongTermDebtAndCapitalLeaseObligations` 10,883,000,000은 `LongTermDebtNoncurrent`
+    // 10,883,000,000과 **같은 값**인데 `FinanceLeaseLiabilityNoncurrent`는 1,442,000,000이다.
+    // 여기서 리스를 빼면 근거 없이 1.44B을 지운다 — 게이트가 정확히 이것을 막는다.
+    expect(debt({
+      LongTermDebtAndCapitalLeaseObligations: 10_883_000_000,
+      LongTermDebtNoncurrent: 10_883_000_000,
+      LongTermDebtCurrent: 999_000_000,
+      FinanceLeaseLiability: 1_677_000_000,
+      FinanceLeaseLiabilityCurrent: 235_000_000,
+      FinanceLeaseLiabilityNoncurrent: 1_442_000_000,
+    })).toBe(11_882_000_000)
+  })
+
+  it('GOOGL 2026-06-30 = 100,164,000,000 — 기준선이 움직이지 않는다', () => {
+    // SOURCE: 10-Q accession 0001652044-26-000082. 이 일자에는 롤업 자체가 없다.
+    expect(debt({
+      LongTermDebtNoncurrent: 98_165_000_000,
+      LongTermDebtCurrent: 1_999_000_000,
+      FinanceLeaseLiability: 2_590_000_000,
+      FinanceLeaseLiabilityCurrent: 449_000_000,
+      FinanceLeaseLiabilityNoncurrent: 2_141_000_000,
+    })).toBe(100_164_000_000)
+  })
+
+  it('NXPI 2026-03-29 = 11,722,000,000 — 롤업이 함께 있어도 이월된 비유동이 이긴다', () => {
+    // SOURCE: 10-Q accession 0001413447-26-000034는 2026-03-29에
+    // `DebtAndCapitalLeaseObligations` 11,724,000,000과
+    // `LongTermDebtAndCapitalLeaseObligations` 10,974,000,000을 함께 태깅한다.
+    // 롤업을 쓰면 11,724가 되어 기준선이 2,000,000 움직인다 — 이월된
+    // `LongTermDebtNoncurrent` 10,972,000,000이 있으므로 롤업은 보지 않는다.
+    expect(debt(
+      {
+        LongTermDebtNoncurrent: 10_972_000_000,
+        DebtCurrent: 750_000_000,
+        DebtAndCapitalLeaseObligations: 11_724_000_000,
+        LongTermDebtAndCapitalLeaseObligations: 10_974_000_000,
+      },
+      {
+        LongTermDebtNoncurrent: '2025-12-31',
+        DebtCurrent: '2026-03-29',
+        DebtAndCapitalLeaseObligations: '2026-03-29',
+        LongTermDebtAndCapitalLeaseObligations: '2026-03-29',
+      },
+    )).toBe(11_722_000_000)
+  })
+
+  it('VRSK / XEL — 신고자의 리스 없는 총계가 롤업보다 우선한다', () => {
+    // VRSK 2026-03-31: `LongTermDebtAndCapitalLeaseObligations` 4,217,200,000이 있어도
+    // 장·단기 합산 총계 4,475,600,000이 이긴다(기준선).
+    expect(debt({
+      DebtLongtermAndShorttermCombinedAmount: 4_475_600_000,
+      LongTermDebtAndCapitalLeaseObligations: 4_217_200_000,
+      FinanceLeaseLiabilityNoncurrent: 12_300_000,
+      DebtCurrent: 258_400_000,
+    })).toBe(4_475_600_000)
+    // XEL 2025-12-31: `LongTermDebt` 32,333,000,000이 있으므로 롤업 31,832,000,000은
+    // 보지 않는다. 단기차입금은 tags.ts 규칙대로 그대로 더한다.
+    expect(debt({
+      LongTermDebt: 32_333_000_000,
+      LongTermDebtAndCapitalLeaseObligations: 31_832_000_000,
+      FinanceLeaseLiability: 1_301_000_000,
+      FinanceLeaseLiabilityNoncurrent: 1_262_000_000,
+      ShortTermBorrowings: 1_243_000_000,
+    })).toBe(33_576_000_000)
+  })
+
+  it('AAPL / NVDA — 롤업을 쓰지 않는 대형주는 그대로다', () => {
+    expect(debt({
+      LongTermDebtNoncurrent: 74_350_000_000,
+      LongTermDebtCurrent: 8_000_000_000,
+    })).toBe(82_350_000_000)
+    expect(debt({
+      LongTermDebtNoncurrent: 7_470_000_000,
+      DebtCurrent: 1_000_000_000,
+    })).toBe(8_470_000_000)
+  })
+})
+
+/**
  * **매출·영업이익 회귀 기준선 — 새로 덮은 신고자 유형.**
  *
  * 위 부채 기준선이 만들어진 이유(“기준선은 자기가 이름 대지 않은 필드에 대해서는

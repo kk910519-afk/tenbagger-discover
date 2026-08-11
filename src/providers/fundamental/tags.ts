@@ -220,6 +220,85 @@ export const LEASE_DEBT_TAGS: ReadonlySet<string> = new Set<string>([
   'OperatingLeaseLiabilityNoncurrent',
 ])
 
+// ── 리스 포함 차입금 롤업 ───────────────────────────────────────────────────
+//
+// 두 태그는 이름 그대로 **차입금과 리스를 한 숫자로 묶은 롤업**이다(공식 정의를
+// companyconcept API에서 그대로 확인했다):
+//   `DebtAndCapitalLeaseObligations`         "Amount of short-term and long-term
+//                                             debt and lease obligation."        → spanning
+//   `LongTermDebtAndCapitalLeaseObligations` "Amount of long-term debt and lease
+//                                             obligation, classified as noncurrent." → noncurrent
+// 반면 `LongTermDebt`의 정의는 "…**Excludes capital lease obligations**"로 끝난다 —
+// 이 코드베이스가 리스를 부채에서 뺀다는 원칙(위 LEASE_DEBT_TAGS 주석)과 정확히
+// 맞는 태그다. 그래서 두 롤업은 **그대로 채택할 수 없다**. 채택하면 debt-coverage
+// 과제가 명시적으로 기각한 리스부채가 뒷문으로 다시 들어온다.
+//
+// **그런데도 추적해야 하는 이유.** 이 둘밖에 신고하지 않는 분기가 실재하고, 그
+// 분기에는 우리가 장기차입금을 통째로 못 본다. 실측(SEC frames, CY2024Q4I·CY2025Q4I·
+// CY2026Q1I 세 시점 × 유니버스 1,200개사):
+//   MU  2026-05-28 — `DebtCurrent` 582,000,000만 남아 총부채가 **582M**으로 저장됐다.
+//                    같은 대차대조표에 `DebtAndCapitalLeaseObligations` 5,722,000,000이
+//                    있고 `FinanceLeaseLiability`는 2,670,000,000이다.
+//   CELU 2025-12-31 — `LongTermDebtAndCapitalLeaseObligations` 33,812,000이 유일한
+//                    장기차입금 줄인데 추적하지 않아, 6개월 전 `LongTermDebtCurrent`
+//                    6,300,000이 이월돼 총부채가 **6.3M**으로 저장됐다.
+//   같은 코호트: EBAY(1.59B→6.75B), FISV(1.21B→27.9B), VSAT(0.66B→6.4B),
+//   PODD(18.9M→948M), LNTH(0.7M→570M), QDEL(358M→2.69B), CNDT(21M→679M),
+//   DRS(10M→151M), FELE(90M→224M), FCEL(17M→138M), TECH, NSIT·RXRX·PLAB·AVR(null).
+//
+// **그래서 롤업에서 금융리스를 뺀다.** 신고자는 리스를 롤업에 넣으면서도 같은
+// 대차대조표에서 `FinanceLeaseLiability*`를 따로 태깅하므로, 구역이 같은 리스
+// 잔액을 빼면 이자부 차입금만 남는다. MU에서 이 항등식은 **정확히** 성립한다 —
+// 2019-02-28~2026-05-28의 22개 대차대조표 전부에서
+//   `DebtAndCapitalLeaseObligations` − `FinanceLeaseLiability` = `LongTermDebt`
+// 이 오차 0으로 맞는다(2025-08-28: 14,577 − 3,044 = 11,533 ✔,
+// 2025-11-27: 11,756 − 2,912 = 8,444+400… = 8,844 ✔). 즉 신고자 자신이 두 표기를
+// 같은 숫자로 이어 놓았고, 우리는 그 차분을 취할 뿐이다.
+//
+// **그러나 이 롤업을 무조건 쓰면 안 된다 — 두 태그의 쓰임새가 신고자마다 갈린다.**
+// 다수의 신고자는 리스가 없거나 롤업을 **리스 없는 장기차입금의 동의어**로 쓴다.
+// 실측 반례(같은 시점에 리스 없는 태그가 함께 있는 경우):
+//   GOOGL 2024-12-31 `LongTermDebtAndCapitalLeaseObligations` 10,883,000,000 =
+//         `LongTermDebtNoncurrent` 10,883,000,000 (동일!) 인데 `FinanceLeaseLiability
+//         Noncurrent`는 1,442,000,000이다 — 빼면 1.44B을 근거 없이 지운다.
+//   TTMI 2024-12-31 `DebtAndCapitalLeaseObligations` 918,154,000 = `LongTermDebt`
+//         918,154,000, `FinanceLeaseLiability` 12,799,000.
+//   NXPI 2024-12-31 `DebtAndCapitalLeaseObligations` 10,854,000,000 vs `LongTermDebt`
+//         10,420,000,000 — 차분(10,837)이 어느 쪽과도 맞지 않는다.
+// 세 시점 39건 중 항등식이 정확히 맞은 것은 12건뿐이었다. 두 태그로 규칙을 만들면
+// 정확히 이 반례들이 깨진다.
+//
+// 그래서 이 롤업은 **리스 없는 총계 개념(`LongTermDebt`·`LongTermDebtNoncurrent`·
+// `DebtLongtermAndShorttermCombinedAmount`)이 그 대차대조표에 하나도 없을 때만**
+// 쓴다. 그 셋 중 하나라도 있으면 기존 티어가 이미 리스 없는 답을 내고 있으므로
+// 롤업은 아예 보지 않는다 — 위 반례가 전부 이 조건에서 걸러진다(실측 확인:
+// GOOGL·TTMI·NXPI·VRSK·XEL·LRCX·AMPH 모두 이월 후 리스 없는 태그를 가지고 있어
+// 값이 1원도 움직이지 않는다). 판정은 `resolveTotalDebt`가 **이월(carry-forward)을
+// 마친 태그 집합**에서 한다.
+/** 리스 포함 차입금 롤업 — 유동+비유동을 한 숫자로 잰다. */
+export const DEBT_WITH_LEASES_SPANNING_TAG = 'DebtAndCapitalLeaseObligations'
+/** 리스 포함 차입금 롤업 — 비유동 구역만 잰다. */
+export const DEBT_WITH_LEASES_NONCURRENT_TAG = 'LongTermDebtAndCapitalLeaseObligations'
+
+export const LEASE_INCLUSIVE_DEBT_TAGS: readonly string[] = [
+  DEBT_WITH_LEASES_SPANNING_TAG,
+  DEBT_WITH_LEASES_NONCURRENT_TAG,
+]
+
+/**
+ * 위 롤업에서 빼낼 **금융리스** 잔액의 구역별 후보. 배열 안은 같은 것을 부르는
+ * 이름 변형이라(ASC 842 이전 명칭이 `CapitalLease…`다) 처음 발견된 하나만 쓴다.
+ *
+ * **운용리스는 여기 없다.** `…AndCapitalLeaseObligations`가 품는 것은 금융(자본)
+ * 리스뿐이고, ASC 842의 운용리스부채는 대차대조표에서 따로 표시돼 애초에 이
+ * 롤업에 들어가지 않는다. 빼야 할 것만 빼야 과소계상이 되지 않는다.
+ */
+export const FINANCE_LEASE_BY_REGION: Readonly<Record<DebtRegion, readonly string[]>> = {
+  spanning: ['FinanceLeaseLiability', 'CapitalLeaseObligations'],
+  noncurrent: ['FinanceLeaseLiabilityNoncurrent', 'CapitalLeaseObligationsNoncurrent'],
+  current: ['FinanceLeaseLiabilityCurrent', 'CapitalLeaseObligationsCurrent'],
+}
+
 /**
  * 대차대조표 부채 섹션이 실제로 해석됐음을 증명하는 앵커 태그. 리스부채 태그와
  * 같은 이유로 수집한다 — `totalDebt` 계산에는 쓰지 않지만, 부채 섹션 자체가
@@ -309,6 +388,9 @@ export const TRACKED_TAGS = new Set<string>([
   ...DEBT_TAGS,
   // 부채 — 리스(totalDebt에는 안 들어가고 무차입 추론 자격 판정에만 쓴다)
   ...LEASE_DEBT_TAGS,
+  // 부채 — 리스 포함 롤업. 금융리스를 뺀 뒤에만, 그리고 리스 없는 총계 개념이
+  // 하나도 없을 때만 쓴다(위 LEASE_INCLUSIVE_DEBT_TAGS 주석의 실측 근거).
+  ...LEASE_INCLUSIVE_DEBT_TAGS,
   // 대차대조표 부채 섹션 해석 여부를 증명하는 앵커
   ...LIABILITIES_ANCHOR_TAGS,
   // 주식수

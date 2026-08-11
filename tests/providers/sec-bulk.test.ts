@@ -3,6 +3,7 @@ import { zipSync, strToU8 } from 'fflate'
 import {
   parseSubLine,
   parseNumLine,
+  requireColumns,
   extractFactsFromZip,
 } from '@/providers/fundamental/sec-bulk'
 
@@ -26,6 +27,70 @@ describe('parseSubLine', () => {
 
   it('cik이 숫자가 아니면 null', () => {
     expect(parseSubLine('a\tzz\tn\t1\t10-K\t1\t1\tFY\t20250101', SUB_HEADER)).toBeNull()
+  })
+
+  it('cik 셀이 비어 있으면 null — Number("")=0을 CIK 0으로 통과시키지 않는다', () => {
+    expect(parseSubLine('a\t\tn\t1\t10-K\t1\t1\tFY\t20250101', SUB_HEADER)).toBeNull()
+  })
+})
+
+describe('헤더 검증 — 컬럼 부재는 빈 문자열이 아니다', () => {
+  it('cik 컬럼이 없으면 던진다 (Number("")=0이라 조용히 CIK 0이 된다)', () => {
+    const header = SUB_HEADER.filter((c) => c !== 'cik')
+    expect(() => requireColumns('sub.txt', header, ['adsh', 'cik', 'form', 'filed']))
+      .toThrow(/cik/)
+    // 행 파서도 스스로 방어한다 — 헤더에 없는 이름을 ''로 읽지 않는다.
+    expect(() => parseSubLine('0001045810-25-000123\tNVIDIA CORP\t3674\t10-Q\t20250430\t2026\tQ1\t20250528', header))
+      .toThrow(/cik/)
+  })
+
+  it('segments 컬럼이 없으면 던진다 — 없으면 모든 디멘션 슬라이스가 연결 총계로 통과한다', () => {
+    const header = NUM_HEADER.filter((c) => c !== 'segments')
+    expect(() => requireColumns('num.txt', header, ['adsh', 'tag', 'ddate', 'qtrs', 'uom', 'value', 'coreg', 'segments']))
+      .toThrow(/segments/)
+    expect(() => parseNumLine('a\tRevenues\tus-gaap/2024\t20250430\t1\tUSD\t\t44060000000\t', header))
+      .toThrow(/segments/)
+  })
+
+  it('에러 메시지에 없는 컬럼과 실제 헤더가 모두 담긴다 (귀속 가능하게)', () => {
+    expect(() => requireColumns('num.txt', ['adsh', 'tag'], ['adsh', 'tag', 'coreg', 'segments']))
+      .toThrow(/필수 컬럼 없음 \[coreg, segments\].*실제 헤더: \[adsh, tag\]/)
+  })
+
+  it('빈 셀은 정상 데이터다 — 컬럼이 있으면 던지지 않는다', () => {
+    expect(() => requireColumns('num.txt', NUM_HEADER, ['segments', 'coreg'])).not.toThrow()
+    expect(parseNumLine(
+      '0001045810-25-000123\tRevenues\tus-gaap/2024\t20250430\t1\tUSD\t\t\t44060000000\t',
+      NUM_HEADER,
+    )?.segments).toBe('')
+  })
+
+  it('extractFactsFromZip이 sub.txt 헤더 결손에서 던진다 (조용한 0건이 아니다)', async () => {
+    const badSub = [
+      SUB_HEADER.filter((c) => c !== 'cik').join('\t'),
+      '0001045810-25-000123\tNVIDIA CORP\t3674\t10-Q\t20250430\t2026\tQ1\t20250528',
+    ].join('\n')
+    const num = [
+      NUM_HEADER.join('\t'),
+      '0001045810-25-000123\tRevenues\tus-gaap/2024\t20250430\t1\tUSD\t\t\t44060000000\t',
+    ].join('\n')
+    const zip = Buffer.from(zipSync({ 'sub.txt': strToU8(badSub), 'num.txt': strToU8(num) }))
+    await expect(extractFactsFromZip(zip, new Set([1045810]))).rejects.toThrow(/sub\.txt.*cik/)
+  })
+
+  it('extractFactsFromZip이 num.txt의 segments 결손에서 던진다 — 이전에는 슬라이스가 총계로 저장됐다', async () => {
+    const sub = [
+      SUB_HEADER.join('\t'),
+      '0000072903-26-000009\t72903\tXCEL ENERGY INC\t4931\t10-K\t20251231\t2025\tFY\t20260225',
+    ].join('\n')
+    // 실측 XEL 행에서 segments 컬럼만 빠진 형태. 이전 구현에서는 자본변동표 슬라이스
+    // −53,000,000이 `segments=''`(연결 총계)로 읽혀 그대로 저장됐다.
+    const badNum = [
+      NUM_HEADER.filter((c) => c !== 'segments').join('\t'),
+      '0000072903-26-000009\tStockholdersEquity\tus-gaap/2025\t20231231\t0\tUSD\t\t-53000000\t',
+    ].join('\n')
+    const zip = Buffer.from(zipSync({ 'sub.txt': strToU8(sub), 'num.txt': strToU8(badNum) }))
+    await expect(extractFactsFromZip(zip, new Set([72903]))).rejects.toThrow(/num\.txt.*segments/)
   })
 })
 
@@ -63,6 +128,11 @@ describe('parseNumLine', () => {
     const result = parseNumLine(line, NUM_HEADER)
     expect(result).not.toBeNull()
     expect(result?.value).toBe(0)
+  })
+
+  it('qtrs 셀이 비어 있으면 null — 기간 사실이 시점(qtrs=0) 사실로 둔갑하지 않는다', () => {
+    const line = '0001045810-25-000123\tRevenues\tus-gaap/2024\t20250430\t\tUSD\t\t\t44060000000\t'
+    expect(parseNumLine(line, NUM_HEADER)).toBeNull()
   })
 })
 

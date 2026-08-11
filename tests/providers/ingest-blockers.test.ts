@@ -619,3 +619,157 @@ describe('F4 — 가산 그룹의 대차대조표 일자 정합', () => {
     expect(q.totalDebt).toBe(900)
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 잔여 중복 분기 — 오기 날짜에 딸려 온 **단 하나의 어긋나는 사실**
+//
+// `mergeable`의 다수결은 겹치는 항목이 하나뿐일 때는 다수결이 아니라 단일 관측이다.
+// 그런데 오기 날짜에 딸려 오는 소수의 사실은 대개 그 날짜에만 있는 디멘션 슬라이스나
+// 위임장 수치라 진짜 마감일의 같은 태그와 값이 다르다 — 그래서 "1건 불일치"는 병합을
+// 거부할 근거가 아니라 정확히 오기 날짜에서 기대되는 모습이다. 이 블록은 그 한 줄이
+// 가르는 두 집단을 실측 값으로 고정한다.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('잔여 중복 분기 — 1건 불일치는 밀도로 판정한다', () => {
+  // ALGM(Allegro MicroSystems, CIK 866291) FY2023 Q1. 진짜 마감일은 2022-06-24이고
+  // 2022-06-12에는 DEF 14A에서 온 `NetIncomeLoss` 187,494,000 **딱 한 건**이 있다.
+  // filedDate도 실측 그대로다: 10-Q는 2023-08-04, DEF 14A는 **2026-06-24**. 날짜를
+  // 합치기만 하고 순위를 두지 않으면 늦게 제출된 위임장 값이 10-Q를 덮는다.
+  const algm = (
+    periodEnd: string, tag: string, value: number,
+    form = '10-Q', filedDate = '2023-08-04',
+  ): RawFact => fact({
+    cik: 866291, source: 'api', qtrs: 1, periodStart: '2022-03-26',
+    periodEnd, tag, value, form, filedDate, accession: `algm-${form}`,
+  })
+
+  const algmReal = [
+    algm('2022-06-24', 'Revenues', 217_753_000),
+    algm('2022-06-24', 'NetIncomeLoss', 10_247_000),
+    algm('2022-06-24', 'GrossProfit', 121_073_000),
+    algm('2022-06-24', 'OperatingIncomeLoss', 30_129_000),
+    algm('2022-06-24', 'ResearchAndDevelopmentExpense', 30_396_000),
+    algm('2022-06-24', 'ShareBasedCompensation', 7_064_000),
+  ]
+  const algmGhost = algm('2022-06-12', 'NetIncomeLoss', 187_494_000, 'DEF 14A', '2026-06-24')
+
+  it('ALGM — 유령 날짜의 유일한 사실이 어긋나도 밀도 비대칭이면 흡수한다', () => {
+    const idx = indexFacts([...algmReal, algmGhost])
+    expect([...idx.duration.get(1)!.keys()]).toEqual(['2022-06-24'])
+  })
+
+  it('ALGM — 유령 분기가 TTM 앵커를 훔치지 않는다 (진짜 분기의 TTM이 살아난다)', () => {
+    // 결함 상태: 분기 행이 2022-06-12(매출 NULL·순이익 187,494,000)과 2022-06-24로
+    // 둘 다 남아, TTM 앵커가 2022-06-12에 잡히고(매출 NULL) 진짜 2022-06-24의 창은
+    // 길이 182일로 거부돼 사라졌다.
+    const prior = [
+      ['2022-03-25', '2021-12-25', 200_293_000, 25_764_000],
+      ['2021-12-24', '2021-09-25', 186_629_000, 32_936_000],
+      ['2021-09-24', '2021-06-26', 193_610_000, 33_186_000],
+    ] as const
+    const facts: RawFact[] = [...algmReal, algmGhost]
+    for (const [end, start, rev, ni] of prior) {
+      facts.push(fact({
+        cik: 866291, source: 'api', qtrs: 1, periodStart: start, periodEnd: end,
+        tag: 'Revenues', value: rev, filedDate: '2023-08-04', accession: `algm-${end}`,
+      }))
+      facts.push(fact({
+        cik: 866291, source: 'api', qtrs: 1, periodStart: start, periodEnd: end,
+        tag: 'NetIncomeLoss', value: ni, filedDate: '2023-08-04', accession: `algm-${end}`,
+      }))
+    }
+    const r = normalizeFacts(facts)
+    expect(r.quarterly.map((q) => q.periodEnd)).not.toContain('2022-06-12')
+    const ttm = r.ttm.find((t) => t.periodEnd === '2022-06-24')
+    expect(ttm, '진짜 분기에 TTM이 없다').toBeDefined()
+    // 217,753 + 200,293 + 186,629 + 193,610
+    expect(ttm!.revenue).toBe(798_285_000)
+    // 10,247 + 25,764 + 32,936 + 33,186 — 결함 상태의 279,380,000이 아니다.
+    expect(ttm!.netIncome).toBe(102_133_000)
+    expect(r.ttm.map((t) => t.periodEnd)).not.toContain('2022-06-12')
+  })
+
+  it('STEX / IIIV — 전 필드 NULL인 유령 날짜도 같은 규칙으로 흡수된다', () => {
+    // STEX 2022-03-30(사실 2건) vs 2022-03-31(17건). 매출 8,000은 03-31 쪽 값이다.
+    const idx = indexFacts([
+      fact({ cik: 1530766, source: 'api', qtrs: 1, periodStart: '2022-01-01', periodEnd: '2022-03-30', tag: 'Revenues', value: 9_000 }),
+      fact({ cik: 1530766, source: 'api', qtrs: 1, periodStart: '2022-01-01', periodEnd: '2022-03-30', tag: 'SalesRevenueNet', value: 1_000 }),
+      ...['Revenues', 'NetIncomeLoss', 'GrossProfit', 'OperatingIncomeLoss', 'ResearchAndDevelopmentExpense',
+        'CostOfRevenue', 'NetCashProvidedByUsedInOperatingActivities', 'PaymentsToAcquirePropertyPlantAndEquipment',
+        'ShareBasedCompensation', 'WeightedAverageNumberOfDilutedSharesOutstanding'].map((t, i) =>
+        fact({ cik: 1530766, source: 'api', qtrs: 1, periodStart: '2022-01-01', periodEnd: '2022-03-31', tag: t, value: 8_000 + i })),
+    ])
+    expect([...idx.duration.get(1)!.keys()]).toEqual(['2022-03-31'])
+  })
+
+  it('밀도 비대칭이 약하면 1건 불일치로도 합치지 않는다', () => {
+    // 4건 vs 8건(2배) — SPARSE_DATE_DOMINANCE 5배에 못 미친다. 오기 날짜라는 증거가 없다.
+    const mk = (end: string, tags: string[], base: number) => tags.map((t, i) =>
+      fact({ cik: 7, source: 'api', qtrs: 1, periodStart: '2022-01-01', periodEnd: end, tag: t, value: base + i }))
+    const idx = indexFacts([
+      ...mk('2022-03-25', ['Revenues', 'GrossProfit', 'NetIncomeLoss', 'ShareBasedCompensation'], 500),
+      ...mk('2022-03-31', ['Revenues', 'OperatingIncomeLoss', 'CostOfRevenue', 'ResearchAndDevelopmentExpense',
+        'NetCashProvidedByUsedInOperatingActivities', 'PaymentsToAcquirePropertyPlantAndEquipment',
+        'WeightedAverageNumberOfDilutedSharesOutstanding', 'StockholdersEquity'], 900),
+    ])
+    expect([...idx.duration.get(1)!.keys()].sort()).toEqual(['2022-03-25', '2022-03-31'])
+  })
+
+  it('시점(instant) 축에는 넓히지 않는다 — 표지 날짜가 대차대조표 일자로 흡수되면 안 된다', () => {
+    // ADP 2019-06-30(대차대조표, 36건) 옆의 2019-07-01(표지, 2건). 기간 축과 달리
+    // 시점 축에는 시작일이 없어 "같은 기간"이라는 증거가 근접성뿐이다.
+    const bs = ['StockholdersEquity', 'CashAndCashEquivalentsAtCarryingValue', 'Liabilities',
+      'LiabilitiesCurrent', 'LongTermDebtNoncurrent', 'LongTermDebtCurrent',
+      'ShortTermInvestments', 'OperatingLeaseLiability'].map((t, i) =>
+      fact({ cik: 8670, source: 'api', qtrs: 0, periodEnd: '2019-06-30', tag: t, value: 1_000 + i }))
+    const idx = indexFacts([
+      ...bs,
+      fact({ cik: 8670, source: 'api', qtrs: 0, periodEnd: '2019-07-01', tag: 'StockholdersEquity', value: 99 }),
+    ])
+    expect([...idx.instant.keys()].sort()).toEqual(['2019-06-30', '2019-07-01'])
+  })
+})
+
+describe('옮겨져 온 값은 자기 날짜의 값을 덮지 못한다 (ALGM DEF 14A 실사례)', () => {
+  // 날짜를 합치는 것과 값의 순위를 정하는 것은 별개다. 오기 날짜를 진짜 마감일로
+  // 흡수했더니 그 날짜에 딸려 온 값이 filedDate가 늦다는 이유로 10-Q를 덮으면,
+  // 날짜 정합이 오히려 숫자를 망가뜨린다.
+  const base = (periodEnd: string, tag: string, value: number, filedDate: string, form: string) =>
+    fact({
+      cik: 866291, source: 'api', qtrs: 1, periodStart: '2022-03-26',
+      periodEnd, tag, value, form, filedDate, accession: `algm-${form}`,
+    })
+
+  it('자기 날짜(10-Q)의 순이익이 이긴다 — 늦게 제출된 위임장 값이 덮지 않는다', () => {
+    const idx = indexFacts([
+      base('2022-06-24', 'Revenues', 217_753_000, '2023-08-04', '10-Q'),
+      base('2022-06-24', 'NetIncomeLoss', 10_247_000, '2023-08-04', '10-Q'),
+      base('2022-06-24', 'GrossProfit', 118_374_000, '2023-08-04', '10-Q'),
+      base('2022-06-24', 'OperatingIncomeLoss', 14_737_000, '2023-08-04', '10-Q'),
+      base('2022-06-24', 'ShareBasedCompensation', 34_136_000, '2023-08-04', '10-Q'),
+      base('2022-06-24', 'ResearchAndDevelopmentExpense', 33_857_000, '2023-08-04', '10-Q'),
+      base('2022-06-12', 'NetIncomeLoss', 187_494_000, '2026-06-24', 'DEF 14A'),
+    ])
+    const tags = idx.duration.get(1)!.get('2022-06-24')!
+    expect(tags.get('NetIncomeLoss')).toBe(10_247_000)
+  })
+
+  it('옮겨져 온 값이라도 canonical 날짜에 그 태그가 없으면 빈 칸을 채운다', () => {
+    const idx = indexFacts([
+      base('2022-06-24', 'Revenues', 217_753_000, '2023-08-04', '10-Q'),
+      base('2022-06-24', 'GrossProfit', 118_374_000, '2023-08-04', '10-Q'),
+      base('2022-06-24', 'OperatingIncomeLoss', 14_737_000, '2023-08-04', '10-Q'),
+      base('2022-06-24', 'ShareBasedCompensation', 34_136_000, '2023-08-04', '10-Q'),
+      base('2022-06-24', 'ResearchAndDevelopmentExpense', 33_857_000, '2023-08-04', '10-Q'),
+      base('2022-06-12', 'NetIncomeLoss', 187_494_000, '2026-06-24', 'DEF 14A'),
+    ])
+    expect(idx.duration.get(1)!.get('2022-06-24')!.get('NetIncomeLoss')).toBe(187_494_000)
+  })
+
+  it('같은 날짜 안에서는 종전대로 늦게 신고된 정정 값이 이긴다', () => {
+    const idx = indexFacts([
+      base('2022-06-24', 'Revenues', 200_000_000, '2022-08-01', '10-Q'),
+      base('2022-06-24', 'Revenues', 217_753_000, '2023-08-04', '10-Q'),
+    ])
+    expect(idx.duration.get(1)!.get('2022-06-24')!.get('Revenues')).toBe(217_753_000)
+  })
+})
