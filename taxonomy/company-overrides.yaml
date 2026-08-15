@@ -8,7 +8,7 @@ NET:  { industry: data-infrastructure }
 DDOG: { industry: data-infrastructure }
 SNOW: { industry: data-infrastructure }
 MDB:  { industry: data-infrastructure }
-NVDA: { industry: ai-infrastructure }
+NVDA: { industry: semiconductors }
 AMD:  { industry: semiconductors }
 AVGO: { industry: semiconductors }
 VRT:  { industry: data-center-infrastructure }
