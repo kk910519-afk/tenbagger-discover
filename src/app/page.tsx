@@ -6,6 +6,7 @@ import { formatUsd, formatPct, formatScore } from './_lib/format'
 import { Value, SignedValue } from './_components/Value'
 import { Badge } from './_components/Badge'
 import { TopCandidates } from './_components/TopCandidates'
+import { RecordCards, type RecordCardItem } from './_components/RecordCards'
 import { Legend, type LegendItem } from './_components/Legend'
 import { industryPath, stockPath } from './_lib/paths'
 import { snapshotDate, formatKoreanDate } from './_lib/snapshot'
@@ -82,7 +83,9 @@ export default function Home() {
         </div>
 
         {lead && (
-          <aside className="border-l border-[var(--color-border-strong)] pl-6">
+          /* 세로 구분선은 좌우로 나뉘는 lg에서만 뜻이 있다. 한 칸으로 쌓이는 좁은
+             화면에서는 위쪽 경계선이 같은 역할을 하고, 왼쪽 여백은 본문과 어긋난다. */
+          <aside className="border-t border-[var(--color-border-strong)] pt-6 lg:border-t-0 lg:border-l lg:pt-0 lg:pl-6">
             <p className="editorial-kicker">TOP IDEA · 최우선 분석 후보</p>
             <a href={stockPath(lead.ticker)} className="mt-4 block">
               <strong className="font-serif text-4xl font-normal tracking-tight">{lead.ticker}</strong>
@@ -211,8 +214,10 @@ function ThemeSection({
       {industries.length === 0 ? (
         <p className="border-b border-dashed border-[var(--color-border)] py-6 text-sm text-[var(--color-text-faint)]">아직 후보가 없습니다.</p>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+        <>
+        <RecordCards items={industries.map(industryCard)} />
+        <div className="hidden overflow-x-auto md:block">
+          <table className="w-full min-w-[48rem] text-sm">
             <thead>
               <tr>
                 <th className="text-center">산업</th>
@@ -228,9 +233,47 @@ function ThemeSection({
             <tbody>{industries.map((industry) => <IndustryRowView key={industry.slug} row={industry} />)}</tbody>
           </table>
         </div>
+        </>
       )}
     </section>
   )
+}
+
+/**
+ * 카드 한 장이 표의 한 행과 같은 사실을 담는다 — 열 하나도 버리지 않는다.
+ * 평균 점수만 헤드라인으로 뽑는 이유는 이 표가 산업을 그 순서로 읽히길 의도하기
+ * 때문이다(범례의 "평균 점수" 설명 참조).
+ */
+function industryCard(row: IndustryRow): RecordCardItem {
+  return {
+    key: row.slug,
+    title: row.name,
+    href: industryPath(row.slug),
+    meta: `후보 ${row.candidateCount.toLocaleString()}개`,
+    headline: { label: '평균 점수', value: formatScore(row.avgTenbagger) },
+    fields: [
+      // 산업 다음에 읽을 것은 "그래서 어느 회사인가"다 — 한 줄을 통째로 준다.
+      {
+        label: '대표 후보',
+        span: true,
+        value: row.topCandidate ? (
+          <a href={stockPath(row.topCandidate.ticker)} className="inline-flex items-baseline gap-2">
+            <span className="font-medium">{row.topCandidate.ticker}</span>
+            <Value dim>{formatScore(row.topCandidate.tenbagger)}</Value>
+          </a>
+        ) : <span className="text-[var(--color-text-faint)]">—</span>,
+      },
+      { label: '매출 성장', value: <SignedValue value={row.medianRevenueGrowth} text={formatPct(row.medianRevenueGrowth)} /> },
+      { label: '시가총액', value: <Value dim>{formatUsd(row.medianMarketCap)}</Value> },
+      { label: '모멘텀', value: <SignedValue value={row.momentum} text={formatPct(row.momentum)} /> },
+      {
+        label: '위험',
+        value: row.riskRatio > 0
+          ? <Badge tone="risk">{formatPct(row.riskRatio, 0)}</Badge>
+          : <span className="text-[var(--color-text-faint)]">—</span>,
+      },
+    ],
+  }
 }
 
 function IndustryRowView({ row }: { row: IndustryRow }) {

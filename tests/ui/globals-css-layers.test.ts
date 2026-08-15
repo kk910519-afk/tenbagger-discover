@@ -42,3 +42,22 @@ describe('globals.css — cascade layer 회귀 가드', () => {
     })
   }
 })
+
+/**
+ * 한글 표에서 폭이 모자랄 때의 실패 양상은 "잘림"이 아니라 "세로쓰기"다 — 줄바꿈
+ * 기회가 공백뿐이라 브라우저가 글자 단위로 끊어 "평균 점수"를 평/균/점/수로 쌓는다.
+ * 이 두 선언이 그 경로를 막는다. jsdom은 캐스케이드를 계산하지 않으므로 소스 수준의
+ * 회귀 가드로 둔다(위 레이어 테스트와 같은 이유).
+ */
+describe('globals.css — 좁은 칸에서 한글이 글자 단위로 쪼개지지 않는다', () => {
+  const css = readFileSync('src/app/globals.css', 'utf8')
+  const thBlock = css.slice(css.indexOf('  th {'), css.indexOf('  thead {'))
+
+  it('th는 줄바꿈하지 않는다', () => {
+    expect(thBlock).toMatch(/th\s*\{[^}]*white-space:\s*nowrap/s)
+  })
+
+  it('th/td는 어절 안에서 끊지 않는다(word-break: keep-all)', () => {
+    expect(thBlock).toMatch(/th,\s*td\s*\{[^}]*word-break:\s*keep-all/s)
+  })
+})

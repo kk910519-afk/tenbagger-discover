@@ -1,6 +1,7 @@
 import type { TopCandidate } from '../_queries/top-candidates'
 import { formatScore } from '../_lib/format'
 import { Badge } from './Badge'
+import { RecordCards, type RecordCardItem } from './RecordCards'
 import { industryPath, stockPath } from '../_lib/paths'
 
 /**
@@ -12,8 +13,10 @@ import { industryPath, stockPath } from '../_lib/paths'
  */
 export function TopCandidates({ candidates }: { candidates: TopCandidate[] }) {
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-sm">
+    <>
+    <RecordCards items={candidates.map(candidateCard)} />
+    <div className="hidden overflow-x-auto md:block">
+      <table className="w-full min-w-[44rem] text-sm">
         <thead>
           <tr>
             <th className="w-8 text-center">#</th>
@@ -57,5 +60,34 @@ export function TopCandidates({ candidates }: { candidates: TopCandidate[] }) {
         </tbody>
       </table>
     </div>
+    </>
   )
+}
+
+/**
+ * 좁은 화면에서는 근거 문장이 잘리지 않는다 — 표에서는 max-w-md truncate로 한 줄에
+ * 가두지만(행 높이를 고르게 유지해야 다섯 줄이 한눈에 비교된다), 카드에서는 이 문장이
+ * "왜 이 회사부터 보는지"의 전부라 전문을 그대로 보여준다.
+ */
+function candidateCard(c: TopCandidate, idx: number): RecordCardItem {
+  return {
+    key: String(c.cik),
+    rank: String(idx + 1).padStart(2, '0'),
+    title: c.ticker,
+    href: stockPath(c.ticker),
+    subtitle: c.name,
+    meta: <a href={industryPath(c.industrySlug)}>{c.industryName}</a>,
+    headline: { label: '점수', value: formatScore(c.tenbagger) },
+    fields: [],
+    note: (
+      <>
+        {c.rationale}
+        {c.hasCriticalFlag && (
+          <span className="ml-2 inline-block align-middle">
+            <Badge tone="risk">RED FLAG</Badge>
+          </span>
+        )}
+      </>
+    ),
+  }
 }
