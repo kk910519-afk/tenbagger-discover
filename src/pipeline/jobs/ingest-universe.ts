@@ -4,10 +4,12 @@ import type { Taxonomy } from '@/taxonomy'
 import type { ListingProvider, ReferenceProvider } from '@/providers/types'
 import { passesListingFilter } from '@/pipeline/universe-filter'
 import { runJob, type JobStats } from '@/pipeline/runner'
+import { isResidualSic } from '@/taxonomy'
 import {
   upsertCompany,
   upsertListing,
   setCompanyIndustry,
+  retireCompany,
 } from '@/db/repositories/companies'
 
 export type UniverseDeps = {
@@ -65,6 +67,10 @@ export async function ingestUniverse(deps: UniverseDeps): Promise<JobStats> {
     // needs a new entry. Keep them as separate counters so neither masks the other.
     let skippedExcludedSic = 0
     let skippedUnclassifiable = 0
+    // 잔여 SIC(NEC/Miscellaneous/…, Etc./xx00 헤더)가 map에 남아 있는데 residual_reviewed로
+    // 정당화되지 않은 경우. classify()는 산업을 돌려주지만 그 코드는 업종이 아니라 범위를
+    // 가리키므로 SIC 출처 분류를 거부한다 — 오버라이드는 이 검사 앞에서 이미 통과한다.
+    let skippedResidualSic = 0
     let skippedNotOperating = 0
     // A thrown fetchCompany() is transient (network/rate-limit, worth retrying); a
     // null return is permanent (SEC has no record for that CIK). Different causes,
@@ -74,6 +80,10 @@ export async function ingestUniverse(deps: UniverseDeps): Promise<JobStats> {
     let overrideCount = 0
     let sicBucketCount = 0
     const unmappedSicsSeen = new Set<string>()
+    const residualSicsBlocked = new Set<string>()
+    // 이번 실행에서 **확정적으로** 유니버스에서 뺀 CIK. fetchCompany 실패(일시적일 수 있다)는
+    // 넣지 않는다 — 네트워크 한 번 흔들렸다고 회사를 내리면 안 된다.
+    const rejected = new Set<number>()
 
     for (const t of candidates) {
       let ref
@@ -89,17 +99,31 @@ export async function ingestUniverse(deps: UniverseDeps): Promise<JobStats> {
       }
       if (ref.entityType !== null && ref.entityType !== 'operating') {
         skippedNotOperating++
+        rejected.add(ref.cik)
         continue
       }
       if (ref.sic && cfg.universe.exclude_sic.includes(ref.sic)) {
         skippedExcludedSic++
+        rejected.add(ref.cik)
         continue
       }
 
       const cls = taxonomy.classify(ref.sic ?? '', t.ticker)
       if (!cls) {
         skippedUnclassifiable++
+        rejected.add(ref.cik)
         if (ref.sic && !taxonomy.unmappedSics.has(ref.sic)) unmappedSicsSeen.add(ref.sic)
+        continue
+      }
+      if (
+        cls.source === 'sic' &&
+        ref.sic &&
+        !taxonomy.residualReviewedSics.has(ref.sic) &&
+        isResidualSic(ref.sic, ref.sicDescription)
+      ) {
+        skippedResidualSic++
+        rejected.add(ref.cik)
+        residualSicsBlocked.add(ref.sic)
         continue
       }
 
@@ -130,6 +154,18 @@ export async function ingestUniverse(deps: UniverseDeps): Promise<JobStats> {
       else sicBucketCount++
     }
 
+    // 이전 실행에서 분류되어 남아 있는데 이번에 확정적으로 탈락한 회사를 내린다.
+    // 이 단계가 없으면 taxonomy를 고쳐도 예전 분류가 DB에 그대로 살아 있어 산업
+    // 중앙값이 바뀌지 않는다.
+    const retiredTickers: string[] = []
+    raw.transaction(() => {
+      for (const cik of rejected) {
+        const ticker = retireCompany(raw, cik, now)
+        if (ticker !== null) retiredTickers.push(ticker)
+      }
+    })()
+    retiredTickers.sort()
+
     return {
       listed: allListings.length,
       afterListingFilter: eligible.size,
@@ -137,12 +173,16 @@ export async function ingestUniverse(deps: UniverseDeps): Promise<JobStats> {
       classified,
       skippedExcludedSic,
       skippedUnclassifiable,
+      skippedResidualSic,
       skippedNotOperating,
       failedLookupErrors,
       failedLookupNotFound,
       overrideCount,
       sicBucketCount,
       unmappedSicsSeen: [...unmappedSicsSeen].sort(),
+      residualSicsBlocked: [...residualSicsBlocked].sort(),
+      retiredFromUniverse: retiredTickers.length,
+      retiredTickers,
     }
   })
 }

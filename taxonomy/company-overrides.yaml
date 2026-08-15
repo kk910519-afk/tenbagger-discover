@@ -41,3 +41,24 @@ ASTS: { industry: satellite }
 "PYPL": { industry: digital-payments }
 "MPWR": { industry: power-semiconductor }
 "REGN": { industry: biotechnology }
+
+# 잔여 SIC 매핑 제거(2026-08-15)로 유니버스에서 빠지는 회사 중, **본인 10-K의 사업
+# 서술**로 산업을 특정할 수 있는 경우만 되돌린다. 근거는 sic-residual-report.md에
+# 인용문과 파일링 URL로 남겼다. 이름이나 통념으로 배정하지 않는다 — 근거를 못 대면
+# 미분류로 남긴다(XRX·IMMR·EVLV·INVE·ALOT·TACT·LINK·VTIX·WETH·AIMD 등).
+"CRSR": { industry: gaming }               # 10-K FY2025: "provider ... of high-performance
+                                           # products for gamers and digital creators",
+                                           # 사업부 "Gamer and Creator Peripherals" /
+                                           # "Gaming Components and Systems"
+"MITK": { industry: software-application } # 10-K FY2025: 매출 전액이 Mobile Deposit·
+                                           # identity verification 소프트웨어 라이선스와
+                                           # SaaS($105.6M, 총매출 $179.7M의 59%)
+"OMCL": { industry: healthcare-technology } # 10-K FY2025: "Omnicell, a leading healthcare
+                                           # technology provider focused on empowering
+                                           # autonomous medication management"
+"SYM":  { industry: robotics }             # 10-K FY2025: "Our robotic based automation
+                                           # systems ... move, store and sort cases and
+                                           # eaches in warehouses"
+"SERV": { industry: robotics }             # 10-K FY2025: "developing technologies intended
+                                           # to enable sustainable, autonomous robotic
+                                           # solutions for public and commercial spaces"

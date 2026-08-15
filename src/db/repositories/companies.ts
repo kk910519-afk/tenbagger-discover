@@ -76,6 +76,29 @@ export function setCompanyIndustry(
     .run(cik, industrySlug, themeSlug, source)
 }
 
+/**
+ * 유니버스에서 회사를 내린다 — 분류를 지우고 비활성으로 표시한다.
+ *
+ * taxonomy가 바뀌어 더 이상 분류되지 않는 회사는 `setCompanyIndustry`가 호출되지
+ * 않으므로 예전 industry_slug를 그대로 달고 남는다. 그러면 매핑을 고쳐도 그 회사는
+ * 계속 산업 중앙값에 들어간다 — 즉 taxonomy 수정이 DB에 반영되지 않는다.
+ *
+ * 이미 비활성이거나 애초에 없던 CIK면 null을 반환한다(리포팅용으로 티커를 돌려준다).
+ */
+export function retireCompany(
+  raw: Database.Database,
+  cik: number,
+  now: string,
+): string | null {
+  const row = raw
+    .prepare('SELECT ticker FROM companies WHERE cik = ? AND is_active = 1')
+    .get(cik) as { ticker: string } | undefined
+  if (!row) return null
+  raw.prepare('DELETE FROM company_industry WHERE cik = ?').run(cik)
+  raw.prepare('UPDATE companies SET is_active = 0, last_updated = ? WHERE cik = ?').run(now, cik)
+  return row.ticker
+}
+
 export function listUniverseCiks(raw: Database.Database): number[] {
   const rows = raw
     .prepare(

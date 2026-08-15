@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll } from 'vitest'
-import { readFileSync, mkdtempSync } from 'node:fs'
+import { readFileSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type Database from 'better-sqlite3'
@@ -266,5 +266,125 @@ describe('unmappedSicsSeen', () => {
     // 둘 다 classify() 실패로 스킵되지만, 스킵된 이유(unclassifiable)는 같다 —
     // 리포팅 여부만 unmappedSics 선언 목록으로 갈린다.
     expect(sicStats.skippedUnclassifiable).toBe(2)
+  })
+})
+
+describe('잔여(residual) SIC 거부', () => {
+  // map에는 있지만 residual_reviewed에는 없는 잔여 SIC를 만들어 두고, SIC 출처 분류는
+  // 거부되지만 오버라이드는 그대로 통과하는지 본다. 실제 taxonomy를 쓰지 않고
+  // fixture taxonomy를 쓰는 이유: 실 taxonomy에는 그런 코드가 (의도적으로) 없다.
+  const residualListingText = [
+    'Nasdaq Traded|Symbol|Security Name|Listing Exchange|Market Category|ETF|Round Lot Size|Test Issue|Financial Status|CQS Symbol|NASDAQ Symbol|NextShares',
+    'Y|RESID|Residual Bucket Corp - Common Stock|Q|Q|N|100|N|N|RESID|RESID|N',
+    'Y|OKAY|Reviewed Residual Corp - Common Stock|Q|Q|N|100|N|N|OKAY|OKAY|N',
+    'Y|OVRD|Override Wins Corp - Common Stock|Q|Q|N|100|N|N|OVRD|OVRD|N',
+    'File Creation Time: 0815202606:00|||||||||||',
+  ].join('\n')
+  const residualListings: ListingProvider = {
+    fetchListings: async () => parseNasdaqTraded(residualListingText),
+  }
+
+  function ref(cik: number, name: string, sic: string, desc: string): CompanyReference {
+    return {
+      cik, name, sic, sicDescription: desc, exchanges: ['Nasdaq'],
+      entityType: 'operating', fiscalYearEnd: '1231', filerCategory: null,
+      stateOfIncorporation: null, stateOfIncorporationDescription: null,
+    }
+  }
+  const residualRefs: Record<number, CompanyReference> = {
+    9101: ref(9101, 'Residual Bucket Corp', '9001', 'Widget Equipment, NEC'),
+    9102: ref(9102, 'Reviewed Residual Corp', '9002', 'Miscellaneous Widgets'),
+    9103: ref(9103, 'Override Wins Corp', '9001', 'Widget Equipment, NEC'),
+  }
+  const residualReference: ReferenceProvider = {
+    fetchTickerMap: async () => [
+      { cik: 9101, ticker: 'RESID', title: 'Residual Bucket Corp' },
+      { cik: 9102, ticker: 'OKAY', title: 'Reviewed Residual Corp' },
+      { cik: 9103, ticker: 'OVRD', title: 'Override Wins Corp' },
+    ],
+    fetchCompany: async (cik) => residualRefs[cik] ?? null,
+  }
+
+  function residualTaxonomy(): ReturnType<typeof loadTaxonomy> {
+    const dir = mkdtempSync(join(tmpdir(), 'tb-residual-tax-'))
+    writeFileSync(join(dir, 'themes.yaml'),
+      `- { slug: t1, name: "T1", display_order: 1 }\n`)
+    writeFileSync(join(dir, 'industries.yaml'),
+      `- { slug: ind-a, theme: t1, name: "Ind A", tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }\n` +
+      `- { slug: ind-b, theme: t1, name: "Ind B", tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }\n`)
+    writeFileSync(join(dir, 'sic-map.yaml'),
+      `map:\n  "9001": { theme: t1, industry: ind-a }\n  "9002": { theme: t1, industry: ind-a }\n` +
+      `unmapped: []\nresidual_reviewed: ["9002"]\n`)
+    writeFileSync(join(dir, 'company-overrides.yaml'), `OVRD: { industry: ind-b }\n`)
+    return loadTaxonomy(dir)
+  }
+
+  it('residual_reviewed에 없는 잔여 SIC는 SIC 분류를 거부하고, 근거가 있는 코드는 통과시키며, 오버라이드는 이긴다', async () => {
+    const tax = residualTaxonomy()
+    const rRaw = getRawDb(join(mkdtempSync(join(tmpdir(), 'tb-residual-')), 'r.db'))
+    runMigrations(rRaw)
+    seedTaxonomy(rRaw, tax)
+
+    const s = await ingestUniverse({
+      raw: rRaw, cfg, taxonomy: tax,
+      listings: residualListings, reference: residualReference,
+    })
+
+    expect(s.skippedResidualSic).toBe(1)
+    expect(s.residualSicsBlocked).toEqual(['9001'])
+    // 거부된 회사는 companies에 아예 들어오지 않는다
+    const tickers = (rRaw.prepare('SELECT ticker FROM companies ORDER BY ticker').all() as
+      { ticker: string }[]).map((r) => r.ticker)
+    expect(tickers).toEqual(['OKAY', 'OVRD'])
+    // 오버라이드는 잔여 SIC 검사보다 앞선다 — 근거가 있으면 되돌아올 수 있어야 한다
+    const ovrd = rRaw
+      .prepare('SELECT industry_slug, source FROM company_industry WHERE cik = 9103')
+      .get() as { industry_slug: string; source: string }
+    expect(ovrd).toEqual({ industry_slug: 'ind-b', source: 'override' })
+  })
+
+  it('잔여 SIC 매핑을 제거하면 이미 수집된 회사가 유니버스에서 내려간다', async () => {
+    // 1차: 9001이 매핑된 taxonomy로 수집 → RESID가 유니버스에 들어온다
+    const permissiveDir = mkdtempSync(join(tmpdir(), 'tb-residual-tax1-'))
+    writeFileSync(join(permissiveDir, 'themes.yaml'),
+      `- { slug: t1, name: "T1", display_order: 1 }\n`)
+    writeFileSync(join(permissiveDir, 'industries.yaml'),
+      `- { slug: ind-a, theme: t1, name: "Ind A", tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }\n` +
+      `- { slug: ind-b, theme: t1, name: "Ind B", tam_usd: null, tam_cagr: null, tam_source: null, tam_as_of: null }\n`)
+    writeFileSync(join(permissiveDir, 'sic-map.yaml'),
+      `map:\n  "9001": { theme: t1, industry: ind-a }\n  "9002": { theme: t1, industry: ind-a }\n` +
+      `unmapped: []\nresidual_reviewed: ["9001", "9002"]\n`)
+    writeFileSync(join(permissiveDir, 'company-overrides.yaml'), `OVRD: { industry: ind-b }\n`)
+    const permissive = loadTaxonomy(permissiveDir)
+
+    const rRaw = getRawDb(join(mkdtempSync(join(tmpdir(), 'tb-retire-')), 'r.db'))
+    runMigrations(rRaw)
+    seedTaxonomy(rRaw, permissive)
+    const first = await ingestUniverse({
+      raw: rRaw, cfg, taxonomy: permissive,
+      listings: residualListings, reference: residualReference,
+    })
+    expect(first.classified).toBe(3)
+    expect(first.retiredFromUniverse).toBe(0)
+
+    // 2차: 9001의 근거를 뺀 taxonomy로 재수집 → RESID는 내려가고 OVRD는 남는다
+    const strict = residualTaxonomy()
+    const second = await ingestUniverse({
+      raw: rRaw, cfg, taxonomy: strict,
+      listings: residualListings, reference: residualReference,
+    })
+    expect(second.retiredTickers).toEqual(['RESID'])
+
+    const resid = rRaw
+      .prepare('SELECT is_active FROM companies WHERE cik = 9101')
+      .get() as { is_active: number }
+    expect(resid.is_active).toBe(0)
+    expect(
+      rRaw.prepare('SELECT COUNT(*) n FROM company_industry WHERE cik = 9101').get(),
+    ).toEqual({ n: 0 })
+    // 남아 있어야 할 회사는 그대로다
+    expect(
+      rRaw.prepare('SELECT COUNT(*) n FROM company_industry').get(),
+    ).toEqual({ n: 2 })
   })
 })

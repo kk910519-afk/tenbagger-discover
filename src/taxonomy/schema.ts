@@ -39,6 +39,9 @@ export const sicMapSchema = z
   .object({
     map: z.record(z.string(), z.object({ theme: z.string(), industry: z.string() }).strict()),
     unmapped: z.array(z.string()),
+    // 잔여(residual) SIC 중 등록기업 증거로 매핑을 정당화한 코드. 생략 가능하다 —
+    // 잔여 SIC를 하나도 매핑하지 않는 taxonomy는 이 목록이 비어 있는 것이 정상이다.
+    residual_reviewed: z.array(z.string()).default([]),
   })
   .strict()
 

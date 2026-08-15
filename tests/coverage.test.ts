@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { existsSync } from 'node:fs'
 import { getRawDb } from '@/db/client'
+import { loadTaxonomy, isResidualSic } from '@/taxonomy'
 
 const DB_PATH = process.env.DATABASE_PATH ?? './data/tenbagger.db'
 
@@ -48,6 +49,52 @@ describe.skipIf(!hasDb)('SIC 매핑 커버리지 (실제 DB 필요)', () => {
     // 발견되면 taxonomy/sic-map.yaml의 map에 추가하거나, 의도적으로 제외할
     // SIC라면 unmapped 목록에 명시적으로 넣는다.
     expect(unmapped, `매핑되지 않은 SIC: ${unmapped.join(', ')}`).toEqual([])
+  })
+
+  it('SEC 설명이 잔여(residual)인 SIC는 근거 없이 map에 남아 있지 않다', () => {
+    // sic-map.yaml에는 SIC 설명이 없으므로 이 규칙은 파일만 봐서는 검사할 수 없다.
+    // 실제 SEC가 돌려준 sicDescription을 가진 유일한 곳이 companies 테이블이다.
+    // 나중에 누가 잔여 코드를 map에 추가하면 여기서 잡힌다.
+    const raw = getRawDb(DB_PATH)
+    const rows = raw
+      .prepare(
+        `SELECT DISTINCT sic, sic_description AS description FROM companies
+         WHERE sic IS NOT NULL ORDER BY sic`,
+      )
+      .all() as { sic: string; description: string | null }[]
+    raw.close()
+
+    const tx = loadTaxonomy()
+    const offenders = rows
+      .filter((r) => isResidualSic(r.sic, r.description))
+      .filter((r) => tx.mappedSics.has(r.sic) && !tx.residualReviewedSics.has(r.sic))
+      .map((r) => `${r.sic} (${r.description})`)
+
+    expect(
+      offenders,
+      `잔여 SIC가 근거 없이 매핑되어 있다 — unmapped로 내리거나 ` +
+        `등록기업 증거와 함께 residual_reviewed에 넣어야 한다: ${offenders.join(', ')}`,
+    ).toEqual([])
+  })
+
+  it('잔여 SIC 거부가 조용히 일어나지 않는다', () => {
+    // ingest가 잔여 SIC를 거부하면 residualSicsBlocked로 보고한다. 실 taxonomy에서는
+    // 잔여 코드가 전부 unmapped이거나 residual_reviewed이므로 이 목록은 비어야 한다 —
+    // 비어 있지 않다면 sic-map.yaml과 규칙이 어긋난 것이다.
+    const raw = getRawDb(DB_PATH)
+    const row = raw
+      .prepare(
+        `SELECT stats FROM job_runs
+         WHERE job = 'universe' AND status = 'succeeded' AND stats IS NOT NULL
+         ORDER BY id DESC LIMIT 1`,
+      )
+      .get() as { stats: string } | undefined
+    raw.close()
+
+    expect(row, 'universe 잡이 성공적으로 실행된 기록이 job_runs에 없다').toBeDefined()
+    const stats = JSON.parse(row!.stats) as { residualSicsBlocked?: string[] }
+    const blocked = stats.residualSicsBlocked ?? []
+    expect(blocked, `근거 없이 매핑된 잔여 SIC: ${blocked.join(', ')}`).toEqual([])
   })
 
   it('분류 출처 비율을 리포트한다', () => {

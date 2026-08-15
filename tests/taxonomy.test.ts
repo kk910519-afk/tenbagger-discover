@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { loadTaxonomy } from '@/taxonomy'
+import { loadTaxonomy, isResidualSic } from '@/taxonomy'
 
 const tx = loadTaxonomy()
 
@@ -66,6 +66,79 @@ describe('classify', () => {
   it('오버라이드가 있으면 SIC가 미매핑이어도 분류된다', () => {
     expect(tx.classify('6770', 'IONQ')?.industrySlug).toBe('quantum-computing')
     expect(tx.classify('6770', 'IONQ')?.source).toBe('override')
+  })
+})
+
+describe('isResidualSic — 잔여 SIC 판정', () => {
+  // 설명 문자열은 전부 data.sec.gov submissions API가 실제로 돌려주는 sicDescription이다.
+  it('NEC 표기를 잔여로 본다', () => {
+    expect(isResidualSic('3577', 'Computer Peripheral Equipment, NEC')).toBe(true)
+    expect(isResidualSic('7389', 'Services-Business Services, NEC')).toBe(true)
+    expect(isResidualSic('4899', 'Communications Services, NEC')).toBe(true)
+  })
+
+  it('Miscellaneous / Misc 표기를 잔여로 본다', () => {
+    expect(isResidualSic('3690', 'Miscellaneous Electrical Machinery, Equipment & Supplies')).toBe(true)
+    expect(isResidualSic('3590', 'Misc Industrial & Commercial Machinery & Equipment')).toBe(true)
+    expect(isResidualSic('1090', 'Miscellaneous Metal Ores')).toBe(true)
+  })
+
+  it('"…, Etc."로 끝나는 그룹 헤더를 잔여로 본다', () => {
+    expect(isResidualSic('7370', 'Services-Computer Programming, Data Processing, Etc.')).toBe(true)
+  })
+
+  it('2자리 대분류 헤더(xx00)는 설명과 무관하게 잔여다', () => {
+    expect(isResidualSic('2800', 'Chemicals & Allied Products')).toBe(true)
+    expect(isResidualSic('1400', 'Mining & Quarrying of  Nonmetallic Minerals (No Fuels)')).toBe(true)
+    expect(isResidualSic('4900', 'Electric, Gas & Sanitary Services')).toBe(true)
+  })
+
+  it('설명 안의 "other"는 표지가 아니다 — 특정 업종 코드를 잔여로 오판하지 않는다', () => {
+    // 3677·4931·4822는 "Other"를 품고 있지만 각각 인덕터·전기가스 겸업·전신으로 업종이 특정된다
+    expect(isResidualSic('3677', 'Electronic Coils, Transformers & Other Inductors')).toBe(false)
+    expect(isResidualSic('4931', 'Electric & Other Services Combined')).toBe(false)
+    expect(isResidualSic('4822', 'Telegraph & Other Message Communications')).toBe(false)
+  })
+
+  it('평범한 업종 코드는 잔여가 아니다', () => {
+    expect(isResidualSic('3674', 'Semiconductors & Related Devices')).toBe(false)
+    expect(isResidualSic('2834', 'Pharmaceutical Preparations')).toBe(false)
+    expect(isResidualSic('7372', 'Services-Prepackaged Software')).toBe(false)
+  })
+
+  it('설명이 없으면 코드 형태로만 판정한다', () => {
+    expect(isResidualSic('3674', null)).toBe(false)
+    expect(isResidualSic('2800', null)).toBe(true)
+  })
+})
+
+describe('residual_reviewed', () => {
+  it('실제 taxonomy의 residual_reviewed 항목은 전부 map에 존재한다', () => {
+    for (const sic of tx.residualReviewedSics) {
+      expect(tx.mappedSics.has(sic), `residual_reviewed ${sic}이 map에 없다`).toBe(true)
+    }
+  })
+
+  it('defect가 된 잔여 SIC는 map에서 제거되어 유니버스에서 빠진다', () => {
+    // 3577(Computer Peripheral Equipment, NEC)이 이 작업의 출발점이 된 결함이다.
+    for (const sic of ['3577', '3570', '3550', '7370', '7389', '3569', '8090', '3590', '1400', '2800']) {
+      expect(tx.mappedSics.has(sic), `${sic}이 아직 map에 있다`).toBe(false)
+      expect(tx.unmappedSics.has(sic), `${sic}이 unmapped에 선언되어 있지 않다`).toBe(true)
+      expect(tx.classify(sic, 'NOOVERRIDETICKER')).toBeNull()
+    }
+  })
+
+  it('residual_reviewed에 없는 잔여 SIC는 map에 남아 있지 않다 (알려진 설명 기준)', () => {
+    // sic-map.yaml에는 SIC 설명이 없으므로, 2자리 대분류 헤더 형태만으로 기계적으로
+    // 검사할 수 있는 부분을 검사한다. 설명 기반 검사는 실제 SEC 설명을 가진
+    // coverage.test.ts(실 DB)가 맡는다.
+    for (const sic of tx.mappedSics) {
+      if (!isResidualSic(sic, null)) continue
+      expect(
+        tx.residualReviewedSics.has(sic),
+        `대분류 헤더 ${sic}이 map에 있는데 residual_reviewed에 근거가 없다`,
+      ).toBe(true)
+    }
   })
 })
 
@@ -155,5 +228,23 @@ unmapped: []
     const dir = writeFixtures({ overrides: brokenOverrides })
     expect(() => loadTaxonomy(dir)).toThrow('ZZZZ')
     expect(() => loadTaxonomy(dir)).toThrow('theme-missing')
+  })
+
+  it('residual_reviewed에 map에 없는 SIC가 있으면 SIC 코드를 담은 메시지와 함께 던진다', () => {
+    // 매핑을 지우면서 예외 목록을 안 지우면, 나중에 그 코드를 map에 되돌릴 때
+    // 아무도 검토하지 않고 통과해버린다 — 로드 시점에 실패시킨다.
+    const staleSicMap = `map:
+  "9001": { theme: theme-a, industry: industry-a }
+unmapped: []
+residual_reviewed: ["9099"]
+`
+    const dir = writeFixtures({ sicMap: staleSicMap })
+    expect(() => loadTaxonomy(dir)).toThrow('9099')
+    expect(() => loadTaxonomy(dir)).toThrow('residual_reviewed')
+  })
+
+  it('residual_reviewed를 생략한 sic-map도 정상 로드된다 (기본값 빈 목록)', () => {
+    const dir = writeFixtures({})
+    expect(loadTaxonomy(dir).residualReviewedSics.size).toBe(0)
   })
 })
