@@ -24,11 +24,11 @@ export function ScoreBar({
         data-score-state={isUnknown ? 'unknown' : 'value'}
         className={
           isUnknown
-            ? 'h-1.5 w-full min-w-24 border border-dashed border-[var(--color-text-faint)]'
-            : 'h-1.5 w-full min-w-24 bg-[var(--color-surface-2)]'
+            ? 'h-1 w-full min-w-24 border border-dashed border-[var(--color-text-faint)]'
+            : 'h-1 w-full min-w-24 bg-[var(--color-surface-2)]'
         }
       >
-        {!isUnknown && <div className="h-full bg-[var(--color-text)]" style={{ width: `${pctWidth}%` }} />}
+        {!isUnknown && <div className="h-full bg-[var(--color-risk)]" style={{ width: `${pctWidth}%` }} />}
       </div>
       <span className="num w-10 shrink-0 text-right text-xs">
         {isUnknown ? '—' : formatScore(value)}

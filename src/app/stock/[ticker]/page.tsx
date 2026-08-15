@@ -9,8 +9,26 @@ import { MetricGrid } from '@/app/_components/MetricGrid'
 import { FactorBreakdown, StrengthWeakness } from '@/app/_components/FactorBreakdown'
 import { CompanyFacts } from '@/app/_components/CompanyFacts'
 import { ValuationSection } from '@/app/_components/Valuation'
+import { Legend, type LegendItem } from '@/app/_components/Legend'
+import { PageHeading } from '@/app/_components/PageHeading'
+import { industryBlurb } from '@/app/_lib/industry-blurbs'
 
 export const dynamic = 'force-dynamic'
+
+/** Overview는 헤드라인 수치 자체에 이미 면책·근사치 문구가 붙어 있어 범례를 겹치지 않는다. */
+const GROWTH_LEGEND: LegendItem[] = [
+  { label: 'Revenue Growth (TTM YoY)', help: '최근 1년 매출이 그 전 1년보다 얼마나 늘었는지.' },
+  { label: 'Revenue Acceleration', help: '그 성장률 자체가 얼마나 빨라졌는지. 단위는 %p.' },
+  { label: 'Revenue (TTM)', help: '최근 4개 분기를 더한 1년치 매출.' },
+]
+
+const QUALITY_LEGEND: LegendItem[] = [
+  { label: 'Gross Margin', help: '매출에서 원가를 뺀 비율. 하나 팔 때 얼마가 남는지.' },
+  { label: 'Operating Margin', help: '판관비까지 뺀 뒤 본업에서 남은 이익의 비율.' },
+  { label: 'FCF Margin', help: '사업을 굴리고 실제로 손에 남은 현금의 비율.' },
+  { label: 'Cash', help: '보유한 현금과 현금성 자산.' },
+  { label: 'Total Debt', help: '갚아야 할 빚의 총액.' },
+]
 
 export default async function StockPage({
   params,
@@ -34,22 +52,35 @@ export default async function StockPage({
   const isScored = d.factors.length > 0
 
   return (
-    <div className="space-y-8">
-      <header>
-        <p className="text-xs text-[var(--color-text-dim)]">
-          {d.themeName} · <a href={`/industry/${d.industrySlug}`}>{d.industryName}</a>
-          {d.classificationSource === 'sic' && (
-            <span className="ml-2 text-[var(--color-text-faint)]">
-              (SIC 기본 분류 — 수동 교정 없음)
-            </span>
-          )}
-        </p>
-        <h1 className="mt-1 flex items-center gap-3 text-lg">
-          {d.ticker}
-          <span className="font-serif text-xl text-[var(--color-text)]">{d.name}</span>
-          <CategoryBadge category={d.category} />
-        </h1>
+    <div className="stock-report space-y-12">
+      <div className="research-meta">
+        <span>기업 리서치 · {d.themeName}</span>
+        <span>평가 기준일 {formatDate(d.asOf)}</span>
+      </div>
+      <header className="pb-2 pt-3">
+        {/* 우측 설명은 회사 소개가 아니라 이 회사가 속한 산업의 설명이다 — 왼쪽
+            브레드크럼의 산업명을 그대로 받아, 산업 페이지와 같은 문장을 보여준다. */}
+        <PageHeading note={industryBlurb(d.industrySlug)}>
+          <div>
+          <p className="editorial-kicker">
+            Stock research · <a href={`/industry/${d.industrySlug}`}>{d.industryName}</a>
+            {d.classificationSource === 'sic' && (
+              <span className="ml-2 text-[var(--color-text-faint)]">
+                (SIC 기본 분류 — 수동 교정 없음)
+              </span>
+            )}
+          </p>
+          <h1 className="mt-3 flex flex-wrap items-baseline gap-x-4 gap-y-2">
+            <span className="font-serif text-5xl font-medium tracking-[-0.045em]">{d.ticker}</span>
+            <span className="text-2xl font-medium text-[var(--color-text-dim)]">{d.name}</span>
+            <CategoryBadge category={d.category} />
+          </h1>
+          <a href={`/industry/${d.industrySlug}`} className="mt-4 inline-block text-xs text-[var(--color-text-faint)]">← {d.industryName} 산업으로 돌아가기</a>
+          </div>
+        </PageHeading>
       </header>
+
+      <div className="editorial-rule" />
 
       <section>
         <h2 className="mb-2 text-sm text-[var(--color-text-dim)]">Overview</h2>
@@ -112,6 +143,7 @@ export default async function StockPage({
 
       <section>
         <h2 className="mb-2 text-sm text-[var(--color-text-dim)]">Growth</h2>
+        <Legend items={GROWTH_LEGEND} labelWidth="w-44" className="mb-3" />
         <MetricGrid
           items={[
             {
@@ -150,6 +182,7 @@ export default async function StockPage({
 
       <section>
         <h2 className="mb-2 text-sm text-[var(--color-text-dim)]">Quality</h2>
+        <Legend items={QUALITY_LEGEND} labelWidth="w-44" className="mb-3" />
         <MetricGrid
           items={[
             {

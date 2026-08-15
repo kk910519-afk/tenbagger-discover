@@ -58,41 +58,41 @@ export function CandidateTable({
 
   return (
     <>
-      <div className="overflow-x-auto bg-[var(--color-surface)]">
-        <table className="w-full max-w-5xl text-sm">
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
           <thead>
-            <tr className="text-xs">
-              <th>Ticker</th>
-              <th>Company</th>
-              <th className={`text-right ${GROUP_START}`}><HeaderLabel label="Market Cap" /></th>
-              <th className={`text-right ${GROUP_START}`}><HeaderLabel label="Rev Growth" /></th>
-              <th className="text-right"><HeaderLabel label="Gross Margin" /></th>
-              <th className="text-right"><HeaderLabel label="FCF Margin" /></th>
-              <th className="text-right"><HeaderLabel label="Debt" /></th>
-              <th className={`text-right ${GROUP_START}`}><HeaderLabel label="Tenbagger" /></th>
-              <th><HeaderLabel label="Risk" /></th>
+            <tr>
+              <th className="text-center">Ticker</th>
+              <th className="text-center">Company</th>
+              <th className={`text-center ${GROUP_START}`}><HeaderLabel label="Market Cap" /></th>
+              <th className={`text-center ${GROUP_START}`}><HeaderLabel label="Rev Growth" /></th>
+              <th className="text-center"><HeaderLabel label="Gross Margin" /></th>
+              <th className="text-center"><HeaderLabel label="FCF Margin" /></th>
+              <th className="text-center"><HeaderLabel label="Debt" /></th>
+              <th className={`text-center ${GROUP_START}`}><HeaderLabel label="Tenbagger" /></th>
+              <th className="text-center"><HeaderLabel label="Risk" /></th>
             </tr>
           </thead>
           <tbody>
             {visible.map((r) => (
               <tr key={r.cik}>
-                <td>
+                <td className="text-center">
                   <a href={`/stock/${r.ticker}`} className="font-medium">
                     {r.ticker}
                   </a>
                 </td>
-                <td className="font-serif text-[var(--color-text)]">{r.name}</td>
-                <td className={`text-right ${GROUP_START}`}><Value dim>{formatUsd(r.marketCap)}</Value></td>
-                <td className={`text-right ${GROUP_START}`}>
+                <td className="text-center text-[0.9rem] font-medium text-[var(--color-text)]">{r.name}</td>
+                <td className={`text-center ${GROUP_START}`}><Value dim>{formatUsd(r.marketCap)}</Value></td>
+                <td className={`text-center ${GROUP_START}`}>
                   <SignedValue value={r.revenueGrowth} text={formatPct(r.revenueGrowth)} />
                 </td>
-                <td className="text-right"><Value>{formatPct(r.grossMargin)}</Value></td>
-                <td className="text-right">
+                <td className="text-center"><Value>{formatPct(r.grossMargin)}</Value></td>
+                <td className="text-center">
                   <SignedValue value={r.fcfMargin} text={formatPct(r.fcfMargin)} />
                 </td>
-                <td className="text-right"><Value dim>{formatUsd(r.totalDebt)}</Value></td>
-                <td className={`text-right font-medium ${GROUP_START}`}><Value>{formatScore(r.tenbagger)}</Value></td>
-                <td className="space-x-1">
+                <td className="text-center"><Value dim>{formatUsd(r.totalDebt)}</Value></td>
+                <td className={`text-center font-medium ${GROUP_START}`}><Value>{formatScore(r.tenbagger)}</Value></td>
+                <td className="space-x-1 whitespace-nowrap text-center">
                   {r.criticalCount > 0 && <Badge tone="risk">RED FLAG</Badge>}
                   {r.criticalCount === 0 && r.warningCount > 0 && <Badge tone="watch">WATCH</Badge>}
                   {r.completeness !== null && r.completeness < insufficientBelow && (
@@ -109,7 +109,7 @@ export function CandidateTable({
       {!showAll && rows.length > PREVIEW_COUNT && (
         <a
           href={`/industry/${industrySlug}?all=1`}
-          className="mt-2 inline-block text-xs text-[var(--color-info)]"
+          className="mt-3 inline-block border-b border-[var(--color-risk)] pb-0.5 text-xs text-[var(--color-risk)]"
         >
           View All Candidates ({rows.length})
         </a>

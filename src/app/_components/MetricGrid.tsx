@@ -12,11 +12,13 @@ export function MetricGrid({
   emphasize?: boolean
 }) {
   return (
-    <dl className="grid grid-cols-2 gap-x-8 gap-y-3 sm:grid-cols-3 lg:grid-cols-4">
+    // data-metric-grid: 같은 페이지의 Legend도 dt/dd로 같은 라벨을 쓴다. 라벨로 값 칸을
+    // 찾는 쪽(테스트 포함)이 범례를 값으로 착각하지 않도록 값 그리드에 표식을 남긴다.
+    <dl data-metric-grid className="grid grid-cols-2 border-y border-[var(--color-border-strong)] sm:grid-cols-3 lg:grid-cols-4">
       {items.map((i) => (
-        <div key={i.label}>
-          <dt className="text-xs text-[var(--color-text-faint)]">{i.label}</dt>
-          <dd className={emphasize ? 'mt-1 text-xl font-medium' : 'mt-0.5 text-sm'}>{i.value}</dd>
+        <div key={i.label} className="min-h-24 border-b border-r border-[var(--color-border)] p-4 last:border-r-0 sm:border-b-0">
+          <dt className="text-[10px] uppercase tracking-[0.08em] text-[var(--color-text-faint)]">{i.label}</dt>
+          <dd className={emphasize ? 'mt-3 font-serif text-2xl' : 'mt-2 font-serif text-base'}>{i.value}</dd>
         </div>
       ))}
     </dl>

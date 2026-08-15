@@ -1,5 +1,5 @@
 import type { TopCandidate } from '../_queries/top-candidates'
-import { ScoreBar } from './ScoreBar'
+import { formatScore } from '../_lib/format'
 import { Badge } from './Badge'
 
 /**
@@ -11,37 +11,37 @@ import { Badge } from './Badge'
  */
 export function TopCandidates({ candidates }: { candidates: TopCandidate[] }) {
   return (
-    <div className="overflow-x-auto bg-[var(--color-surface)]">
-      <table className="w-full max-w-4xl text-sm">
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
         <thead>
-          <tr className="text-xs">
-            <th className="w-6 text-right">#</th>
-            <th>Ticker</th>
-            <th>Industry</th>
-            <th className="w-40">Score</th>
-            <th>Why</th>
+          <tr>
+            <th className="w-8 text-center">#</th>
+            <th className="text-center">기업</th>
+            <th className="text-center">산업</th>
+            <th className="w-24 text-center">점수</th>
+            <th className="text-center">핵심 근거</th>
           </tr>
         </thead>
         <tbody>
           {candidates.map((c, idx) => (
             <tr key={c.cik}>
-              <td className="text-right text-xs text-[var(--color-text-faint)]">{idx + 1}</td>
-              <td>
-                <a href={`/stock/${c.ticker}`} className="inline-flex items-baseline gap-1.5">
+              <td className="num text-center text-xs text-[var(--color-risk)]">{String(idx + 1).padStart(2, '0')}</td>
+              <td className="text-center">
+                <a href={`/stock/${c.ticker}`} className="inline-flex items-baseline justify-center gap-2">
                   <span className="font-medium">{c.ticker}</span>
-                  <span className="font-serif text-sm text-[var(--color-text)]">{c.name}</span>
+                  <span className="text-[0.92rem] font-medium text-[var(--color-text-dim)]">{c.name}</span>
                 </a>
               </td>
-              <td className="text-xs">
+              <td className="text-center text-xs">
                 <a href={`/industry/${c.industrySlug}`} className="text-[var(--color-text-dim)]">
                   {c.industryName}
                 </a>
               </td>
-              <td>
-                <ScoreBar value={c.tenbagger} />
+              <td className="num text-center font-semibold">
+                {formatScore(c.tenbagger)}
               </td>
               <td
-                className="max-w-xs truncate font-serif text-sm text-[var(--color-text-dim)]"
+                className="max-w-md truncate text-center text-sm leading-6 text-[var(--color-text-dim)]"
                 title={c.rationale}
               >
                 {c.rationale}

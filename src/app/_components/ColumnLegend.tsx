@@ -1,9 +1,11 @@
+import { Legend, type LegendItem } from './Legend'
+
 /**
  * 후보 테이블 위에 항상 보이는 범례. "이 숫자가 뭔지"만 짧게 답한다 —
  * "어떻게 해석할지"는 각 헤더의 툴팁(hover/focus)이 맡는다. 페이지당 한 번,
  * 첫 번째 그룹 위에만 렌더링한다 (그룹마다 반복하지 않는다).
  */
-const LEGEND_ITEMS: { label: string; help: string }[] = [
+const LEGEND_ITEMS: LegendItem[] = [
   { label: 'Market Cap', help: '회사 전체의 시장 가격. 주가 × 발행주식수.' },
   { label: 'Rev Growth', help: '최근 1년 매출이 그 전 1년보다 얼마나 늘었는지.' },
   { label: 'Gross Margin', help: '매출에서 원가를 뺀 비율. 하나 팔 때 얼마가 남는지.' },
@@ -14,14 +16,5 @@ const LEGEND_ITEMS: { label: string; help: string }[] = [
 ]
 
 export function ColumnLegend() {
-  return (
-    <dl className="mb-4 flex flex-wrap gap-x-5 gap-y-1 text-xs text-[var(--color-text-faint)]">
-      {LEGEND_ITEMS.map((item) => (
-        <div key={item.label} className="flex gap-1.5">
-          <dt className="font-medium text-[var(--color-text-dim)]">{item.label}</dt>
-          <dd>{item.help}</dd>
-        </div>
-      ))}
-    </dl>
-  )
+  return <Legend items={LEGEND_ITEMS} />
 }

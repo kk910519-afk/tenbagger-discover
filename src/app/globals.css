@@ -1,87 +1,273 @@
 @import "tailwindcss";
 
 @theme {
-  --color-bg: #0b0d10;
-  --color-surface: #14171c;
-  --color-surface-2: #1b1f26;
-  /* 기존 고정 hex(#262b34)는 배경 대비 구분선이 너무 또렷했다. 반투명 흰색으로
-     바꾸면 어떤 표면(페이지 배경이든 --color-surface든) 위에 놓여도 그 표면
-     명도에 비례해 은은하게 녹아든다 — "약해 보이는" 정도가 아니라 실제로
-     더 낮은 대비를 낸다(측정: 페이지 배경 위에서 RGB 델타가 채널당 약
-     27~36 → 약 19~20으로 감소). */
-  --color-border: rgba(255, 255, 255, 0.08);
-  --color-text: #e6e9ee;
-  --color-text-dim: #99a1ae;
-  --color-text-faint: #6b7280;
-
-  /* 의미가 있을 때만 쓴다 — 설계문서 §11.4 */
-  --color-positive: #3fb950;
-  --color-risk: #f85149;
-  --color-watch: #d29922;
-  --color-info: #58a6ff;
-  --color-emerging: #a371f7;
-
-  /*
-   * 인터페이스·표·숫자는 전부 Geist Sans(layout.tsx에서 next/font/google로
-   * 로드해 --font-geist-sans에 노출). 회사명·주요 타이틀·투자 논지 텍스트만
-   * Instrument Serif(--font-instrument-serif)를 쓴다 — 그 외 자리(숫자,
-   * 컬럼 헤더, 배지, 툴팁)는 절대 세리프를 쓰지 않는다. 두 변수 다
-   * layout.tsx에서 <html> 클래스로 주입되므로 폰트 로더가 없는 테스트
-   * 환경(jsdom)에서도 CSS 자체는 깨지지 않고, 변수가 비어 있으면 뒤에
-   * 나열한 폴백 스택(끝은 항상 generic sans-serif/serif)으로 떨어진다 —
-   * 한글처럼 두 서체 다 커버하지 않는 글립도 이 폴백으로 깨지지 않는다.
-   */
-  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --font-serif: var(--font-instrument-serif), Georgia, "Times New Roman", serif;
+  --color-bg: #f4f0e8;
+  --color-surface: #ebe4d8;
+  --color-surface-2: #dfd6c8;
+  --color-border: #a99e8f;
+  --color-border-strong: #24221d;
+  --color-text: #171611;
+  --color-text-dim: #4e4941;
+  --color-text-faint: #6f675d;
+  --color-positive: #155f4c;
+  --color-risk: #9a3525;
+  --color-watch: #865816;
+  --color-info: #254f5d;
+  --color-emerging: #765b78;
+  --font-sans: "Noto Sans KR", "Malgun Gothic", sans-serif;
+  --font-serif: "Noto Sans KR", "Malgun Gothic", sans-serif;
 }
 
-/* 숫자는 항상 자릿수가 정렬되어야 비교가 가능하다 — 다른 유틸리티에 덮이면
-   안 되므로 의도적으로 레이어 밖에 둔다. 숫자는 세리프를 쓰지 않으므로
-   본문과 같은 Geist Sans를 쓰되 tabular-nums만 강제한다(제3의 모노스페이스
-   서체를 새로 들이지 않는다). */
-.num {
-  font-variant-numeric: tabular-nums;
+* { box-sizing: border-box; }
+
+html {
+  background: #d9d2c6;
+  scroll-behavior: smooth;
+}
+
+body {
+  min-width: 320px;
+  margin: 0;
+  background: #d9d2c6;
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-weight: 400;
+  font-size: 16px;
+  letter-spacing: -0.018em;
+  line-height: 1.65;
+  -webkit-font-smoothing: auto;
+  text-rendering: optimizeLegibility;
+}
+
+.site-shell {
+  width: min(100%, 1480px);
+  min-height: 100vh;
+  margin: 0 auto;
+  background: var(--color-bg);
+  border-inline: 1px solid rgba(40, 39, 32, 0.16);
+}
+
+.site-header {
+  min-height: 120px;
+  margin-inline: clamp(1.25rem, 3.2vw, 3.25rem);
+  border-bottom: 1px solid var(--color-border-strong);
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 2.5rem;
+}
+
+.site-brand {
+  width: max-content;
+  color: inherit;
+  text-decoration: none;
+  line-height: 0.9;
+}
+
+.site-brand span {
+  display: block;
+  font-size: 0.86rem;
+  font-weight: 500;
+  letter-spacing: 0.19em;
+}
+
+.site-brand em {
+  display: block;
+  color: var(--color-risk);
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 1.95rem;
+  font-weight: 400;
+}
+
+.site-nav {
+  display: flex;
+  align-items: center;
+  gap: clamp(1.5rem, 3vw, 3rem);
+  color: var(--color-text);
+  font-size: 0.82rem;
+  font-weight: 500;
+}
+
+.site-nav a,
+.site-edition,
+.site-footer {
   font-family: var(--font-sans);
 }
 
-/*
- * Tailwind v4는 자기 유틸리티를 전부 @layer utilities 안에 넣는다. 레이어가
- * 없는(unlayered) CSS는 명시도(specificity)와 무관하게 항상 레이어가 있는
- * CSS를 이긴다 — 그래서 아래 규칙들이 레이어 밖에 있으면 th.text-right 같은
- * Tailwind 유틸리티가 절대 못 이긴다. @layer base로 감싸서 utilities 레이어보다
- * 낮은 우선순위를 갖게 한다.
- */
-@layer base {
-  html, body {
-    background: var(--color-bg);
-    color: var(--color-text);
-    font-family: var(--font-sans);
-  }
+.site-edition {
+  justify-self: end;
+  text-align: right;
+  line-height: 1.45;
+}
 
+.site-edition span {
+  display: block;
+  font-size: 0.7rem;
+  font-weight: 500;
+  letter-spacing: 0.15em;
+}
+
+.site-edition small {
+  display: block;
+  color: var(--color-text-faint);
+  font-size: 0.62rem;
+  letter-spacing: 0.1em;
+}
+
+.site-main {
+  padding: clamp(1.5rem, 3.2vw, 3.5rem) clamp(1.25rem, 3.8vw, 3.75rem) 4.5rem;
+}
+
+.site-footer {
+  margin-inline: clamp(1.25rem, 3.2vw, 3.25rem);
+  padding: 0.9rem 0 1.6rem;
+  border-top: 4px double var(--color-border-strong);
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  color: var(--color-text-faint);
+  font-size: 0.7rem;
+  letter-spacing: 0.02em;
+}
+
+.font-serif { font-family: var(--font-serif); }
+
+.num {
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+}
+
+.research-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  color: var(--color-text-dim);
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+}
+
+.editorial-kicker {
+  color: var(--color-risk);
+  font-family: var(--font-sans);
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.editorial-display {
+  font-family: var(--font-serif);
+  font-size: clamp(2.1rem, 3.85vw, 3.6rem);
+  font-weight: 500;
+  line-height: 1.24;
+  letter-spacing: -0.045em;
+  text-wrap: balance;
+  word-break: keep-all;
+}
+
+.editorial-deck {
+  max-width: 48rem;
+  color: var(--color-text-dim);
+  font-family: var(--font-sans);
+  font-size: clamp(0.92rem, 1.05vw, 1rem);
+  line-height: 1.8;
+  word-break: keep-all;
+}
+
+.editorial-rule {
+  border-top: 4px double var(--color-border-strong);
+}
+
+.editorial-section-heading {
+  padding-bottom: 0.7rem;
+  border-bottom: 1px solid var(--color-border-strong);
+}
+
+.editorial-section-heading h1,
+.editorial-section-heading h2 {
+  font-family: var(--font-serif);
+  font-weight: 500;
+  letter-spacing: -0.035em;
+}
+
+.paper-panel {
+  background: color-mix(in srgb, var(--color-surface) 58%, transparent);
+}
+
+.stock-report > section,
+.stock-report > div > section {
+  scroll-margin-top: 1.5rem;
+}
+
+.stock-report > section > h2,
+.stock-report > div > section > h2 {
+  margin-bottom: 1rem;
+  padding-bottom: 0.65rem;
+  border-bottom: 1px solid var(--color-border-strong);
+  color: var(--color-text);
+  font-family: var(--font-serif);
+  font-size: 1.28rem;
+  font-weight: 500;
+  letter-spacing: -0.035em;
+}
+
+.stock-report > section > h2::before,
+.stock-report > div > section > h2::before {
+  margin-right: 0.6rem;
+  color: var(--color-risk);
+  content: "◆";
+  font-family: Georgia, serif;
+  font-size: 0.5rem;
+  vertical-align: 0.2rem;
+}
+
+@layer base {
   table { border-collapse: collapse; }
 
-  /*
-   * 헤더는 값보다 작고, 살짝 더 넓게 트래킹하고, 더 흐린 색이어야 눈이
-   * "이건 라벨이지 값이 아니다"를 즉시 구분한다 — 그 대비 자체가 컬럼에
-   * 시선을 고정시키는 장치다. 자간은 영문 헤더(Market Cap 등)에서는
-   * 또렷해지지만 한글 헤더("후보", "매출성장 중앙값" 등)에서도 읽기를
-   * 해치지 않을 만큼 작은 값(0.02em)으로 눌러뒀다 — 두 스크립트가 같은
-   * 헤더 행에 섞여 나오므로 한쪽만 고려할 수 없다.
-   */
   th {
-    font-weight: 500;
-    font-size: 0.6875rem;
-    line-height: 1.4;
-    letter-spacing: 0.02em;
     color: var(--color-text-faint);
+    font-family: var(--font-sans);
+    font-size: 0.7rem;
+    font-weight: 500;
+    letter-spacing: 0.025em;
     text-align: left;
+    text-transform: uppercase;
   }
 
-  /* 행 높이는 "느슨하게"가 아니라 "정교하게" 줄인다 — 세로 패딩만
-     0.5rem → 0.375rem으로 다듬고 가로 패딩은 그대로 둔다(칼럼 사이 여백은
-     구분선 역할을 해 밀도와 무관하다). */
-  th, td { padding: 0.375rem 0.75rem; border-bottom: 1px solid var(--color-border); }
-  tbody tr:hover { background: var(--color-surface-2); }
+  th, td {
+    padding: 0.72rem 0.8rem;
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  thead { border-top: 1px solid var(--color-border-strong); }
+  tbody tr { transition: background-color 140ms ease; }
+  tbody tr:hover { background: rgba(159, 62, 44, 0.055); }
+
   a { color: inherit; text-decoration: none; }
-  a:hover { text-decoration: underline; }
+  a:hover { color: var(--color-risk); }
+  a:focus-visible { outline: 2px solid var(--color-risk); outline-offset: 3px; }
+}
+
+::selection { background: rgba(159, 62, 44, 0.18); }
+
+@media (max-width: 760px) {
+  .site-header {
+    min-height: 96px;
+    grid-template-columns: 1fr auto;
+  }
+
+  .site-nav { display: none; }
+  .site-edition small { display: none; }
+  .site-brand span { font-size: 0.74rem; }
+  .site-brand em { font-size: 1.65rem; }
+  .site-footer { flex-direction: column; }
+  .research-meta { flex-direction: column; gap: 0.2rem; }
+  th, td { padding: 0.55rem 0.65rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  tbody tr { transition: none; }
 }

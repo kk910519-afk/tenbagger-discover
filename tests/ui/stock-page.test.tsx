@@ -196,8 +196,13 @@ describe('StockPage — Overview에 회사 정보(CompanyFacts) 블록이 있다
  * 않아야 "현금만 유도됐는데 매출도 유도된 것처럼" 보이는 일이 없다.
  */
 describe('StockPage — Finding 1: TTM 유도 필드는 그 필드에만 안내가 붙는다', () => {
+  // 값 그리드(MetricGrid)로 범위를 좁힌다. 같은 페이지의 범례(Legend)도 같은 라벨을
+  // dt로 쓰기 때문에, 범위를 좁히지 않으면 범례의 설명문을 값 칸으로 착각해 "안내가
+  // 붙지 않는다" 쪽 단언이 언제나 통과해버린다.
   function ddOf(container: HTMLElement, label: string): HTMLElement {
-    const dt = Array.from(container.querySelectorAll('dt')).find((el) => el.textContent === label)!
+    const dt = Array.from(container.querySelectorAll('[data-metric-grid] dt')).find(
+      (el) => el.textContent === label,
+    )!
     return dt.nextElementSibling as HTMLElement
   }
 
