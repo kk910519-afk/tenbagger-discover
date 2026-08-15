@@ -71,9 +71,12 @@ if (process.env.NEXT_PUBLIC_BASE_PATH === undefined) {
 const snapshot = new Date().toISOString().slice(0, 10)
 console.log(`스냅샷 기준일: ${snapshot}\n`)
 
-const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
-execFileSync(npm, ['run', 'build'], {
+// Windows에서 npm은 npm.cmd이고, Node 18.20/20.12의 보안 수정 이후 execFile은
+// shell 없이 .cmd를 띄우지 못한다(EINVAL). 인자는 전부 이 파일의 상수라 shell을
+// 켜도 주입 위험이 없다.
+execFileSync('npm', ['run', 'build'], {
   stdio: 'inherit',
+  shell: process.platform === 'win32',
   env: {
     ...process.env,
     NEXT_PUBLIC_BASE_PATH: basePath,
