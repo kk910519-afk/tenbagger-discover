@@ -114,6 +114,39 @@ body {
   letter-spacing: 0.1em;
 }
 
+/* 헤더와 본문 사이의 기준일 띠. 어느 페이지로 들어오든 본문 위에 한 줄로 지나간다. */
+.site-asof {
+  margin-inline: clamp(1.25rem, 3.2vw, 3.25rem);
+  padding: 0.6rem 0;
+  border-bottom: 1px solid var(--color-border);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.35rem 1.5rem;
+  font-family: var(--font-sans);
+  font-size: 0.72rem;
+}
+
+.site-asof-note {
+  margin: 0;
+  color: var(--color-text-dim);
+  font-weight: 500;
+}
+
+.site-asof-note time {
+  color: var(--color-risk);
+}
+
+.site-asof-axes {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.75rem;
+  margin: 0;
+  color: var(--color-text-faint);
+}
+
 .site-main {
   padding: clamp(1.5rem, 3.2vw, 3.5rem) clamp(1.25rem, 3.8vw, 3.75rem) 4.5rem;
 }

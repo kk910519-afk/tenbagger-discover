@@ -3,6 +3,7 @@ import { formatUsd, formatPct, formatScore } from '../_lib/format'
 import { Value, SignedValue } from './Value'
 import { Badge } from './Badge'
 import { Tooltip } from './Tooltip'
+import { industryAllPath, stockPath } from '../_lib/paths'
 
 const PREVIEW_COUNT = 10
 
@@ -77,7 +78,7 @@ export function CandidateTable({
             {visible.map((r) => (
               <tr key={r.cik}>
                 <td className="text-center">
-                  <a href={`/stock/${r.ticker}`} className="font-medium">
+                  <a href={stockPath(r.ticker)} className="font-medium">
                     {r.ticker}
                   </a>
                 </td>
@@ -108,7 +109,7 @@ export function CandidateTable({
 
       {!showAll && rows.length > PREVIEW_COUNT && (
         <a
-          href={`/industry/${industrySlug}?all=1`}
+          href={industryAllPath(industrySlug)}
           className="mt-3 inline-block border-b border-[var(--color-risk)] pb-0.5 text-xs text-[var(--color-risk)]"
         >
           View All Candidates ({rows.length})

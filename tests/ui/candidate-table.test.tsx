@@ -51,7 +51,9 @@ describe('CandidateTable — 미리보기/View All', () => {
     const { container } = render(
       <CandidateTable rows={rows} showAll={false} industrySlug="semiconductors" insufficientBelow={0.6} />,
     )
-    const link = container.querySelector('a[href$="?all=1"]')
+    // 쿼리스트링(?all=1)이던 상태가 정적 내보내기에서 경로(/all/)로 승격됐다.
+    const link = container.querySelector('a[href$="/all/"]')
+    expect(link?.getAttribute('href')).toBe('/industry/semiconductors/all/')
     expect(link?.textContent).toBe('View All Candidates (11)')
     expect(link?.textContent).not.toContain('(10)')
     // 미리보기 자체는 10개로 잘려 있어야 한다
@@ -63,7 +65,7 @@ describe('CandidateTable — 미리보기/View All', () => {
     const { container } = render(
       <CandidateTable rows={rows} showAll={false} industrySlug="semiconductors" insufficientBelow={0.6} />,
     )
-    expect(container.querySelector('a[href$="?all=1"]')).toBeNull()
+    expect(container.querySelector('a[href$="/all/"]')).toBeNull()
     expect(container.textContent).not.toContain('View All')
   })
 })

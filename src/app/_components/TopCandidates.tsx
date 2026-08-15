@@ -1,6 +1,7 @@
 import type { TopCandidate } from '../_queries/top-candidates'
 import { formatScore } from '../_lib/format'
 import { Badge } from './Badge'
+import { industryPath, stockPath } from '../_lib/paths'
 
 /**
  * 테마·산업을 드릴다운하기 전, 유니버스 전체에서 가장 점수가 높은 5곳을 즉시 보여준다.
@@ -27,13 +28,13 @@ export function TopCandidates({ candidates }: { candidates: TopCandidate[] }) {
             <tr key={c.cik}>
               <td className="num text-center text-xs text-[var(--color-risk)]">{String(idx + 1).padStart(2, '0')}</td>
               <td className="text-center">
-                <a href={`/stock/${c.ticker}`} className="inline-flex items-baseline justify-center gap-2">
+                <a href={stockPath(c.ticker)} className="inline-flex items-baseline justify-center gap-2">
                   <span className="font-medium">{c.ticker}</span>
                   <span className="text-[0.92rem] font-medium text-[var(--color-text-dim)]">{c.name}</span>
                 </a>
               </td>
               <td className="text-center text-xs">
-                <a href={`/industry/${c.industrySlug}`} className="text-[var(--color-text-dim)]">
+                <a href={industryPath(c.industrySlug)} className="text-[var(--color-text-dim)]">
                   {c.industryName}
                 </a>
               </td>

@@ -2,6 +2,9 @@ import { notFound } from 'next/navigation'
 import { getRawDb } from '@/db/client'
 import { loadConfig } from '@/config'
 import { getStockDetail, type StockDetail } from '@/app/_queries/stock'
+import { getAllStockTickers } from '@/app/_queries/static-params'
+import { snapshotDate } from '@/app/_lib/snapshot'
+import { industryPath } from '@/app/_lib/paths'
 import { formatUsd, formatPct, formatScore, formatDate, stalenessOf } from '@/app/_lib/format'
 import { Value, SignedValue, DerivedNote } from '@/app/_components/Value'
 import { Badge, CategoryBadge } from '@/app/_components/Badge'
@@ -13,7 +16,22 @@ import { Legend, type LegendItem } from '@/app/_components/Legend'
 import { PageHeading } from '@/app/_components/PageHeading'
 import { industryBlurb } from '@/app/_lib/industry-blurbs'
 
-export const dynamic = 'force-dynamic'
+/**
+ * 빌드 시점에 **분류된 모든 회사**의 페이지를 만든다 — 완전성 게이트를 통과한 회사만이
+ * 아니다. 산업 표는 INSUFFICIENT/미평가 그룹까지 링크를 걸기 때문에, 게이트로 목록을
+ * 좁히면 표에는 보이는데 열리지 않는 링크가 생긴다. 404가 나는 링크는 "데이터가
+ * 부족하다"고 말해 주는 페이지보다 나쁘다.
+ */
+export const dynamicParams = false
+
+export function generateStaticParams(): { ticker: string }[] {
+  const raw = getRawDb()
+  try {
+    return getAllStockTickers(raw).map((ticker) => ({ ticker }))
+  } finally {
+    raw.close()
+  }
+}
 
 /** Overview는 헤드라인 수치 자체에 이미 면책·근사치 문구가 붙어 있어 범례를 겹치지 않는다. */
 const GROWTH_LEGEND: LegendItem[] = [
@@ -36,7 +54,9 @@ export default async function StockPage({
   params: Promise<{ ticker: string }>
 }) {
   const { ticker } = await params
-  const asOf = new Date().toISOString().slice(0, 10)
+  // 정적 사이트의 "오늘"은 빌드일이다. Data Freshness의 신선도 판정도 이 기준으로 내려간다 —
+  // 자세한 근거는 DataAsOf의 주석 참조.
+  const asOf = snapshotDate()
   const cfg = loadConfig()
   const raw = getRawDb()
   let d: StockDetail | null
@@ -63,7 +83,7 @@ export default async function StockPage({
         <PageHeading note={industryBlurb(d.industrySlug)}>
           <div>
           <p className="editorial-kicker">
-            Stock research · <a href={`/industry/${d.industrySlug}`}>{d.industryName}</a>
+            Stock research · <a href={industryPath(d.industrySlug)}>{d.industryName}</a>
             {d.classificationSource === 'sic' && (
               <span className="ml-2 text-[var(--color-text-faint)]">
                 (SIC 기본 분류 — 수동 교정 없음)
@@ -75,7 +95,7 @@ export default async function StockPage({
             <span className="text-2xl font-medium text-[var(--color-text-dim)]">{d.name}</span>
             <CategoryBadge category={d.category} />
           </h1>
-          <a href={`/industry/${d.industrySlug}`} className="mt-4 inline-block text-xs text-[var(--color-text-faint)]">← {d.industryName} 산업으로 돌아가기</a>
+          <a href={industryPath(d.industrySlug)} className="mt-4 inline-block text-xs text-[var(--color-text-faint)]">← {d.industryName} 산업으로 돌아가기</a>
           </div>
         </PageHeading>
       </header>

@@ -7,8 +7,8 @@ import { Value, SignedValue } from './_components/Value'
 import { Badge } from './_components/Badge'
 import { TopCandidates } from './_components/TopCandidates'
 import { Legend, type LegendItem } from './_components/Legend'
-
-export const dynamic = 'force-dynamic'
+import { industryPath, stockPath } from './_lib/paths'
+import { snapshotDate, formatKoreanDate } from './_lib/snapshot'
 
 const MAP_LEGEND: LegendItem[] = [
   { label: '산업', help: '테마 아래의 세부 산업입니다. 선택하면 후보 기업을 비교할 수 있습니다.' },
@@ -45,9 +45,9 @@ export default function Home() {
     .filter((industry) => industry.medianRevenueGrowth !== null)
     .sort((a, b) => (b.medianRevenueGrowth ?? 0) - (a.medianRevenueGrowth ?? 0))[0] ?? null
   const lead = topCandidates[0] ?? null
-  const issueDate = new Intl.DateTimeFormat('ko-KR', {
-    year: 'numeric', month: 'long', day: 'numeric', timeZone: 'Asia/Seoul',
-  }).format(new Date())
+  // 발행일은 "지금"이 아니라 스냅샷 기준일이다 — 정적 사이트에서 이 노트가 실제로
+  // 쓰인 시점은 빌드일이고, 헤더의 데이터 기준 표시와 같은 날짜여야 한다.
+  const issueDate = formatKoreanDate(snapshotDate())
 
   if (total === 0) {
     return (
@@ -84,7 +84,7 @@ export default function Home() {
         {lead && (
           <aside className="border-l border-[var(--color-border-strong)] pl-6">
             <p className="editorial-kicker">TOP IDEA · 최우선 분석 후보</p>
-            <a href={`/stock/${lead.ticker}`} className="mt-4 block">
+            <a href={stockPath(lead.ticker)} className="mt-4 block">
               <strong className="font-serif text-4xl font-normal tracking-tight">{lead.ticker}</strong>
               <span className="mt-2 block text-base font-medium text-[var(--color-text-dim)]">{lead.name}</span>
             </a>
@@ -93,7 +93,7 @@ export default function Home() {
               <span className="pb-1 text-xs">/ 100</span>
             </div>
             <p className="mt-4 text-[0.95rem] leading-7 text-[var(--color-text-dim)]">{lead.rationale}</p>
-            <a href={`/industry/${lead.industrySlug}`} className="mt-6 block text-xs font-medium tracking-[0.1em] text-[var(--color-text-faint)] uppercase">
+            <a href={industryPath(lead.industrySlug)} className="mt-6 block text-xs font-medium tracking-[0.1em] text-[var(--color-text-faint)] uppercase">
               {lead.industryName}
             </a>
           </aside>
@@ -236,14 +236,14 @@ function ThemeSection({
 function IndustryRowView({ row }: { row: IndustryRow }) {
   return (
     <tr>
-      <td className="text-center"><a href={`/industry/${row.slug}`} className="font-serif text-[0.92rem]">{row.name}</a></td>
+      <td className="text-center"><a href={industryPath(row.slug)} className="font-serif text-[0.92rem]">{row.name}</a></td>
       <td className="text-center"><Value dim>{row.candidateCount}</Value></td>
       <td className="text-center"><SignedValue value={row.medianRevenueGrowth} text={formatPct(row.medianRevenueGrowth)} /></td>
       <td className="text-center"><Value dim>{formatUsd(row.medianMarketCap)}</Value></td>
       <td className="text-center font-medium"><Value>{formatScore(row.avgTenbagger)}</Value></td>
       <td className="text-center">
         {row.topCandidate ? (
-          <a href={`/stock/${row.topCandidate.ticker}`} className="inline-flex items-baseline gap-2">
+          <a href={stockPath(row.topCandidate.ticker)} className="inline-flex items-baseline gap-2">
             <span className="font-medium">{row.topCandidate.ticker}</span>
             <Value dim>{formatScore(row.topCandidate.tenbagger)}</Value>
           </a>

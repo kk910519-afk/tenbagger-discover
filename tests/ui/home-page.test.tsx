@@ -110,13 +110,13 @@ describe('Home — Top 5 헤드라인 블록', () => {
     expect(container.textContent).toContain('Acme Corp')
     expect(container.textContent).toContain('91')
     expect(container.textContent).toContain('TTM 매출 +40.0%')
-    const industryLink = container.querySelector('a[href="/industry/semiconductors"]')
+    const industryLink = container.querySelector('a[href="/industry/semiconductors/"]')
     expect(industryLink).not.toBeNull()
   })
 
   it('종목 상세 페이지로 링크된다', () => {
     const { container } = render(Home())
-    const link = container.querySelector('a[href="/stock/ACME"]')
+    const link = container.querySelector('a[href="/stock/ACME/"]')
     expect(link).not.toBeNull()
   })
 
