@@ -10,6 +10,14 @@
 # 만들어진다. 그래서 잔여 SIC는 **매핑하지 않는 것이 기본값**이고, 아래 residual_reviewed에
 # 실제 등록기업(filer) 증거와 함께 명시된 코드만 예외로 매핑을 유지한다.
 # 자세한 근거와 코드별 판정은 sic-residual-report.md 참고.
+#
+# 같은 날 이 규칙을 10개 코드에 한꺼번에 적용했다가(unmapped) 유니버스가 1,201 →
+# 1,104로 줄고 GOOGL·META·DASH·AKAM·FISV를 포함한 97개사가 이탈해 산업 11개가 후보
+# 3개 미만으로 떨어지는 것을 확인하고, 3577만 남기고 나머지 9개를 map으로 되돌렸다.
+# "3577"은 등록기업 구성이 실제로 여러 업종에 흩어져 있어(unmapped 목록에 근거 있음)
+# 그대로 두지만, 나머지 9개는 산업 순도보다 유니버스 폭을 우선한 제품 결정으로
+# residual_reviewed 하단 "폭 우선(breadth-over-purity)" 절에 근거와 함께 복원했다.
+# 자세한 측정은 sic-residual-narrowing-report.md 참고.
 map:
   # AI / Software / Semiconductor
   "3674": { theme: ai-software-semi, industry: semiconductors }
@@ -18,9 +26,11 @@ map:
   "3559": { theme: ai-software-semi, industry: semiconductor-equipment }
   "3827": { theme: ai-software-semi, industry: semiconductor-equipment }
   "7372": { theme: ai-software-semi, industry: software-application }
+  "7370": { theme: ai-software-semi, industry: software-infrastructure }  # 2026-08-15 복원: residual_reviewed 참고
   "7371": { theme: ai-software-semi, industry: software-infrastructure }
   "7373": { theme: ai-software-semi, industry: software-infrastructure }
   "7374": { theme: ai-software-semi, industry: cloud-computing }
+  "3570": { theme: ai-software-semi, industry: data-center-infrastructure }  # 2026-08-15 복원: residual_reviewed 참고
   "3571": { theme: ai-software-semi, industry: data-center-infrastructure }
   "3572": { theme: ai-software-semi, industry: data-infrastructure }
   "3576": { theme: ai-software-semi, industry: networking }
@@ -40,6 +50,7 @@ map:
   "3843": { theme: healthcare-biotech, industry: medical-devices }
   "3844": { theme: healthcare-biotech, industry: medical-devices }
   "3845": { theme: healthcare-biotech, industry: medical-devices }
+  "8090": { theme: healthcare-biotech, industry: healthcare-technology }  # 2026-08-15 복원: residual_reviewed 참고
   # Industrial / Automation / Defense
   "3812": { theme: industrial-automation-defense, industry: defense-technology }
   "3760": { theme: industrial-automation-defense, industry: defense-technology }
@@ -47,6 +58,7 @@ map:
   "3721": { theme: industrial-automation-defense, industry: aerospace }
   "3724": { theme: industrial-automation-defense, industry: aerospace }
   "3728": { theme: industrial-automation-defense, industry: aerospace }
+  "3550": { theme: industrial-automation-defense, industry: industrial-automation }  # 2026-08-15 복원: residual_reviewed 참고
   "3561": { theme: industrial-automation-defense, industry: industrial-automation }
   "3823": { theme: industrial-automation-defense, industry: industrial-automation }
   "3829": { theme: industrial-automation-defense, industry: industrial-automation }
@@ -89,9 +101,13 @@ map:
   # (https://www.sec.gov/search-filings/standard-industrial-classification-sic-code-list),
   # 페이지에 없는 5개 코드(3564/3600/5172/6200/7330)는 data.sec.gov submissions API의
   # sicDescription으로 보완 — 자세한 내용은 sic-expansion-report.md 참고.
+  "1400": { theme: emerging-tech, industry: advanced-materials }  # MINING & QUARRYING OF NONMETALLIC MINERALS (NO FUELS) -- 2026-08-15 복원: residual_reviewed 참고
+  "2800": { theme: emerging-tech, industry: advanced-materials }  # CHEMICALS & ALLIED PRODUCTS -- 2026-08-15 복원: residual_reviewed 참고
   "2890": { theme: emerging-tech, industry: advanced-materials }  # MISCELLANEOUS CHEMICAL PRODUCTS
   "3510": { theme: energy-next, industry: grid-infrastructure }  # ENGINES & TURBINES
   "3560": { theme: industrial-automation-defense, industry: industrial-automation }  # GENERAL INDUSTRIAL MACHINERY & EQUIPMENT
+  "3569": { theme: industrial-automation-defense, industry: robotics }  # GENERAL INDUSTRIAL MACHINERY & EQUIPMENT, NEC -- 2026-08-15 복원: residual_reviewed 참고
+  "3590": { theme: energy-next, industry: next-generation-energy }  # MISC INDUSTRIAL & COMMERCIAL MACHINERY & EQUIPMENT -- 2026-08-15 복원: residual_reviewed 참고
   "3613": { theme: energy-next, industry: grid-infrastructure }  # SWITCHGEAR & SWITCHBOARD APPARATUS
   "3620": { theme: energy-next, industry: next-generation-energy }  # ELECTRICAL INDUSTRIAL APPARATUS
   "3670": { theme: ai-software-semi, industry: semiconductors }  # ELECTRONIC COMPONENTS & ACCESSORIES
@@ -104,6 +120,7 @@ map:
   "4899": { theme: emerging-tech, industry: satellite }  # COMMUNICATIONS SERVICES, NEC
   "4900": { theme: energy-next, industry: grid-infrastructure }  # ELECTRIC, GAS & SANITARY SERVICES
   "7310": { theme: digital-consumer-fintech, industry: digital-advertising }  # SERVICES-ADVERTISING
+  "7389": { theme: ai-software-semi, industry: software-application }  # SERVICES-BUSINESS SERVICES, NEC -- 2026-08-15 복원: residual_reviewed 참고
   "8734": { theme: healthcare-biotech, industry: diagnostics }  # SERVICES-TESTING LABORATORIES
 
 # 유니버스에 나타나지만 의도적으로 제외하는 SIC.
@@ -325,34 +342,23 @@ unmapped:
   - "8742"   # SERVICES-MANAGEMENT CONSULTING SERVICES -- management consulting services
 
   # --- 2026-08-15 잔여(residual) SIC 제외 (판정 근거는 sic-residual-report.md) ---
-  # 아래 코드들은 SEC 설명이 "그 그룹의 나머지 전부"를 뜻하거나(NEC/Miscellaneous/…, Etc.)
-  # 2자리 대분류 헤더(xx00)여서 업종을 특정하지 못하는데, 실제 등록기업 구성을 보면
-  # 매핑되어 있던 산업과 다른 업종의 **군집**이 존재한다. 즉 그 산업의 중앙값을
-  # 오염시키고 있었다. 잔여 코드의 정직한 기본값대로 매핑을 제거한다 —
-  # 여기 속한 회사는 유니버스에서 빠지고, 개별 근거가 있는 경우에만
-  # company-overrides.yaml로 복귀한다.
-  - "3577"   # COMPUTER PERIPHERAL EQUIPMENT, NEC -- 프린터(XRX/ALOT/TACT) 군집 · 소프트웨어(MITK) ·
-             #   햅틱 IP(IMMR) · RFID(INVE) 등이 섞여 data-center-infrastructure와 무관
-  - "3570"   # COMPUTER & OFFICE EQUIPMENT -- 357 그룹 헤더. 이 taxonomy가 357을 이미
-             #   dci/data-infrastructure/networking 셋으로 쪼개 놓았으므로 헤더가 가리킬 산업이 없다
-  - "3550"   # SPECIAL INDUSTRY MACHINERY -- 355 그룹 헤더. 355를 industrial-automation/
-             #   advanced-manufacturing/semiconductor-equipment로 쪼개 놓았으므로 동일
-  - "7370"   # SERVICES-COMPUTER PROGRAMMING, DATA PROCESSING, ETC. -- 737 그룹 헤더.
-             #   광고 플랫폼(GOOGL/META/TTD/PUBM/MGNI/TBLA/TEAD/CDLX/APP) 군집이
-             #   software-infrastructure를 지배 · 여행(TRIP/SABR) · 우주(SPCX)까지 혼재
-  - "7389"   # SERVICES-BUSINESS SERVICES, NEC -- 결제(FISV/PYPL/PAYO/PAYS/PRTH/RPAY/IMXI/
-             #   SEZL/FLYW) 군집 · 배달/마켓플레이스(DASH/CART/ZG) · 항공소방(BAER) ·
-             #   병원(NUTX) · SPAC까지 섞여 software-application과 무관
-  - "3569"   # GENERAL INDUSTRIAL MACHINERY & EQUIPMENT, NEC -- 로보틱스(SYM/SERV)와
-             #   전통 산업기계(NDSN/TAYD) 군집이 반반, SPAC 2개 포함 · robotics를 특정 못 함
-  - "8090"   # SERVICES-MISC HEALTH & ALLIED SERVICES, NEC -- 난임 복리후생(PGNY) ·
-             #   멸균 서비스(SHC) · 치과 네트워크(PARK) 셋 다 healthcare-technology가 아니다
-  - "3590"   # MISC INDUSTRIAL & COMMERCIAL MACHINERY & EQUIPMENT -- 유일 등록기업이
-             #   무인 리테일 매장(VHUB)으로 next-generation-energy와 무관
-  - "1400"   # MINING & QUARRYING OF NONMETALLIC MINERALS (NO FUELS) -- 대분류 헤더.
-             #   프랙 샌드(SND)·석회(USLM) 상품 광업 군집이 advanced-materials를 오염
-  - "2800"   # CHEMICALS & ALLIED PRODUCTS -- 대분류 헤더(283x 제약까지 포함하는 범위).
-             #   식품첨가물(BCPC)·연료첨가제(IOSP)·범용화학(ACNT) 군집이 advanced-materials와 무관
+  # 아래 코드는 SEC 설명이 "그 그룹의 나머지 전부"를 뜻하고(NEC), 실제 등록기업 구성을
+  # 보면 매핑되어 있던 산업과 다른 업종의 **군집**이 여럿 존재해 어느 하나로도 수렴하지
+  # 않는다 — 프린터(XRX/ALOT/TACT) · 소프트웨어(MITK) · 햅틱 IP(IMMR) · RFID(INVE) ·
+  # 보안검색(EVLV) · 센서(LINK) · VR(VTIX) 등. 잔여 코드의 정직한 기본값대로 매핑을
+  # 제거한다 — 여기 속한 회사는 유니버스에서 빠지고, 개별 근거가 있는 경우에만
+  # company-overrides.yaml로 복귀한다(CRSR·MITK는 이미 복귀했다 — 아래 참고).
+  #
+  # 나머지 잔여 코드 9개(3570·3550·7370·7389·3569·8090·3590·1400·2800)는
+  # 2026-08-15에 한 번 여기로 내려갔다가 같은 날 다시 map으로 복원됐다 — 아래
+  # sic-residual-narrowing-report.md 참고. "코드가 범위를 가리킨다"는 원 판정 자체는
+  # 맞았지만, 그 정직한 결론(unmapped)의 대가가 GOOGL·META·DASH·AKAM·FISV를 포함한
+  # 97개사 이탈과 산업 11개의 중앙값 붕괴였다 — 벤치마크 순도보다 유니버스 폭을
+  # 우선하기로 제품 결정을 내려 되돌렸다. 근거와 대가는 residual_reviewed 하단
+  # "폭 우선(breadth-over-purity)" 절에 적는다.
+  - "3577"   # COMPUTER PERIPHERAL EQUIPMENT, NEC -- 프린터 3개(XRX/ALOT/TACT) · 소프트웨어(MITK) ·
+             #   햅틱 IP(IMMR) · RFID(INVE) · 보안검색(EVLV) · 센서(LINK) · VR(VTIX) 등 12개 등록기업이
+             #   서로 다른 업종에 흩어져 있어 어떤 단일 산업으로도 수렴하지 않는다(data-center-infrastructure와 무관)
 
 # 잔여(residual) 형태이지만 **등록기업 증거**로 매핑을 정당화해 map에 남긴 SIC.
 # 규칙: 해당 코드를 실제로 달고 있는 유니버스 등록기업이 매핑 산업으로 수렴하고,
@@ -388,3 +394,39 @@ residual_reviewed:
   - "7990"   # SERVICES-MISCELLANEOUS AMUSEMENT & RECREATION → gaming. 등록기업 2개 중
              #   DKNG가 스포츠 베팅, 이탈은 FBYD 1개
   - "7999"   # SERVICES-AMUSEMENT & RECREATION SERVICES → gaming. 7990과 같은 799 그룹·같은 산업
+
+  # --- 2026-08-15 폭 우선(breadth-over-purity) 재검토 ---
+  # 위 항목들과 판정 기준이 다르다: 위는 "등록기업이 매핑 산업으로 수렴한다"는 근거로
+  # 남긴 것이고, 아래 9개는 실제로 수렴하지 않는다는 것을 이미 확인했다(sic-residual-report.md
+  # §2-1) — 광고 플랫폼·결제·여행·상품 광업·범용 화학 등 여러 업종의 군집이 섞여 있다.
+  # 그런데도 map에 되돌린 것은 제품 결정이다: unmapped 처리의 대가가 GOOGL·META·DASH·
+  # AKAM·FISV를 포함한 97개사 이탈과 산업 11개가 후보 3개 미만(median 계산 불가)으로
+  # 떨어지는 것이었다 — discovery 대시보드가 Alphabet을 보여주지 못하는 상태가, 거친
+  # 벤치마크 아래 회사가 보이는 상태보다 나쁘다고 판단했다. 즉 산업 중앙값이 이 코드의
+  # 지배적 하위군(예: 7370의 광고 플랫폼, 7389의 결제)에 의해 좌우된다는 오염은 그대로
+  # 남아 있고, 알려진 채 받아들인 트레드오프다 — 후속으로 개별 10-K 근거를 갖춘
+  # company-overrides.yaml 오버라이드로 코호트를 좁히는 작업이 남아 있다
+  # (sic-residual-report.md §6, 81개 명단). 자세한 대가 측정은
+  # sic-residual-narrowing-report.md 참고.
+  - "3570"   # COMPUTER & OFFICE EQUIPMENT → data-center-infrastructure. 357 그룹 헤더(등록기업 0개,
+             #   비용 없음) — 3577이 유죄인 것과 같은 이유로 걸리지만 filer가 없어 대가도 없다
+  - "3550"   # SPECIAL INDUSTRY MACHINERY → industrial-automation. 355 그룹 헤더(등록기업 0개, 비용 없음)
+  - "7370"   # SERVICES-COMPUTER PROGRAMMING, DATA PROCESSING, ETC. → software-infrastructure.
+             #   광고 플랫폼 9개(GOOGL/META/TTD/PUBM/MGNI/TBLA/TEAD/CDLX/APP) 군집이 지배 +
+             #   여행(TRIP/SABR)·우주(SPCX) — GOOGL·META를 잃지 않기 위해 복원, 오염은 남는다
+  - "7389"   # SERVICES-BUSINESS SERVICES, NEC → software-application. 결제 9개(FISV/PYPL/PAYO/
+             #   PAYS/PRTH/RPAY/IMXI/SEZL/FLYW) 군집 + 배달/마켓플레이스(DASH/CART/ZG) —
+             #   FISV·DASH·AKAM을 잃지 않기 위해 복원, 오염은 남는다
+  - "3569"   # GENERAL INDUSTRIAL MACHINERY & EQUIPMENT, NEC → robotics. 전통 산업기계 2개
+             #   (NDSN/TAYD)와 로보틱스 2개(SYM/SERV)가 동률 — robotics 후보수를 지키기 위해 복원
+  - "8090"   # SERVICES-MISC HEALTH & ALLIED SERVICES, NEC → healthcare-technology. 헬스케어
+             #   서비스 3개(PGNY 복리후생·SHC 멸균·PARK 치과) — healthcare-technology 소속 0개지만
+             #   후보 3개 미만으로 떨어지는 산업을 줄이기 위해 복원
+  - "3590"   # MISC INDUSTRIAL & COMMERCIAL MACHINERY & EQUIPMENT → next-generation-energy.
+             #   유일 등록기업 VHUB(무인 리테일 매장)가 소속과 무관 — 대가는 회사 1개뿐이라 복원
+  - "1400"   # MINING & QUARRYING OF NONMETALLIC MINERALS (NO FUELS) → advanced-materials.
+             #   대분류 헤더 + 상품 광업 군집(SND 프랙샌드·USLM 석회) 40% — advanced-materials
+             #   후보수를 지키기 위해 복원, 오염은 남는다
+  - "2800"   # CHEMICALS & ALLIED PRODUCTS → advanced-materials. 대분류 헤더 + 범용/특수화학
+             #   군집(BCPC·IOSP·ACNT) 75% — advanced-materials 후보수를 지키기 위해 복원,
+             #   오염은 남는다

@@ -119,12 +119,40 @@ describe('residual_reviewed', () => {
     }
   })
 
-  it('defect가 된 잔여 SIC는 map에서 제거되어 유니버스에서 빠진다', () => {
-    // 3577(Computer Peripheral Equipment, NEC)이 이 작업의 출발점이 된 결함이다.
-    for (const sic of ['3577', '3570', '3550', '7370', '7389', '3569', '8090', '3590', '1400', '2800']) {
-      expect(tx.mappedSics.has(sic), `${sic}이 아직 map에 있다`).toBe(false)
-      expect(tx.unmappedSics.has(sic), `${sic}이 unmapped에 선언되어 있지 않다`).toBe(true)
-      expect(tx.classify(sic, 'NOOVERRIDETICKER')).toBeNull()
+  it('defect가 된 잔여 SIC(3577)만 map에서 제거되어 유니버스에서 빠진다', () => {
+    // 3577(Computer Peripheral Equipment, NEC)이 이 작업의 출발점이 된 결함이다 —
+    // 등록기업이 여러 업종에 흩어져 있어 어느 하나로도 수렴하지 않는다. 이건 그대로 unmapped다.
+    expect(tx.mappedSics.has('3577'), '3577이 아직 map에 있다').toBe(false)
+    expect(tx.unmappedSics.has('3577'), '3577이 unmapped에 선언되어 있지 않다').toBe(true)
+    expect(tx.classify('3577', 'NOOVERRIDETICKER')).toBeNull()
+  })
+
+  it('폭 우선(breadth-over-purity)으로 복원한 9개 잔여 SIC는 map으로 되돌아왔다', () => {
+    // 같은 결함 판정을 10개 코드에 한꺼번에 적용했다가(2026-08-15 최초 커밋) 유니버스가
+    // 1,201 → 1,104로 줄고 GOOGL·META를 포함한 97개사가 이탈하는 것을 확인한 뒤,
+    // 3577만 남기고 나머지 9개는 map으로 되돌렸다 — 산업 순도보다 유니버스 폭을
+    // 우선한 제품 결정이다(sic-map.yaml의 "폭 우선" 절, sic-residual-narrowing-report.md 참고).
+    const restored: Record<string, { theme: string; industry: string }> = {
+      '7370': { theme: 'ai-software-semi', industry: 'software-infrastructure' },
+      '3570': { theme: 'ai-software-semi', industry: 'data-center-infrastructure' },
+      '8090': { theme: 'healthcare-biotech', industry: 'healthcare-technology' },
+      '3550': { theme: 'industrial-automation-defense', industry: 'industrial-automation' },
+      '3569': { theme: 'industrial-automation-defense', industry: 'robotics' },
+      '3590': { theme: 'energy-next', industry: 'next-generation-energy' },
+      '1400': { theme: 'emerging-tech', industry: 'advanced-materials' },
+      '2800': { theme: 'emerging-tech', industry: 'advanced-materials' },
+      '7389': { theme: 'ai-software-semi', industry: 'software-application' },
+    }
+    for (const [sic, expected] of Object.entries(restored)) {
+      expect(tx.mappedSics.has(sic), `${sic}이 map에 없다`).toBe(true)
+      expect(tx.unmappedSics.has(sic), `${sic}이 아직 unmapped에 있다`).toBe(false)
+      // 복원한 코드는 전부 residual_reviewed에 근거와 함께 있어야 ingest-time 가드를 통과한다.
+      expect(tx.residualReviewedSics.has(sic), `${sic}이 residual_reviewed에 없다`).toBe(true)
+      expect(tx.classify(sic, 'NOOVERRIDETICKER')).toEqual({
+        themeSlug: expected.theme,
+        industrySlug: expected.industry,
+        source: 'sic',
+      })
     }
   })
 
