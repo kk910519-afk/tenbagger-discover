@@ -3,6 +3,7 @@ import { formatUsd, formatPct, formatScore } from '../_lib/format'
 import { Value, SignedValue } from './Value'
 import { Badge } from './Badge'
 import { Tooltip } from './Tooltip'
+import { RecordCards, type RecordCardItem } from './RecordCards'
 import { industryAllPath, stockPath } from '../_lib/paths'
 
 const PREVIEW_COUNT = 10
@@ -59,8 +60,10 @@ export function CandidateTable({
 
   return (
     <>
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
+      <RecordCards items={visible.map((r) => candidateCard(r, insufficientBelow))} />
+
+      <div className="hidden overflow-x-auto md:block">
+        <table className="w-full min-w-[52rem] text-sm">
           <thead>
             <tr>
               <th className="text-center">Ticker</th>
@@ -94,12 +97,7 @@ export function CandidateTable({
                 <td className="text-center"><Value dim>{formatUsd(r.totalDebt)}</Value></td>
                 <td className={`text-center font-medium ${GROUP_START}`}><Value>{formatScore(r.tenbagger)}</Value></td>
                 <td className="space-x-1 whitespace-nowrap text-center">
-                  {r.criticalCount > 0 && <Badge tone="risk">RED FLAG</Badge>}
-                  {r.criticalCount === 0 && r.warningCount > 0 && <Badge tone="watch">WATCH</Badge>}
-                  {r.completeness !== null && r.completeness < insufficientBelow && (
-                    <Badge>DATA {formatPct(r.completeness, 0)}</Badge>
-                  )}
-                  {r.completeness === null && <Badge>미평가</Badge>}
+                  <RiskBadges row={r} insufficientBelow={insufficientBelow} />
                 </td>
               </tr>
             ))}
@@ -117,4 +115,58 @@ export function CandidateTable({
       )}
     </>
   )
+}
+
+/**
+ * Risk 칸의 배지 규칙은 표와 카드 두 곳에서 똑같이 쓰인다 — 한쪽만 고쳐 두 화면이
+ * 서로 다른 위험 신호를 말하는 일이 없도록 규칙 자체를 한 군데에 둔다.
+ */
+function hasRiskBadges(row: CandidateRow, insufficientBelow: number): boolean {
+  return (
+    row.criticalCount > 0 ||
+    row.warningCount > 0 ||
+    row.completeness === null ||
+    row.completeness < insufficientBelow
+  )
+}
+
+function RiskBadges({ row, insufficientBelow }: { row: CandidateRow; insufficientBelow: number }) {
+  return (
+    <>
+      {row.criticalCount > 0 && <Badge tone="risk">RED FLAG</Badge>}
+      {row.criticalCount === 0 && row.warningCount > 0 && <Badge tone="watch">WATCH</Badge>}
+      {row.completeness !== null && row.completeness < insufficientBelow && (
+        <Badge>DATA {formatPct(row.completeness, 0)}</Badge>
+      )}
+      {row.completeness === null && <Badge>미평가</Badge>}
+    </>
+  )
+}
+
+/**
+ * 카드 라벨은 표 헤더와 같은 영문 지표명을 쓴다 — 표 위의 ColumnLegend가 화면 폭과
+ * 무관하게 항상 렌더링되므로, 라벨을 한글로 바꿔 옮기면 범례와 이름이 어긋난다.
+ */
+function candidateCard(r: CandidateRow, insufficientBelow: number): RecordCardItem {
+  return {
+    key: String(r.cik),
+    title: r.ticker,
+    href: stockPath(r.ticker),
+    subtitle: r.name,
+    headline: { label: 'Tenbagger', value: formatScore(r.tenbagger) },
+    fields: [
+      { label: 'Market Cap', value: <Value dim>{formatUsd(r.marketCap)}</Value> },
+      { label: 'Rev Growth', value: <SignedValue value={r.revenueGrowth} text={formatPct(r.revenueGrowth)} /> },
+      { label: 'Gross Margin', value: <Value>{formatPct(r.grossMargin)}</Value> },
+      { label: 'FCF Margin', value: <SignedValue value={r.fcfMargin} text={formatPct(r.fcfMargin)} /> },
+      { label: 'Debt', value: <Value dim>{formatUsd(r.totalDebt)}</Value> },
+    ],
+    // 배지가 하나도 없으면 note 자체를 넘기지 않는다 — 빈 줄이 카드마다 높이를
+    // 들쭉날쭉하게 만든다.
+    note: hasRiskBadges(r, insufficientBelow) ? (
+      <span className="space-x-1">
+        <RiskBadges row={r} insufficientBelow={insufficientBelow} />
+      </span>
+    ) : undefined,
+  }
 }

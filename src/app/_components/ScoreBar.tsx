@@ -19,7 +19,10 @@ export function ScoreBar({
   const pctWidth = isUnknown ? 0 : Math.max(0, Math.min(100, (value / max) * 100))
   return (
     <div className="flex items-center gap-2">
-      {label && <span className="w-44 shrink-0 text-xs text-[var(--color-text-dim)]">{label}</span>}
+      {/* 라벨 폭이 11rem으로 고정되면 390px 화면에서는 막대에 남는 자리가 거의 없다
+          (라벨 176 + 막대 최소 96 + 숫자 40 + 여백 > 화면 폭). 좁은 화면에서만 라벨을
+          줄여 막대가 실제로 길이를 신호로 쓸 수 있게 한다. */}
+      {label && <span className="w-28 shrink-0 break-keep text-xs text-[var(--color-text-dim)] sm:w-44">{label}</span>}
       <div
         data-score-state={isUnknown ? 'unknown' : 'value'}
         className={

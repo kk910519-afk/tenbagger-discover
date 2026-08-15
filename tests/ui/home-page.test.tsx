@@ -124,4 +124,28 @@ describe('Home — Top 5 헤드라인 블록', () => {
     const { container } = render(Home())
     expect(container.textContent).toContain('RED FLAG')
   })
+
+  /**
+   * 좁은 화면에서는 표 대신 카드가 뜬다. Top 5와 테마 지도 둘 다 카드 목록을 함께
+   * 렌더링해야 한다 — 한쪽만 바꾸면 그 화면 폭에서 그 섹션만 짜부라진 표로 남는다.
+   */
+  it('Top 5와 테마 지도 모두 좁은 화면용 카드 목록을 함께 렌더링한다', () => {
+    const { container } = render(Home())
+    const lists = container.querySelectorAll('[data-record-cards]')
+    expect(lists.length).toBe(2)
+    for (const list of lists) {
+      expect(list.className).toContain('md:hidden')
+    }
+  })
+
+  it('테마 지도 카드가 표의 산업 지표를 그대로 담는다', () => {
+    const { container } = render(Home())
+    const mapCards = container.querySelectorAll('[data-record-cards]')[1]!
+    const text = mapCards.textContent ?? ''
+    expect(text).toContain('Semiconductors')
+    for (const label of ['평균 점수', '대표 후보', '매출 성장', '시가총액', '모멘텀', '위험']) {
+      expect(text, `카드에 ${label}이(가) 없다`).toContain(label)
+    }
+    expect(mapCards.querySelector('a[href="/industry/semiconductors/"]')).not.toBeNull()
+  })
 })

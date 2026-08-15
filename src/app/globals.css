@@ -267,11 +267,17 @@ body {
     letter-spacing: 0.025em;
     text-align: left;
     text-transform: uppercase;
+    /* 헤더는 절대 접지 않는다. 폭이 모자라 "평균 점수"가 두 줄이 되면 다음은 글자
+       단위로 쪼개진 세로 글씨다 — 표는 min-width로 넘치게 두고 가로로 스크롤한다. */
+    white-space: nowrap;
   }
 
   th, td {
     padding: 0.72rem 0.8rem;
     border-bottom: 1px solid var(--color-border);
+    /* 한글은 어절 안에서 끊지 않는다. keep-all이 없으면 좁은 칸에서 "시가총액"이
+       "시가/총액"이 아니라 한 글자씩 끊긴다. */
+    word-break: keep-all;
   }
 
   thead { border-top: 1px solid var(--color-border-strong); }

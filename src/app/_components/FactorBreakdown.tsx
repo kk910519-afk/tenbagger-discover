@@ -127,7 +127,10 @@ export function FactorBreakdown({
               /{f.weight}
             </span>
           </div>
-          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 pl-44 text-xs text-[var(--color-text-dim)]">
+          {/* 설명 줄은 ScoreBar의 막대 시작점에 맞춰 들여쓴다. 좁은 화면에서는
+              들여쓰기를 걷어낸다 — 라벨이 줄어든 만큼 자리가 어긋나고, 무엇보다
+              detail 문장이 들어갈 폭이 남지 않는다. */}
+          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 break-keep text-xs text-[var(--color-text-dim)] sm:pl-44">
             <span className="num text-[var(--color-text)]">
               {formatFactorRaw(f.key, f.raw, extreme)}
             </span>
