@@ -24,6 +24,17 @@ describe('formatPct', () => {
   })
   it('자릿수를 조정할 수 있다', () => expect(formatPct(0.384, 0)).toBe('+38%'))
   it('null은 대시', () => expect(formatPct(null)).toBe('—'))
+
+  /**
+   * 다섯 자리 퍼센트는 화면에서 정보가 아니라 경보다 — "+176460.1%"에서 읽을 수 있는
+   * 것은 "크다"뿐이다. 값을 깎지 않고 한국어에서 표준인 만 단위로 다시 적는다.
+   */
+  it('만 단위 경계 위는 "N.N만%"로 적는다 — 캡이 아니라 표기 변환이다', () => {
+    expect(formatPct(99.99)).toBe('+9999.0%')      // 경계 바로 아래는 그대로
+    expect(formatPct(100)).toBe('+1.0만%')
+    expect(formatPct(1764.601)).toBe('+17.6만%')   // CLDX R&D 집약도 +176460.1%
+    expect(formatPct(-120.327)).toBe('-1.2만%')    // FFAI 매출총이익률 -12032.7%
+  })
 })
 
 describe('formatScore', () => {

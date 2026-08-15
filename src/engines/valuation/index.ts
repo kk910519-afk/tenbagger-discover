@@ -48,8 +48,12 @@
  *   · **Uncertainty의 data_completeness가 다른 드라이버가 청구하는 필드를 분모에서
  *     뺀다.** 하나의 결측에 두 번 값을 매기던 것을 필드 분할로 정리한 것이며, 저장되는
  *     uncertainty_score가 움직인다.
+ *
+ * 1.5.1 — 판정도 숫자도 바뀌지 않는다. uncertainty·moat의 detail 문자열이 다섯 자리
+ *   퍼센트를 만 단위로 옮겨 적는다(FFAI 영업이익률 표준편차 15724.0%p → 1.6만%p).
+ *   저장되는 문자열이 달라지므로 옛 표기로 저장된 행과 구분할 수 있게 패치 번호를 올린다.
  */
-export const ENGINE_VERSION = 'valuation-1.5.0'
+export const ENGINE_VERSION = 'valuation-1.5.1'
 
 export { computeFairValue } from './fair-value.js'
 export type { FairValueResult, FairValueReason, FairValueAssumptions } from './fair-value.js'

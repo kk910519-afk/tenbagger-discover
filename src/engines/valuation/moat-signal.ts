@@ -1,6 +1,7 @@
 import type { AppConfig } from '@/config'
 import type { CompanySnapshot, FinancialPeriod } from '@/domain/types'
 import { roicVerdict, type RoicGap } from '@/domain/metrics'
+import { compactMagnitude } from '@/domain/display'
 
 /**
  * 이 척도가 실제로 재는 것은 "초과수익이 얼마나 오래 이어졌는가"뿐이다 — 등급 이름도
@@ -185,7 +186,7 @@ export function computeMoatSignal(snapshot: CompanySnapshot, cfg: AppConfig): Mo
   ]
   evidence.push(
     avgClearSpread !== null
-      ? `상회한 기간의 평균 스프레드 +${(avgClearSpread * 100).toFixed(1)}%p`
+      ? `상회한 기간의 평균 스프레드 +${compactMagnitude(avgClearSpread * 100, 1)}%p`
       : '자본비용을 상회한 기간 없음',
   )
 

@@ -4,6 +4,7 @@ import { yoy } from '@/domain/growth'
 import { operatingMargin, debtToEbitda } from '@/domain/metrics'
 import { stdev } from '@/domain/stats'
 import { interpolate } from '@/domain/curve'
+import { compactMagnitude } from '@/domain/display'
 
 /**
  * "내재가치 추정을 얼마나 확신할 수 있는가"의 4단계. Morningstar가 published tier로 쓰는
@@ -139,7 +140,7 @@ export function computeUncertainty(snapshot: CompanySnapshot, cfg: AppConfig): U
       key: 'revenue_predictability',
       status: 'MEASURED',
       risk: interpolate(u.revenue_predictability_curve, sd),
-      detail: `최근 ${growthSeries.length}개 구간 매출 YoY 성장률 표준편차 ${(sd * 100).toFixed(1)}%p`,
+      detail: `최근 ${growthSeries.length}개 구간 매출 YoY 성장률 표준편차 ${compactMagnitude(sd * 100, 1)}%p`,
     })
   } else {
     drivers.push({
@@ -160,7 +161,7 @@ export function computeUncertainty(snapshot: CompanySnapshot, cfg: AppConfig): U
       key: 'operating_leverage',
       status: 'MEASURED',
       risk: interpolate(u.operating_margin_volatility_curve, sd),
-      detail: `최근 ${marginSeries.length}개 구간 영업이익률 표준편차 ${(sd * 100).toFixed(1)}%p`,
+      detail: `최근 ${marginSeries.length}개 구간 영업이익률 표준편차 ${compactMagnitude(sd * 100, 1)}%p`,
     })
   } else {
     drivers.push({

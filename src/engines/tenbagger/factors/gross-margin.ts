@@ -1,6 +1,6 @@
 import { interpolate } from '@/domain/curve'
 import { grossMargin, grossMarginTrendBps } from '@/domain/metrics'
-import { scored, noData, pct, type FactorFn } from '../factor-utils.js'
+import { scored, noData, pct, bpsPerYear, type FactorFn } from '../factor-utils.js'
 
 const KEY = 'gross_margin'
 const TREND_QUARTERS = 8
@@ -25,6 +25,6 @@ export const grossMarginFactor: FactorFn = ({ snapshot, cfg }) => {
 
   return scored(
     KEY, f.weight, level, normalized,
-    `매출총이익률 ${pct(level)} · 추세 ${trendBps > 0 ? '+' : ''}${trendBps.toFixed(0)}bp/년`,
+    `매출총이익률 ${pct(level)} · 추세 ${bpsPerYear(trendBps)}`,
   )
 }

@@ -65,6 +65,12 @@ export const configSchema = z
         min_invested_capital_ratio: z.number().min(0).max(1),
         // x=TTM 매출(USD), y=revenue_growth·revenue_acceleration에 남는 비율.
         revenue_scale_damping: z.object({ curve }).strict(),
+        extreme_display: z
+          .object({
+            growth_ratio: z.number().positive(),
+            margin_delta_points: z.number().positive(),
+          })
+          .strict(),
         factors: z
           .object({
             revenue_growth: factorBase

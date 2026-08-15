@@ -1,5 +1,6 @@
 import { notFound } from 'next/navigation'
 import { getRawDb } from '@/db/client'
+import { loadConfig } from '@/config'
 import { getStockDetail, type StockDetail } from '@/app/_queries/stock'
 import { formatUsd, formatPct, formatScore, formatDate, stalenessOf } from '@/app/_lib/format'
 import { Value, SignedValue, DerivedNote } from '@/app/_components/Value'
@@ -18,6 +19,7 @@ export default async function StockPage({
 }) {
   const { ticker } = await params
   const asOf = new Date().toISOString().slice(0, 10)
+  const cfg = loadConfig()
   const raw = getRawDb()
   let d: StockDetail | null
   try {
@@ -206,7 +208,7 @@ export default async function StockPage({
             <p className="mb-3 text-xs text-[var(--color-text-faint)]">
               데이터 완전성 {formatPct(d.completeness, 0)} · {d.engineVersion ?? '—'} · {formatDate(d.asOf)}
             </p>
-            <FactorBreakdown factors={d.factors} />
+            <FactorBreakdown factors={d.factors} extreme={cfg.scoring.extreme_display} />
             <div className="mt-4">
               <StrengthWeakness factors={d.factors} />
             </div>

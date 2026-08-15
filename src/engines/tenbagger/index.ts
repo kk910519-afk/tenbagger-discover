@@ -38,8 +38,19 @@ import { institutionalInsiderFactor } from './factors/institutional-insider.js'
  *   · `balance_sheet`: 커버리지를 신호 **개수**가 아니라 **blend 가중치**로 세고
  *     coverage_curve를 항등으로 바꾼다. 순현금 비율이 아주 낮은 기업이 현금을 보고하지
  *     않는 편으로 점수가 높아지던 비단조성을 없앤다(GEN 실사례).
+ *
+ * 1.4.0 — 매출 규모 감쇠가 보는 기간이 바뀌고, 감쇠 대상에 operating_leverage가 들어온다.
+ *   · `revenue_scale_damping`은 이제 최신 TTM 매출이 아니라 **그 비율의 분모가 된 기간**을
+ *     본다(revenue_growth: 1년 전·3년 전 TTM, revenue_acceleration: 1년 전 4개 분기 합계).
+ *     SEPN은 최신 TTM 매출 $98.88M으로 감쇠를 빠져나갔지만 +13,520%의 분모는 $726K였다.
+ *     기저와 현재 중 감쇠가 센 쪽을 채택하므로 어떤 회사의 점수도 올라가지 않는다.
+ *   · `operating_leverage`에 같은 감쇠를 적용한다. 이 팩터의 두 신호는 모두 1년 전 TTM
+ *     매출을 분모로 갖는데 감쇠 대상이 아니었고, 성장 팩터가 감쇠된 뒤 바로 그 회사들의
+ *     최대 득점원이 되었다(검증 리뷰 finding #6의 "direction currently benign"이 뒤집혔다).
+ *   · detail 문자열 표기 변경(점수와 무관) — 표기 한계를 넘는 비율은 퍼센트 대신 그 비율을
+ *     만든 두 금액으로 적는다.
  */
-export const ENGINE_VERSION = 'tenbagger-1.3.0'
+export const ENGINE_VERSION = 'tenbagger-1.4.0'
 
 const FACTORS: FactorFn[] = [
   revenueGrowthFactor,

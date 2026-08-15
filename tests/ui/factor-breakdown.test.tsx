@@ -3,6 +3,11 @@ import { describe, it, expect, afterEach } from 'vitest'
 import { cleanup, render } from '@testing-library/react'
 import { FactorBreakdown, StrengthWeakness } from '@/app/_components/FactorBreakdown'
 import type { FactorView } from '@/app/_queries/stock'
+import { parseConfig } from '@/config'
+import { readFileSync } from 'node:fs'
+
+/** 표기 한계는 config.yaml에 산다 — 테스트도 같은 출처를 읽어 상수를 두 곳에 두지 않는다. */
+const EXTREME = parseConfig(readFileSync('config.yaml', 'utf8')).scoring.extreme_display
 
 afterEach(() => cleanup())
 
@@ -21,7 +26,7 @@ function factor(overrides: Partial<FactorView> & { key: string }): FactorView {
 describe('FactorBreakdown — NO_DATA와 NOT_IMPLEMENTED는 다르게 읽혀야 한다', () => {
   it('NO_DATA는 "NO DATA" 배지를 단다', () => {
     const { container } = render(
-      <FactorBreakdown factors={[factor({ key: 'balance_sheet', status: 'NO_DATA', points: null, percentile: null })]} />,
+      <FactorBreakdown extreme={EXTREME} factors={[factor({ key: 'balance_sheet', status: 'NO_DATA', points: null, percentile: null })]} />,
     )
     expect(container.textContent).toContain('NO DATA')
     expect(container.textContent).not.toContain('PHASE 4')
@@ -30,6 +35,7 @@ describe('FactorBreakdown — NO_DATA와 NOT_IMPLEMENTED는 다르게 읽혀야 
   it('NOT_IMPLEMENTED는 "PHASE 4" 배지를 단다', () => {
     const { container } = render(
       <FactorBreakdown
+        extreme={EXTREME}
         factors={[factor({ key: 'institutional_insider', status: 'NOT_IMPLEMENTED', points: null, percentile: null })]}
       />,
     )
@@ -39,20 +45,20 @@ describe('FactorBreakdown — NO_DATA와 NOT_IMPLEMENTED는 다르게 읽혀야 
 
   it('percentile이 null이면 산업 상위 % 문구를 렌더링하지 않는다', () => {
     const { container } = render(
-      <FactorBreakdown factors={[factor({ key: 'balance_sheet', status: 'NO_DATA', points: null, percentile: null })]} />,
+      <FactorBreakdown extreme={EXTREME} factors={[factor({ key: 'balance_sheet', status: 'NO_DATA', points: null, percentile: null })]} />,
     )
     expect(container.textContent).not.toContain('산업 상위')
   })
 
   it('percentile이 있으면 "상위 몇%"로 뒤집어 보여준다 (0.9 백분위 → 상위 10%)', () => {
     const { container } = render(
-      <FactorBreakdown factors={[factor({ key: 'gross_margin', percentile: 0.9 })]} />,
+      <FactorBreakdown extreme={EXTREME} factors={[factor({ key: 'gross_margin', percentile: 0.9 })]} />,
     )
     expect(container.textContent).toContain('산업 상위 10%')
   })
 
   it('알 수 없는 팩터 키는 라벨 매핑 없이 원래 키를 그대로 보여준다', () => {
-    const { container } = render(<FactorBreakdown factors={[factor({ key: 'future_factor' })]} />)
+    const { container } = render(<FactorBreakdown extreme={EXTREME} factors={[factor({ key: 'future_factor' })]} />)
     expect(container.textContent).toContain('future_factor')
   })
 })
@@ -60,14 +66,14 @@ describe('FactorBreakdown — NO_DATA와 NOT_IMPLEMENTED는 다르게 읽혀야 
 describe('FactorBreakdown — raw 지표를 팩터별로 알맞은 단위로 보여준다', () => {
   it('revenue_growth: 비율을 %로 (0.32 → +32.0%)', () => {
     const { container } = render(
-      <FactorBreakdown factors={[factor({ key: 'revenue_growth', raw: 0.32, detail: 'x', percentile: null })]} />,
+      <FactorBreakdown extreme={EXTREME} factors={[factor({ key: 'revenue_growth', raw: 0.32, detail: 'x', percentile: null })]} />,
     )
     expect(container.textContent).toContain('+32.0%')
   })
 
   it('revenue_acceleration: 비율이 아니라 퍼센트포인트로 (0.05 → +5.0%p, "+5.0%"가 아님)', () => {
     const { container } = render(
-      <FactorBreakdown factors={[factor({ key: 'revenue_acceleration', raw: 0.05, detail: 'x', percentile: null })]} />,
+      <FactorBreakdown extreme={EXTREME} factors={[factor({ key: 'revenue_acceleration', raw: 0.05, detail: 'x', percentile: null })]} />,
     )
     expect(container.textContent).toContain('+5.0%p')
     expect(container.textContent).not.toContain('+5.0% ')
@@ -75,14 +81,14 @@ describe('FactorBreakdown — raw 지표를 팩터별로 알맞은 단위로 보
 
   it('tam_industry_growth: 비율을 %로 (0.18 → +18.0%)', () => {
     const { container } = render(
-      <FactorBreakdown factors={[factor({ key: 'tam_industry_growth', raw: 0.18, detail: 'x', percentile: null })]} />,
+      <FactorBreakdown extreme={EXTREME} factors={[factor({ key: 'tam_industry_growth', raw: 0.18, detail: 'x', percentile: null })]} />,
     )
     expect(container.textContent).toContain('+18.0%')
   })
 
   it('gross_margin: 비율을 %로 (0.78 → +78.0%)', () => {
     const { container } = render(
-      <FactorBreakdown factors={[factor({ key: 'gross_margin', raw: 0.78, detail: 'x', percentile: null })]} />,
+      <FactorBreakdown extreme={EXTREME} factors={[factor({ key: 'gross_margin', raw: 0.78, detail: 'x', percentile: null })]} />,
     )
     expect(container.textContent).toContain('+78.0%')
   })
@@ -90,6 +96,7 @@ describe('FactorBreakdown — raw 지표를 팩터별로 알맞은 단위로 보
   it('market_cap_opportunity: 달러 금액을 formatUsd로 (5_000_000_000 → $5.00B)', () => {
     const { container } = render(
       <FactorBreakdown
+        extreme={EXTREME}
         factors={[factor({ key: 'market_cap_opportunity', raw: 5_000_000_000, detail: 'x', percentile: null })]}
       />,
     )
@@ -98,7 +105,7 @@ describe('FactorBreakdown — raw 지표를 팩터별로 알맞은 단위로 보
 
   it('competitive_advantage: 0~1 합성 점수를 부호 없는 %로 (0.62 → 62%, "+62%"가 아님)', () => {
     const { container } = render(
-      <FactorBreakdown factors={[factor({ key: 'competitive_advantage', raw: 0.62, detail: 'x', percentile: null })]} />,
+      <FactorBreakdown extreme={EXTREME} factors={[factor({ key: 'competitive_advantage', raw: 0.62, detail: 'x', percentile: null })]} />,
     )
     expect(container.textContent).toContain('62%')
     expect(container.textContent).not.toContain('+62%')
@@ -106,21 +113,69 @@ describe('FactorBreakdown — raw 지표를 팩터별로 알맞은 단위로 보
 
   it('operating_leverage: 단위가 %p일 수도 비율일 수도 있어 단정하지 않고 부호 있는 순수 숫자로 (3.5 → +3.50)', () => {
     const { container } = render(
-      <FactorBreakdown factors={[factor({ key: 'operating_leverage', raw: 3.5, detail: 'x', percentile: null })]} />,
+      <FactorBreakdown extreme={EXTREME} factors={[factor({ key: 'operating_leverage', raw: 3.5, detail: 'x', percentile: null })]} />,
     )
     expect(container.textContent).toContain('+3.50')
   })
 
   it('balance_sheet: 단위가 분기 수·비율·배수 중 하나일 수 있어 부호 있는 순수 숫자로 (-0.15 → -0.15)', () => {
     const { container } = render(
-      <FactorBreakdown factors={[factor({ key: 'balance_sheet', raw: -0.15, detail: 'x', percentile: null })]} />,
+      <FactorBreakdown extreme={EXTREME} factors={[factor({ key: 'balance_sheet', raw: -0.15, detail: 'x', percentile: null })]} />,
     )
     expect(container.textContent).toContain('-0.15')
+  })
+
+  it('revenue_growth: 표기 한계를 넘으면 %가 아니라 배수로 (135.2 → 136배)', () => {
+    // SEPN 실측 — 예전에는 "+13520.1%"라는 다섯 자리 퍼센트가 그대로 화면에 나왔다.
+    const { container } = render(
+      <FactorBreakdown extreme={EXTREME} factors={[factor({ key: 'revenue_growth', raw: 135.2011, detail: 'x', percentile: null })]} />,
+    )
+    expect(container.textContent).toContain('136배')
+    expect(container.textContent).not.toContain('13520')
+    expect(container.textContent).not.toMatch(/\d{5,}(\.\d+)?%/)
+  })
+
+  it('revenue_acceleration: 표기 한계를 넘으면 극단값으로 — 판단 근거는 옆의 detail에 있다', () => {
+    const { container } = render(
+      <FactorBreakdown
+        extreme={EXTREME}
+        factors={[factor({ key: 'revenue_acceleration', raw: 54.9855, detail: '1년 전 기저 매출 $726K', percentile: null })]}
+      />,
+    )
+    expect(container.textContent).toContain('극단값')
+    expect(container.textContent).toContain('1년 전 기저 매출 $726K')
+    expect(container.textContent).not.toContain('5498')
+  })
+
+  it('operating_leverage: 표기 한계를 넘으면 극단값으로 (14027.0 → 극단값)', () => {
+    const { container } = render(
+      <FactorBreakdown extreme={EXTREME} factors={[factor({ key: 'operating_leverage', raw: 14027.037, detail: 'x', percentile: null })]} />,
+    )
+    expect(container.textContent).toContain('극단값')
+    expect(container.textContent).not.toContain('14027')
+  })
+
+  it('한계 아래 값은 예전 표기 그대로 — 정상 구간을 건드리지 않는다', () => {
+    const { container } = render(
+      <FactorBreakdown
+        extreme={EXTREME}
+        factors={[
+          factor({ key: 'revenue_growth', raw: 0.32, detail: 'x', percentile: null }),
+          factor({ key: 'revenue_acceleration', raw: 0.05, detail: 'x', percentile: null }),
+          factor({ key: 'operating_leverage', raw: 3.5, detail: 'x', percentile: null }),
+        ]}
+      />,
+    )
+    expect(container.textContent).toContain('+32.0%')
+    expect(container.textContent).toContain('+5.0%p')
+    expect(container.textContent).toContain('+3.50')
+    expect(container.textContent).not.toContain('극단값')
   })
 
   it('raw가 null이면 (NOT_IMPLEMENTED) em dash로 표시하지 0이나 빈 값이 아니다', () => {
     const { container } = render(
       <FactorBreakdown
+        extreme={EXTREME}
         factors={[
           factor({
             key: 'institutional_insider',
@@ -141,6 +196,7 @@ describe('FactorBreakdown — raw 지표를 팩터별로 알맞은 단위로 보
   it('raw가 null이면 (NO_DATA) em dash로 표시한다', () => {
     const { container } = render(
       <FactorBreakdown
+        extreme={EXTREME}
         factors={[
           factor({ key: 'gross_margin', status: 'NO_DATA', points: null, raw: null, percentile: null, detail: '데이터 없음' }),
         ]}
@@ -151,7 +207,7 @@ describe('FactorBreakdown — raw 지표를 팩터별로 알맞은 단위로 보
 
   it('매핑에 없는 팩터 키도 raw를 부호 있는 순수 숫자로 안전하게 보여준다', () => {
     const { container } = render(
-      <FactorBreakdown factors={[factor({ key: 'future_factor', raw: 1.23, detail: 'x', percentile: null })]} />,
+      <FactorBreakdown extreme={EXTREME} factors={[factor({ key: 'future_factor', raw: 1.23, detail: 'x', percentile: null })]} />,
     )
     expect(container.textContent).toContain('+1.23')
   })

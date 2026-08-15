@@ -41,6 +41,9 @@ scoring:
   min_invested_capital_ratio: 0.10
   revenue_scale_damping:
     curve: [[5000000, 0.40], [10000000, 0.55], [20000000, 0.70], [35000000, 0.85], [50000000, 1.00]]
+  extreme_display:
+    growth_ratio: 10.0
+    margin_delta_points: 100.0
   factors:
     revenue_growth:
       weight: 20

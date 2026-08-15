@@ -2,6 +2,7 @@ import type { AppConfig } from '@/config'
 import type { CompanySnapshot, RedFlag } from '@/domain/types'
 import { yoy } from '@/domain/growth'
 import { grossMargin, cashRunwayQuarters, debtToEbitda } from '@/domain/metrics'
+import { compactMagnitude } from '@/domain/display'
 
 const QUARTERS_PER_YEAR = 4
 
@@ -73,12 +74,12 @@ export function evaluateQuality(s: CompanySnapshot, cfg: AppConfig): RedFlag[] {
     if (dilution > g.extreme_dilution) {
       out.push(
         flag('EXTREME_DILUTION', 'CRITICAL',
-          `희석주식수 1년 ${(dilution * 100).toFixed(0)}% 증가`, { ratio: dilution }),
+          `희석주식수 1년 ${compactMagnitude(dilution * 100, 0)}% 증가`, { ratio: dilution }),
       )
     } else if (dilution > g.dilution_warning) {
       out.push(
         flag('DILUTION', 'WARNING',
-          `희석주식수 1년 ${(dilution * 100).toFixed(0)}% 증가`, { ratio: dilution }),
+          `희석주식수 1년 ${compactMagnitude(dilution * 100, 0)}% 증가`, { ratio: dilution }),
       )
     }
   }
@@ -103,7 +104,7 @@ export function evaluateQuality(s: CompanySnapshot, cfg: AppConfig): RedFlag[] {
     if (ratio > g.sbc_of_revenue) {
       out.push(
         flag('SBC_EXCESSIVE', 'WARNING',
-          `주식보상비용이 매출의 ${(ratio * 100).toFixed(0)}%`, { ratio }),
+          `주식보상비용이 매출의 ${compactMagnitude(ratio * 100, 0)}%`, { ratio }),
       )
     }
   }

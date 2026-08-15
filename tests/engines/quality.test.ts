@@ -103,6 +103,18 @@ describe('WARNING', () => {
     expect(codes(snap({ ttm: [fp({ sbc: 300 })] }))).toContain('SBC_EXCESSIVE')
   })
 
+  /**
+   * 매출이 미미한 기업은 이 비율도 다섯 자리 퍼센트가 된다(TLPH 실측: "주식보상비용이
+   * 매출의 71700%"가 종목 상세 화면 Risks 칸에 그대로 있었다). 판정과 evidence.ratio는
+   * 그대로 두고 문장의 표기만 만 단위로 옮긴다 — 근거 수치는 evidence에 온전히 남는다.
+   */
+  it('비율이 다섯 자리 퍼센트면 만 단위로 적는다 — evidence의 원시값은 그대로다', () => {
+    const flags = evaluateQuality(snap({ ttm: [fp({ revenue: 1000, sbc: 717_000 })] }), cfg)
+    const sbc = flags.find((f) => f.code === 'SBC_EXCESSIVE')!
+    expect(sbc.message).toBe('주식보상비용이 매출의 7.2만%')
+    expect(sbc.evidence.ratio).toBeCloseTo(717, 6)
+  })
+
   it('주식수 15% 초과 증가', () => {
     const ttm = [fp({ sharesDiluted: 1200 }), fp({ periodEnd: '2024-12-31' }),
                  fp({ periodEnd: '2024-09-30' }), fp({ periodEnd: '2024-06-30' }),

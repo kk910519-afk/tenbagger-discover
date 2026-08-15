@@ -96,6 +96,28 @@ describe('computeUncertainty — 드라이버 수치 고정', () => {
     expect(byKey.operating_leverage!.risk).toBeCloseTo(0, 10)
   })
 
+  /**
+   * 매출이 미미한 기업은 영업이익률 자체가 −100배 단위로 나오므로 그 표준편차도
+   * 다섯 자리 %p가 된다(FFAI 실측: "표준편차 15724.0%p"가 종목 상세 화면에 그대로 있었다).
+   * 판정과 risk 값은 건드리지 않고 표기만 만 단위로 옮긴다.
+   */
+  it('표준편차가 다섯 자리 %p면 만 단위로 적는다 — 화면에 그대로 내보내지 않는다', () => {
+    // 매출은 그대로 두고 영업이익만 흔들어 영업이익률을 −100배 단위로 만든다.
+    const base = eligibleForFairValue()
+    const wild = {
+      ...base,
+      ttm: base.ttm.map((p, i) =>
+        p.revenue === null
+          ? p
+          : { ...p, revenue: 1_000, operatingIncome: i % 2 === 0 ? -3_000_000 : -100_000 },
+      ),
+    }
+    const d = computeUncertainty(wild, cfg).drivers.find((x) => x.key === 'operating_leverage')!
+    expect(d.status).toBe('MEASURED')
+    expect(d.detail).toContain('만%p')
+    expect(d.detail).not.toMatch(/\d{5,}(\.\d+)?%p/)
+  })
+
   it('재무 레버리지 = 1 − balance_sheet.leverage_curve(부채/영업이익)', () => {
     // 0.3333배 → goodness 0.95 → risk 0.05. 부호를 뒤집지 않으면 0.95가 된다.
     expect(byKey.financial_leverage!.risk).toBeCloseTo(0.05, 10)

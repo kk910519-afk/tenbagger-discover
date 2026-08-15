@@ -1,5 +1,6 @@
+import type { AppConfig } from '@/config'
 import type { FactorView } from '../_queries/stock'
-import { formatPct, formatUsd } from '../_lib/format'
+import { formatPct, formatUsd, compactMagnitude } from '../_lib/format'
 import { factorsByFillRatio, splitStrengthWeakness } from '../_lib/strengths'
 import { ScoreBar } from './ScoreBar'
 import { Badge } from './Badge'
@@ -27,8 +28,18 @@ function industryRankLabel(percentile: number): string {
 function formatPctPoints(v: number | null): string {
   if (v === null || !Number.isFinite(v)) return '—'
   const sign = v > 0 ? '+' : ''
-  return `${sign}${(v * 100).toFixed(1)}%p`
+  return `${sign}${compactMagnitude(v * 100, 1)}%p`
 }
+
+/**
+ * 기저효과로 비율이 정보를 잃은 raw 값의 표기.
+ *
+ * raw 칸은 숫자 하나짜리 자리라 "그 비율을 만든 두 값"을 적을 수 없다 — 그 설명은 바로
+ * 옆의 detail 문자열이 이미 하고 있다(엔진이 기저 금액을 거기에 적는다). 그래서 이 칸은
+ * 숫자를 지어내거나 조용히 깎는 대신 **한계를 넘었다는 사실만** 말하고 판단 근거는
+ * detail로 넘긴다. 성장률만은 예외로 배수를 그대로 쓸 수 있어(1 + 성장률) 손실 없이 적는다.
+ */
+const EXTREME_LABEL = '극단값'
 
 /**
  * competitive_advantage의 raw는 실측 재무 지표가 아니다 — ROIC 스프레드·마진 안정성·
@@ -54,7 +65,7 @@ function formatCompositeScore(v: number | null): string {
 function formatAmbiguousUnit(v: number | null): string {
   if (v === null || !Number.isFinite(v)) return '—'
   const sign = v > 0 ? '+' : ''
-  return `${sign}${v.toFixed(2)}`
+  return `${sign}${compactMagnitude(v, 2)}`
 }
 
 const RAW_FORMATTERS: Record<string, (v: number | null) => string> = {
@@ -68,8 +79,26 @@ const RAW_FORMATTERS: Record<string, (v: number | null) => string> = {
   balance_sheet: formatAmbiguousUnit,
 }
 
-/** 매핑에 없는(향후 추가될) 팩터 키는 부호 있는 순수 숫자로 안전하게 대체한다. */
-function formatFactorRaw(key: string, raw: number | null): string {
+export type ExtremeDisplay = AppConfig['scoring']['extreme_display']
+
+/**
+ * 매핑에 없는(향후 추가될) 팩터 키는 부호 있는 순수 숫자로 안전하게 대체한다.
+ *
+ * 표기 한계(config.yaml scoring.extreme_display)를 넘는 세 팩터는 detail이 이미 기저
+ * 금액으로 다시 쓰여 있으므로 raw 칸도 그에 맞춘다. operating_leverage의 raw는
+ * 영업이익률 변화(%p)일 수도 매출-비용 격차(비율)일 수도 있는데, 둘 다 %p 한계로
+ * 재면 격차 쪽은 실질적으로 걸리지 않는다(격차 100 = +10,000%p).
+ */
+function formatFactorRaw(key: string, raw: number | null, extreme: ExtremeDisplay): string {
+  if (raw !== null && Number.isFinite(raw)) {
+    const abs = Math.abs(raw)
+    // 성장률은 배수(1 + 성장률)로 손실 없이 옮겨 적을 수 있다.
+    if (key === 'revenue_growth' && abs >= extreme.growth_ratio) {
+      return `${(1 + raw).toFixed(0)}배`
+    }
+    if (key === 'revenue_acceleration' && abs >= extreme.growth_ratio) return EXTREME_LABEL
+    if (key === 'operating_leverage' && abs >= extreme.margin_delta_points) return EXTREME_LABEL
+  }
   const fmt = RAW_FORMATTERS[key] ?? formatAmbiguousUnit
   return fmt(raw)
 }
@@ -80,7 +109,14 @@ function formatFactorRaw(key: string, raw: number | null): string {
  * 계산할 데이터가 없었던 팩터(NO_DATA)와 아직 구현되지 않은 팩터(NOT_IMPLEMENTED)는
  * 서로 다른 사실이므로 다른 배지로 구분한다.
  */
-export function FactorBreakdown({ factors }: { factors: FactorView[] }) {
+export function FactorBreakdown({
+  factors,
+  extreme,
+}: {
+  factors: FactorView[]
+  /** cfg.scoring.extreme_display — 표기 한계는 코드가 아니라 config.yaml에 산다. */
+  extreme: ExtremeDisplay
+}) {
   return (
     <div className="space-y-3">
       {factors.map((f) => (
@@ -92,7 +128,9 @@ export function FactorBreakdown({ factors }: { factors: FactorView[] }) {
             </span>
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 pl-44 text-xs text-[var(--color-text-dim)]">
-            <span className="num text-[var(--color-text)]">{formatFactorRaw(f.key, f.raw)}</span>
+            <span className="num text-[var(--color-text)]">
+              {formatFactorRaw(f.key, f.raw, extreme)}
+            </span>
             <span>{f.detail}</span>
             {f.status === 'NO_DATA' && <Badge tone="watch">NO DATA</Badge>}
             {f.status === 'NOT_IMPLEMENTED' && <Badge>PHASE 4</Badge>}

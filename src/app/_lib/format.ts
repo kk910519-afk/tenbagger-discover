@@ -1,3 +1,7 @@
+import { compactMagnitude } from '@/domain/display'
+
+export { compactMagnitude }
+
 const DASH = '—'
 const DAY_MS = 86_400_000
 
@@ -14,7 +18,7 @@ export function formatUsd(v: number | null): string {
 export function formatPct(v: number | null, digits = 1): string {
   if (v === null || !Number.isFinite(v)) return DASH
   const sign = v > 0 ? '+' : ''
-  return `${sign}${(v * 100).toFixed(digits)}%`
+  return `${sign}${compactMagnitude(v * 100, digits)}%`
 }
 
 export function formatScore(v: number | null): string {
