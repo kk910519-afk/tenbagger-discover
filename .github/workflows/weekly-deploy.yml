@@ -1,0 +1,111 @@
+# 주 1회 자동 배포 — 수집 · 채점 · 빌드 · gh-pages 푸시를 GitHub Actions에서 돌린다.
+#
+# 로컬의 `npm run pipeline:all && npm run deploy`를 그대로 옮긴 것이다. 새로 만든 로직은
+# 없고, 순서와 안전장치만 CI에 맞게 배치했다.
+#
+# 준비물 (최초 1회):
+#   1. 저장소 Settings → Secrets and variables → Actions → New repository secret
+#      이름 FINNHUB_API_KEY, 값은 https://finnhub.io 무료 키.
+#   2. 첫 배포가 끝난 뒤 Settings → Pages → Source를 `gh-pages` 브랜치 / root로 지정.
+#
+# 시각: 매주 토요일 22:00 UTC = 일요일 07:00 KST. 금요일 미국 장 마감 시세와 그 주에
+# 제출된 공시가 모두 반영된 뒤다. 필요하면 Actions 탭에서 수동으로도 실행할 수 있다.
+name: Weekly deploy
+
+on:
+  schedule:
+    - cron: '0 22 * * 6'
+  workflow_dispatch:
+
+# 같은 워크플로가 겹쳐 돌면 gh-pages를 서로 덮어쓰고 SEC 요청 한도도 두 배로 쓴다.
+# 진행 중인 실행은 취소하지 않는다 — 한 시간짜리 수집을 버리는 편이 더 비싸다.
+concurrency:
+  group: weekly-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: write   # gh-pages 브랜치 강제 푸시
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # 최초 실행(DB 캐시 없음)은 약 1GB 다운로드에 1시간 내외(미측정). 넉넉히 잡되 무한정 걸리지는 않게.
+    timeout-minutes: 240
+    env:
+      PRICE_PROVIDER: finnhub
+      FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+      DATABASE_PATH: ./data/tenbagger.db
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        # persist-credentials(기본 true)로 남은 GITHUB_TOKEN이 deploy 스크립트의
+        # `git push origin`에 그대로 쓰인다.
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22        # better-sqlite3 13.x가 Node >= 22를 요구한다
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      # 키가 없으면 수집을 한 시간 돌린 뒤 prices 단계에서 실패한다.
+      # 미리 확인해 빈 손으로 시간을 쓰지 않게 한다.
+      - name: Check secrets
+        run: |
+          if [ -z "$FINNHUB_API_KEY" ]; then
+            echo "::error::FINNHUB_API_KEY 시크릿이 없습니다. Settings → Secrets and variables → Actions 에 추가하세요."
+            exit 1
+          fi
+
+      # SQLite DB(약 400MB)만 이전 실행에서 이어받는다. DB가 있으면 파이프라인은 원래
+      # 설계대로 filed_date가 stale한 회사만 SEC API로 다시 조회하고, 주가도 증분으로 갱신한다.
+      #
+      # data/cache(HTTP 캐시)는 일부러 넣지 않는다. 그 캐시는 만료가 없어서 상장 목록
+      # (nasdaqtraded.txt)·티커 맵·회사별 submissions가 첫 주 상태로 영원히 굳는다 —
+      # 새 상장사가 유니버스에 절대 들어오지 못한다. 매주 다시 받는 비용은 벌크 zip 8개와
+      # 작은 JSON들이라 10분 안팎이고, 그 대가로 유니버스가 늘 현재다.
+      #
+      # 키에 run_id를 붙여 매번 새 항목으로 저장하고, 복원은 접두사 일치로 가장 최근 것을 쓴다.
+      - name: Restore pipeline DB
+        uses: actions/cache/restore@v4
+        with:
+          path: data/tenbagger.db
+          key: pipeline-db-${{ github.run_id }}
+          restore-keys: |
+            pipeline-db-
+
+      - name: Migrate DB
+        run: npm run db:migrate
+
+      - name: Run pipeline (universe → fundamentals → prices → scores)
+        run: npm run pipeline:all
+
+      # 수집이 끝난 직후 저장한다 — 뒤의 빌드·푸시가 실패해도 한 시간짜리 수집 결과는 남긴다.
+      - name: Save pipeline DB
+        uses: actions/cache/save@v4
+        with:
+          path: data/tenbagger.db
+          key: pipeline-db-${{ github.run_id }}
+
+      - name: Configure git identity
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      # scripts/deploy-gh-pages.mjs: 원격 확인 → base path 유추 → 빌드 → gh-pages 강제 푸시.
+      # base path는 원격 URL(<owner>/<repo>)에서 자동으로 /<repo>가 된다.
+      - name: Build and deploy to gh-pages
+        run: npm run deploy
+
+      - name: Summary
+        run: |
+          {
+            echo "## 배포 완료"
+            echo
+            echo "- 스냅샷 기준일: $(date -u +%F)"
+            echo "- 사이트: https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}/"
+            echo "- DB 크기: $(du -h data/tenbagger.db | cut -f1)"
+          } >> "$GITHUB_STEP_SUMMARY"

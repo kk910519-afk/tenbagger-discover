@@ -59,6 +59,28 @@ NEXT_PUBLIC_BASE_PATH=/my-repo npm run preview   # 같은 접두사로 확인해
 - `gh-pages`는 전부 생성물이라 매번 부모 없는 커밋으로 교체된다(히스토리를 쌓지 않는다).
 - 최초 1회: GitHub 저장소 **Settings → Pages**에서 소스를 `gh-pages` 브랜치 / `root`로 지정.
 
+### 자동 배포 — GitHub Actions 주 1회
+
+`.github/workflows/weekly-deploy.yml`이 위 네 단계를 매주 **토요일 22:00 UTC(일요일 07:00
+KST)** 에 GitHub Actions에서 그대로 돌린다 — 금요일 미국 장 마감 시세와 그 주에 제출된
+공시가 반영된 뒤다. Actions 탭 → *Weekly deploy* → *Run workflow*로 언제든 수동 실행할 수 있다.
+
+최초 1회 설정:
+
+1. **Settings → Secrets and variables → Actions → New repository secret**
+   이름 `FINNHUB_API_KEY`, 값은 Finnhub 무료 키. 없으면 워크플로가 수집 전에 바로 실패한다.
+2. 첫 실행이 끝난 뒤 **Settings → Pages**에서 소스를 `gh-pages` 브랜치 / `root`로 지정.
+
+동작 메모:
+
+- SQLite DB만 `actions/cache`로 실행 간에 이어받는다. DB가 있으면 파이프라인은 stale한
+  회사만 SEC API로 다시 조회하므로 두 번째 실행부터 훨씬 짧다.
+- `data/cache`(HTTP 캐시)는 이어받지 **않는다**. 그 캐시는 만료가 없어 상장 목록·티커 맵이
+  첫 주 상태로 굳고 새 상장사가 유니버스에 들어오지 못한다. 매주 다시 받는 비용은 10분 안팎이다.
+- 푸시는 `GITHUB_TOKEN`으로 하며 `contents: write` 권한만 준다. 배포 로직은 로컬과 같은
+  `scripts/deploy-gh-pages.mjs`라 base path도 원격 URL에서 자동으로 `/<repo>`가 된다.
+- 같은 워크플로가 겹쳐 돌지 않도록 `concurrency`로 직렬화한다. 진행 중인 실행은 취소하지 않는다.
+
 ### 스냅샷 기준일
 
 정적 페이지는 빌드 시점에 얼어붙는다. 그래서 모든 페이지 상단에 기준일이 한 줄로 붙는다.
